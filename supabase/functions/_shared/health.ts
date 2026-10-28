@@ -1,12 +1,12 @@
 // Google Health sync helpers: raw archive rows, daily-type dates, token handling.
-import { dataPointsOf, parseGoogleTime } from '../../../packages/core/src/index.ts';
+import { dailyStepTotals, dataPointsOf, parseDailyHrv, parseDailyRestingHr, parseGoogleTime } from '../../../packages/core/src/index.ts';
 import { iso } from './time.ts';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** Data types stored at full fidelity in raw_health but as hourly chunks (they arrive at up to 1 Hz). */
-export const CHUNKED_TYPES = new Set(['heart-rate']);
+export const CHUNKED_TYPES = new Set(['heart-rate', 'steps']);
 
 export const SAMPLE_TYPES = ['heart-rate', 'heart-rate-variability', 'oxygen-saturation'] as const;
 export const DAILY_TYPES = [
@@ -142,4 +142,33 @@ export function dailyRows(personId: string, dataType: string, json: unknown, dat
     });
   }
   return [...best.values()].map((b) => b.row);
+}
+
+/**
+ * health_vitals_daily rows (migration 0003), one per local date. Every row in a batch carries the same columns, so
+ * an upsert only touches the columns its data type owns: steps never clear resting HR and vice versa.
+ */
+export type VitalsRow = Record<string, string | number | null>;
+
+const vitalsRow = (personId: string, date: string, cols: Record<string, string | number | null>): VitalsRow => ({
+  person_id: personId,
+  date,
+  ...cols,
+  updated_at: iso(Date.now()),
+});
+
+/** Daily step totals (ICT days). Fetch from local midnight, or the first day is partial. */
+export function stepsVitalsRows(personId: string, json: unknown): VitalsRow[] {
+  return dailyStepTotals(json).map((d) => vitalsRow(personId, d.date, { steps: d.steps }));
+}
+
+/** daily-resting-heart-rate / daily-heart-rate-variability → their vitals columns; other types give no rows. */
+export function dailyVitalsRows(personId: string, dataType: string, json: unknown): VitalsRow[] {
+  if (dataType === 'daily-resting-heart-rate') {
+    return parseDailyRestingHr(json).map((d) => vitalsRow(personId, d.date, { resting_hr: d.bpm, resting_hr_method: d.method ?? null }));
+  }
+  if (dataType === 'daily-heart-rate-variability') {
+    return parseDailyHrv(json).map((d) => vitalsRow(personId, d.date, { hrv_daily_ms: d.averageMs ?? null, deep_rmssd_ms: d.deepSleepRmssdMs ?? null }));
+  }
+  return [];
 }

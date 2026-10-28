@@ -31,7 +31,17 @@ export {
   mapSleepStage,
   parseGoogleTime,
   dataPointsOf,
+  parseCivilDate,
+  localDate,
+  parseStepIntervals,
+  dailyStepTotals,
+  parseDailyRestingHr,
+  parseDailyHrv,
   type ParseSleepOptions,
+  type StepInterval,
+  type DailySteps,
+  type DailyRestingHr,
+  type DailyHrv,
 } from './parse.ts';
 export {
   verifyGoogleHealthSignature,

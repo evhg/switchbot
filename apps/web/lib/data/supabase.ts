@@ -1,4 +1,4 @@
-// Read-only Supabase source. Columns follow supabase/migrations/0001_init.sql; RLS only lets signed-in
+// Read-only Supabase source. Columns follow supabase/migrations/0001_init.sql (+ 0003 health_vitals_daily); RLS only lets signed-in
 // household members read, so the anon key alone returns nothing (see supabaseSignIn). The row → type
 // mapping is isolated in the to* functions below so a migration rename is a one-line fix here.
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
@@ -119,6 +119,27 @@ export function dailyExtras(rows: Row[]): Pick<PersonNight, 'respRate' | 'tempDe
   return out;
 }
 
+type Vitals = Pick<PersonNight, 'steps' | 'restingHr' | 'hrvDailyMs' | 'deepRmssdMs'>;
+
+/**
+ * Daily vitals for one night from health_vitals_daily (migration 0003), as the backend's vitalsFromRows does:
+ * steps from the day before the wake date (the day leading into the night), resting HR / daily HRV from the wake date.
+ */
+export function vitalsFor(rows: Row[], date: string): Vitals {
+  const prev = rows.find((r) => str(r.date) === addDays(date, -1));
+  const same = rows.find((r) => str(r.date) === date);
+  const out: Vitals = {};
+  const set = (k: keyof Vitals, v: unknown) => {
+    const n = num(v);
+    if (Number.isFinite(n)) out[k] = n;
+  };
+  set('steps', prev?.steps);
+  set('restingHr', same?.resting_hr);
+  set('hrvDailyMs', same?.hrv_daily_ms);
+  set('deepRmssdMs', same?.deep_rmssd_ms);
+  return out;
+}
+
 /** Same rule as the backend's effectiveCommands: drop failed sends, and dry runs once a night has live commands. */
 export function effectiveCommandRows(rows: Row[]): Row[] {
   const ok = rows.filter((r) => r.sent_ok !== false);
@@ -162,16 +183,21 @@ export function createSupabaseSource(days = 90): DataSource {
     const acRows = await pageAll(() => db().from('ac_commands').select('*').gte('ts', new Date(from).toISOString()).order('ts'));
     const iso = new Date(from).toISOString();
     onProgress?.('Loading body data…');
-    const [peopleRows, sessions, hr, hrv, spo2, daily] = await Promise.all([
+    const [peopleRows, sessions, hr, hrv, spo2, daily, vitals] = await Promise.all([
       pageAll(() => db().from('people').select('id,name,color_key').order('id')),
       pageAll(() => db().from('sleep_sessions').select('person_id,start_ts,end_ts,stages,update_time').gte('end_ts', iso).order('end_ts')),
       pageAll(() => db().from('health_hr').select('person_id,ts,bpm').gte('ts', iso).order('ts')),
       pageAll(() => db().from('health_hrv').select('person_id,ts,rmssd_ms').gte('ts', iso).order('ts')),
       pageAll(() => db().from('health_spo2').select('person_id,ts,pct').gte('ts', iso).order('ts')),
       pageAll(() => db().from('health_daily').select('person_id,data_type,date,value').gte('date', fromDate)),
+      // A project without migration 0003 has no vitals table: degrade to no vitals instead of failing the load.
+      pageAll(() => db().from('health_vitals_daily').select('person_id,date,steps,resting_hr,hrv_daily_ms,deep_rmssd_ms').gte('date', addDays(fromDate, -1))).catch(() => [] as Row[]),
     ]);
     const people: Person[] = peopleRows.map((r) => ({ id: str(r.id), name: str(r.name, str(r.id)), colorKey: str(r.color_key, 'personA') }));
-    const dailyFor = (pid: string, date: string) => dailyExtras(daily.filter((d) => d.person_id === pid && d.date === date));
+    const dailyFor = (pid: string, date: string) => ({
+      ...dailyExtras(daily.filter((d) => d.person_id === pid && d.date === date)),
+      ...vitalsFor(vitals.filter((v) => v.person_id === pid), date),
+    });
 
     const nights: Night[] = nightRows.map((r) => {
       const date = str(r.date);

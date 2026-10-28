@@ -65,7 +65,7 @@ export function BodyScreen() {
         <span className="small muted">Fitbit Air · Google Health (simulated)</span>
       </div>
       {!pn || !m ? (
-        <Card title={`${person.name} has no data this night`}>
+        <Card title={`No data for ${person.name} this night`}>
           <p className="small muted">Pick another night.</p>
         </Card>
       ) : (
@@ -156,6 +156,8 @@ export function BodyScreen() {
               <TrendBand show={n} label="HRV (RMSSD)" unit="ms" color={color} rows={rows((x) => x.rmssdMean)} />
               <TrendBand show={n} label="Deep sleep" unit="min" color={color} rows={rows((x) => x.deepMin)} />
               <TrendBand show={n} label="Breathing rate" unit="/min" digits={1} color={color} rows={rows((x) => x.respRate)} />
+              <TrendBand show={n} label="Resting HR" unit="bpm" color={color} rows={rows((x) => x.restingHr)} />
+              <TrendBand show={n} label="Steps (day before)" unit="" color={color} rows={rows((x) => x.steps)} />
             </div>
             <p className="card-note">Breathing rate is a whole-night average; per-stage rates arrive once the respiratory-rate parser lands.</p>
           </Card>

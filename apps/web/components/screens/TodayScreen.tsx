@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { DEFAULT_CURVE, SLEEP_AIR_WEIGHTS, SLEEP_SCORE_WEIGHTS, type ScoreDriver } from '@sleep-lab/core';
 import { personColor, personName, useData, useNightDetail, useSelectedNight, withNames } from '@/lib/data/context.tsx';
 import { usePlannedCurve } from '@/lib/curve-store.ts';
-import { co2Band, dayLabel, dur, fmt, hm } from '@/lib/format.ts';
+import { co2Band, dayLabel, fmt, hm } from '@/lib/format.ts';
 import { useTheme } from '@/lib/theme.tsx';
 import { EVENT_LABEL, EventGlyph, NightStrip, STAGE_LABEL, STAGE_ORDER, stageColor } from '../charts/NightStrip.tsx';
 import { PlanChart } from '../charts/PlanChart.tsx';
@@ -12,6 +12,7 @@ import { ScoreRing } from '../charts/ScoreRing.tsx';
 import { Waterfall } from '../charts/Waterfall.tsx';
 import { DateNav } from '../DateNav.tsx';
 import { Card, Legend, Loading, Placeholder, StatusDot } from '../ui.tsx';
+import { VitalsSection } from '../Vitals.tsx';
 
 type Focus = 'room' | string;
 
@@ -120,20 +121,7 @@ export function TodayScreen() {
             </div>
           )}
           <div className="tiles" style={{ marginTop: 12 }}>
-            {people.map((p) => {
-              const m = sel.person[p.id];
-              return (
-                <div className="tile" key={p.id} style={{ boxShadow: 'none', background: 'var(--surface-2)' }}>
-                  <div className="tile-label">{p.name} slept</div>
-                  <div className="tile-value">{m ? dur(m.totalSleepMin) : '–'}</div>
-                  <div className="tile-delta">
-                    deep {m ? dur(m.deepMin) : '–'}
-                    <br />
-                    REM {m ? dur(m.remMin) : '–'}
-                  </div>
-                </div>
-              );
-            })}
+            {/* Per-person sleep lives in Vitals below; these two tiles are the room. */}
             <div className="tile" style={{ boxShadow: 'none', background: 'var(--surface-2)' }}>
               <div className="tile-label">CO₂ mean</div>
               <div className="tile-value">
@@ -154,6 +142,8 @@ export function TodayScreen() {
             </div>
           </div>
         </Card>
+
+        <VitalsSection dataset={dataset} index={sel.index} />
 
         <Card title="Insight" sub={detail ? withNames(detail.report.headline, dataset) : 'Reading the night…'} className="span-2">
           {detail ? (

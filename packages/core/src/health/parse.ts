@@ -140,3 +140,122 @@ export function parseSleep(json: unknown, personId: string, opts: ParseSleepOpti
   }
   return [...byStart.values()].sort((a, b) => a.start - b.start);
 }
+
+// ---------- Daily values: steps, resting HR, daily HRV ----------
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+/** Google `Date` ({year, month, day}) or "YYYY-MM-DD…" → "YYYY-MM-DD". */
+export function parseCivilDate(v: unknown): string | null {
+  if (typeof v === 'string') return /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null;
+  const y = num(field(v, 'year'));
+  const m = num(field(v, 'month'));
+  const d = num(field(v, 'day'));
+  if (y === null || m === null || d === null || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  return `${y}-${pad2(m)}-${pad2(d)}`;
+}
+
+/** Local calendar date of an instant at a fixed UTC offset (minutes; ICT = +420, no DST). */
+export function localDate(ts: Ms, utcOffsetMin = 420): string {
+  return new Date(ts + utcOffsetMin * 60_000).toISOString().slice(0, 10);
+}
+
+export interface StepInterval {
+  start: Ms;
+  end: Ms;
+  count: number;
+}
+
+/** steps: steps.interval{startTime, endTime}, steps.count (int64 as string). One value per interval start (pages can overlap). */
+export function parseStepIntervals(json: unknown): StepInterval[] {
+  const out: (StepInterval & { ts: Ms })[] = [];
+  for (const p of dataPointsOf(json)) {
+    const r = field(p, 'steps');
+    const interval = field(r, 'interval');
+    const start = parseGoogleTime(field(interval, 'startTime'));
+    const end = parseGoogleTime(field(interval, 'endTime'));
+    const count = num(field(r, 'count'));
+    if (start === null || end === null || end < start || count === null || count < 0) continue;
+    out.push({ ts: start, start, end, count });
+  }
+  return sortDedupe(out).map(({ start, end, count }) => ({ start, end, count }));
+}
+
+export interface DailySteps {
+  /** Local calendar date, YYYY-MM-DD. */
+  date: string;
+  steps: number;
+}
+
+/**
+ * Daily step totals from interval data (1-min intervals in v4), bucketed by the local date of each interval's
+ * start. Thailand has no DST, so a fixed +7 h offset is exact. Oldest first. A day at the edge of the fetched
+ * window is partial; callers should fetch from local midnight.
+ */
+export function dailyStepTotals(json: unknown, utcOffsetMin = 420): DailySteps[] {
+  const byDate = new Map<string, number>();
+  for (const s of parseStepIntervals(json)) {
+    const d = localDate(s.start, utcOffsetMin);
+    byDate.set(d, (byDate.get(d) ?? 0) + s.count);
+  }
+  return [...byDate.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([date, steps]) => ({ date, steps: Math.round(steps) }));
+}
+
+/** Latest version per civil date (Google recomputes daily values; updateTime decides). */
+function latestPerDate<T extends { date: string }>(json: unknown, key: string, read: (r: unknown, date: string) => T | null): T[] {
+  const best = new Map<string, { v: T; upd: number }>();
+  for (const p of dataPointsOf(json)) {
+    const r = field(p, key);
+    const date = parseCivilDate(field(r, 'date'));
+    if (!date) continue;
+    const v = read(r, date);
+    if (!v) continue;
+    const upd = parseGoogleTime(field(p, 'updateTime') ?? field(r, 'updateTime')) ?? 0;
+    const prev = best.get(date);
+    if (!prev || upd >= prev.upd) best.set(date, { v, upd });
+  }
+  return [...best.values()].map((b) => b.v).sort((a, b) => (a.date < b.date ? -1 : 1));
+}
+
+export interface DailyRestingHr {
+  date: string;
+  bpm: number;
+  /** WITH_SLEEP or ONLY_WITH_AWAKE_DATA. */
+  method?: string;
+}
+
+/** daily-resting-heart-rate: dailyRestingHeartRate{date, beatsPerMinute, dailyRestingHeartRateMetadata{calculationMethod}}. */
+export function parseDailyRestingHr(json: unknown): DailyRestingHr[] {
+  return latestPerDate(json, 'dailyRestingHeartRate', (r, date) => {
+    const bpm = num(field(r, 'beatsPerMinute'));
+    if (bpm === null || bpm < 20 || bpm > 200) return null;
+    const out: DailyRestingHr = { date, bpm };
+    const method = field(field(r, 'dailyRestingHeartRateMetadata'), 'calculationMethod');
+    if (typeof method === 'string') out.method = method;
+    return out;
+  });
+}
+
+export interface DailyHrv {
+  date: string;
+  /** averageHeartRateVariabilityMilliseconds (nightly RMSSD). */
+  averageMs?: number;
+  /** deepSleepRootMeanSquareOfSuccessiveDifferencesMilliseconds. */
+  deepSleepRmssdMs?: number;
+  /** nonRemHeartRateBeatsPerMinute. */
+  nonRemHr?: number;
+}
+
+/** daily-heart-rate-variability: dailyHeartRateVariability{date, averageHeartRateVariabilityMilliseconds, deepSleepRoot…Milliseconds, nonRemHeartRateBeatsPerMinute, entropy}. */
+export function parseDailyHrv(json: unknown): DailyHrv[] {
+  return latestPerDate(json, 'dailyHeartRateVariability', (r, date) => {
+    const out: DailyHrv = { date };
+    const avg = num(field(r, 'averageHeartRateVariabilityMilliseconds'));
+    const deep = num(field(r, 'deepSleepRootMeanSquareOfSuccessiveDifferencesMilliseconds'));
+    const nrem = num(field(r, 'nonRemHeartRateBeatsPerMinute'));
+    if (avg !== null && avg > 0) out.averageMs = avg;
+    if (deep !== null && deep > 0) out.deepSleepRmssdMs = deep;
+    if (nrem !== null && nrem > 0) out.nonRemHr = nrem;
+    return out.averageMs === undefined && out.deepSleepRmssdMs === undefined && out.nonRemHr === undefined ? null : out;
+  });
+}

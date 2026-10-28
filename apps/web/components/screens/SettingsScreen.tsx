@@ -1,7 +1,7 @@
 'use client';
 import { useMemo, useState } from 'react';
-import type { TagKey } from '@sleep-lab/core';
-import { useData, useLive } from '@/lib/data/context.tsx';
+import { DEFAULT_PEOPLE, type TagKey } from '@sleep-lab/core';
+import { MAX_NAME_LENGTH, personColor, useData, useLive } from '@/lib/data/context.tsx';
 import { supabaseConfigured, supabaseSignIn } from '@/lib/data/supabase.ts';
 import { enablePush } from '@/lib/push.ts';
 import { SIM_NIGHTS, SIM_SEED } from '@/lib/data/sim.ts';
@@ -41,7 +41,7 @@ interface Calibration {
 }
 
 export function SettingsScreen() {
-  const { status, dataset, progress, sourceKind, setSourceKind, source } = useData();
+  const { status, dataset, progress, sourceKind, setSourceKind, source, names, sourcePeople, setPersonName } = useData();
   const { mode, resolved, setMode } = useTheme();
   const [curve, setCurve, resetCurve] = usePlannedCurve();
   const [tagStore, setTagStore] = usePref<Record<string, TagKey[]>>('tags', {});
@@ -97,6 +97,31 @@ export function SettingsScreen() {
             ]}
           />
           <p className="card-note">Auto follows the phone&apos;s light/dark setting and switches to red-on-black night mode from 21:00 to 07:00 (Phuket time).</p>
+        </Card>
+
+        <Card title="People" sub="Names shown across the app">
+          <div style={{ display: 'grid', gap: 8 }}>
+            {(dataset?.people ?? DEFAULT_PEOPLE).map((p, i) => {
+              const fallback = (sourcePeople ?? DEFAULT_PEOPLE).find((d) => d.id === p.id)?.name ?? p.id;
+              return (
+                <label key={p.id} className="row" style={{ flexWrap: 'nowrap' }}>
+                  <i className="key-dot" style={{ background: personColor(dataset?.people ?? DEFAULT_PEOPLE, p.id), flex: 'none' }} aria-hidden />
+                  <span className="small t2" style={{ width: 64, flex: 'none' }}>Person {i + 1}</span>
+                  <input
+                    className="input"
+                    value={names[p.id] ?? ''}
+                    placeholder={fallback}
+                    maxLength={MAX_NAME_LENGTH}
+                    onChange={(e) => setPersonName(p.id, e.target.value)}
+                    style={{ flex: 1, minWidth: 0 }}
+                    aria-label={`Name for person ${i + 1}`}
+                    autoComplete="off"
+                  />
+                </label>
+              );
+            })}
+          </div>
+          <p className="card-note">Stored on this device. Leave a field empty to use the default name.</p>
         </Card>
 
         <Card title="Data source" sub={source.label}>

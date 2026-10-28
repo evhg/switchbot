@@ -57,6 +57,10 @@
   --div-neg: #e34948;
   --div-mid: #f0efec;
 
+  /* Vitals sparklines: de-emphasised trend line over a baseline wash; tonight's dot carries the person colour. */
+  --spark-line: #8f8d86;
+  --spark-band: #ecebe6;
+
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.04);
   --radius: 16px;
   --tabbar-h: 58px;
@@ -99,6 +103,8 @@
     --div-pos: #3987e5;
     --div-neg: #e66767;
     --div-mid: #383835;
+    --spark-line: #8f8d86;
+    --spark-band: #262624;
     --shadow: none;
   }
 }
@@ -138,6 +144,8 @@
   --div-pos: #3987e5;
   --div-neg: #e66767;
   --div-mid: #383835;
+  --spark-line: #8f8d86;
+  --spark-band: #262624;
   --shadow: none;
 }
 
@@ -183,6 +191,8 @@
   --div-pos: #8f1f16;
   --div-neg: #c42a1e;
   --div-mid: #1c0302;
+  --spark-line: #5c130d;
+  --spark-band: #140201;
   --shadow: none;
 }
 
@@ -336,6 +346,30 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -0.01em; }
 .status-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-2); }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 
+/* ---------- Vitals (Today) ---------- */
+.vital-list { list-style: none; margin: 0; padding: 0; }
+.vital-row { padding: 8px 0 7px; border-top: 1px solid var(--border); }
+.vital-row:first-child { border-top: 0; padding-top: 2px; }
+.vital-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.vital-label { font-size: 12.5px; color: var(--text-2); font-weight: 500; white-space: nowrap; }
+.vital-sub { font-size: 11.5px; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: auto; text-align: right; }
+.vital-body { display: grid; grid-template-columns: minmax(78px, auto) minmax(0, 1fr) minmax(58px, auto); align-items: center; gap: 10px; margin-top: 2px; }
+.vital-value { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; white-space: nowrap; }
+.vital-unit { font-size: 12px; color: var(--muted); font-weight: 500; margin-left: 3px; letter-spacing: 0; }
+.vital-delta { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.2; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.vital-delta-main { display: inline-flex; align-items: center; gap: 3px; font-size: 12.5px; font-weight: 600; }
+.vital-delta.good .vital-delta-main { color: var(--good-text); }
+.vital-delta.bad .vital-delta-main { color: var(--bad-text); }
+.vital-delta.neutral .vital-delta-main { color: var(--text-2); }
+.vital-base { font-size: 11px; color: var(--muted); }
+.vital-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--border); padding-top: 6px; margin-top: 2px; }
+.vital-foot > div { margin-left: auto; text-align: right; }
+.vital-foot > div:has(table) { width: 100%; text-align: left; }
+.vital-foot .data-table th, .vital-foot .data-table td { white-space: nowrap; }
+.vital-key-band { display: inline-block; width: 14px; height: 8px; border-radius: 2px; background: var(--spark-band); vertical-align: middle; margin-right: 4px; box-shadow: inset 0 0 0 1px var(--border); }
+h2.section-label { font-size: 12px; }
+@media (min-width: 900px) { .stack.two > .section-label.span-2 { grid-column: 1 / -1; } }
+
 /* ---------- Misc ---------- */
 .muted { color: var(--muted); }
 .t2 { color: var(--text-2); }
@@ -366,3 +400,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -0.01em; }
 details > summary { cursor: pointer; list-style: none; }
 details > summary::-webkit-details-marker { display: none; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+/* Night mode is red-only, so delta tone rides on weight and brightness: neutral recedes, bad stands out. */
+:root[data-theme='night'] .vital-delta.neutral .vital-delta-main { color: var(--muted); font-weight: 400; }
+:root[data-theme='night'] .vital-delta.good .vital-delta-main { color: var(--text); font-weight: 600; }
+:root[data-theme='night'] .vital-delta.bad .vital-delta-main { color: var(--bad-text); font-weight: 800; }

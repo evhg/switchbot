@@ -72,7 +72,11 @@ function baseMetrics(date: string, pn: PersonNight): Base {
   hrSm.forEach((v, i) => { if (nadirIdx < 0 || v < hrSm[nadirIdx]!) nadirIdx = i; });
   const hrAsleep = hr.filter((h) => inAny(h.ts, asleep)).map((h) => h.bpm);
 
-  const hrv = pn.hrv.filter((h) => h.ts >= pn.sleep.start && h.ts <= pn.sleep.end).map((h) => h.rmssdMs);
+  const hrvIn = pn.hrv.filter((h) => h.ts >= pn.sleep.start && h.ts <= pn.sleep.end);
+  const hrv = hrvIn.map((h) => h.rmssdMs);
+  // Deep-sleep RMSSD: Google's daily value when we have it, else windows whose centre (≈5-min windows) falls in deep sleep.
+  const deepSegs = segs.filter((s) => s.stage === 'deep');
+  const deepRmssd = pn.deepRmssdMs ?? mean(hrvIn.filter((h) => inAny(h.ts + 2.5 * MIN, deepSegs)).map((h) => h.rmssdMs));
 
   const spo2 = pn.spo2.filter((s) => s.ts >= onset && s.ts <= sleepEnd && Number.isFinite(s.pct)).sort((a, b) => a.ts - b.ts);
   const spo2Base = rollingMedianTs(spo2, (s) => s.pct, 15 * MIN);
@@ -109,7 +113,7 @@ function baseMetrics(date: string, pn: PersonNight): Base {
     hrNadir: nadirIdx >= 0 ? r1(hrSm[nadirIdx]!) : NaN,
     hrNadirAtMin: nadirIdx >= 0 ? Math.round((hr[nadirIdx]!.ts - pn.sleep.start) / MIN) : NaN,
     hrMeanAsleep: r1(mean(hrAsleep)),
-    rmssdMean: r1(mean(hrv)),
+    rmssdMean: r1(hrv.length ? mean(hrv) : (pn.hrvDailyMs ?? NaN)),
     spo2Mean: r1(mean(spo2.map((s) => s.pct))),
     spo2DipsPerHour: total > 0 ? Math.round((dips / (total / 60)) * 100) / 100 : 0,
     sleepScore: Math.round(sleepScore),
@@ -117,6 +121,9 @@ function baseMetrics(date: string, pn: PersonNight): Base {
   };
   if (pn.respRate !== undefined) m.respRate = pn.respRate;
   if (pn.tempDeviationC !== undefined) m.tempDeviationC = pn.tempDeviationC;
+  if (pn.steps !== undefined) m.steps = pn.steps;
+  if (pn.restingHr !== undefined) m.restingHr = pn.restingHr;
+  if (Number.isFinite(deepRmssd)) m.deepRmssd = r1(deepRmssd);
   return { m, sleepParts };
 }
 

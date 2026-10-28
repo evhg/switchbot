@@ -11,6 +11,7 @@ supabase/
   config.toml                 CLI config (verify_jwt = false for every function; they check their own secrets)
   migrations/0001_init.sql    tables, views, RLS, grants, security-definer RPCs
   migrations/0002_cron.sql    pg_cron + pg_net schedules (secrets read from Vault)
+  migrations/0003_health_vitals.sql  health_vitals_daily: steps, resting HR, daily HRV per person and ICT date
   functions/
     deno.json                 strict TS settings for `deno check` / `deno lint`
     .env.example              every secret the functions read
@@ -48,7 +49,7 @@ All timestamps are `timestamptz` (UTC). A night is keyed by the **ICT wake-up da
 | `ac_state` | One row per AC: assumed state, last command, `remote` (RemoteProfile jsonb), `bias_c` | ac-curve / SQL |
 | `events` | Shower, door, in-bed, `ac_missed` …; `source` = detector / manual / sim_truth / controller | nightly-report, ac-curve, seed |
 | `raw_health` | **Append-only** Google Health archive (`point_key`, `payload`, `update_time`, `data_source`); a trigger blocks UPDATE/DELETE | google-health-sync |
-| `health_hr` (1-min means), `health_hrv`, `health_spo2`, `sleep_sessions`, `health_daily` | Derived layers, rebuildable from `raw_health` | google-health-sync, seed |
+| `health_hr` (1-min means), `health_hrv`, `health_spo2`, `sleep_sessions`, `health_daily`, `health_vitals_daily` | Derived layers, rebuildable from `raw_health` | google-health-sync, seed |
 | `health_sync_jobs` | Queue fed by the Google webhook | webhook, OAuth |
 | `reports` | `report` (NightReport, possibly Claude-worded), `rule_report`, `generated_by`, `model` | nightly-report, seed |
 | `push_subscriptions` | Web Push endpoints per user | `register_push_subscription()` RPC |
@@ -114,7 +115,7 @@ npx deno eval "import('./supabase/functions/_shared/webpush.ts').then(async (m) 
    - In the Supabase dashboard, create a new project in the Singapore region (`ap-southeast-1`), the closest to Phuket.
    - Note the project ref.
    - Then run `npx supabase login` and `npx supabase link --project-ref <ref>`. The CLI isn't a repo dependency; `npx` fetches it.
-2. **Push the schema:** `npx supabase db push`. This applies `0001_init.sql` and `0002_cron.sql`.
+2. **Push the schema:** `npx supabase db push`. This applies `0001_init.sql`, `0002_cron.sql` and `0003_health_vitals.sql`.
    - The cron jobs are created straight away. Until step 3 is done they only log a warning (`vault secrets project_url / cron_secret are not set`).
 3. **Vault secrets for cron.** In the dashboard SQL editor, run:
    ```sql
@@ -126,9 +127,10 @@ npx deno eval "import('./supabase/functions/_shared/webpush.ts').then(async (m) 
    - For Phase 0 use `METER_DEVICE_ID=SIM-METER`, `AC_DEVICE_ID=SIM-AC` and `DRY_RUN=true`.
    - Then run `npx supabase secrets set --env-file supabase/functions/.env`.
 5. **Deploy the functions:** `npx supabase functions deploy`. `verify_jwt = false` comes from `config.toml`; each function checks its own secret.
+   - Upgrading an existing project: run `npx supabase db push` first. `google-health-sync` writes `health_vitals_daily` (migration 0003), and without it the `steps` and `*:vitals` steps fail on every sync.
 6. **Household.** In Auth → Users, invite both email addresses; the PWA signs in with magic links. Then run:
    ```sql
-   insert into people (id, name, color_key) values ('a', 'Alex', 'personA'), ('b', 'Sam', 'personB')
+   insert into people (id, name, color_key) values ('a', 'You', 'personA'), ('b', 'Erik', 'personB')
      on conflict (id) do update set name = excluded.name;
    insert into household_members (user_id, person_id, role)
    select id, case email when '<email A>' then 'a' else 'b' end, 'owner' from auth.users;

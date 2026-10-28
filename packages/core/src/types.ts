@@ -148,6 +148,15 @@ export interface PersonNight {
   respRate?: number;
   /** Nightly temperature deviation vs 30-day baseline, °C (Google: daily-sleep-temperature-derivations). */
   tempDeviationC?: number;
+  // Daily values. All optional: a missing day (watch off the wrist, sync gap) leaves them undefined.
+  /** Total steps on the local (ICT) calendar day BEFORE the wake date, i.e. the day leading into this night (Google: steps). */
+  steps?: number;
+  /** Resting heart rate for the wake date, bpm (Google: daily-resting-heart-rate). Usually a few bpm above the sleeping nadir. */
+  restingHr?: number;
+  /** Google's nightly average RMSSD, ms (daily-heart-rate-variability.averageHeartRateVariabilityMilliseconds). Used when there are no HRV samples. */
+  hrvDailyMs?: number;
+  /** Deep-sleep RMSSD, ms (daily-heart-rate-variability.deepSleepRootMeanSquareOfSuccessiveDifferencesMilliseconds). */
+  deepRmssdMs?: number;
 }
 
 // ---------- Tags (one-tap evening context) ----------
@@ -235,6 +244,12 @@ export interface PersonNightMetrics {
   spo2DipsPerHour: number;
   respRate?: number;
   tempDeviationC?: number;
+  /** Steps on the day before the night (PersonNight.steps). */
+  steps?: number;
+  /** Daily resting HR, bpm (PersonNight.restingHr). */
+  restingHr?: number;
+  /** Deep-sleep RMSSD, ms: PersonNight.deepRmssdMs, else the mean of HRV windows centred in deep sleep. */
+  deepRmssd?: number;
   /** 0..100 */
   sleepScore: number;
   /** 0..100 */

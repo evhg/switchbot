@@ -1,6 +1,8 @@
 // Pulls Google Health API v4 data for each connected person: the last 36 h of heart rate, HRV and SpO2
-// (dataSourceFamily google-wearables), the last 7 days of sleep and daily types (Google reprocesses nights).
-// Everything returned is appended to raw_health; derived tables are upserted from the core parsers.
+// (dataSourceFamily google-wearables), steps from local midnight at the start of that window (whole ICT days),
+// and the last 7 days of sleep and daily types (Google reprocesses nights).
+// Everything returned is appended to raw_health; derived tables are upserted from the core parsers. Steps,
+// daily resting HR and daily HRV also land in health_vitals_daily for the Today dashboard.
 // Body: {mode?: 'full' | 'queue', personId?, hours?, sleepDays?}. Called by pg_cron, by the webhook, or by a
 // household member ("sync now").
 import {
@@ -18,11 +20,11 @@ import {
 } from '../../../packages/core/src/index.ts';
 import { requireCronOrMember } from '../_shared/auth.ts';
 import { env } from '../_shared/env.ts';
-import { DAILY_TYPES, dailyRows, rawRows, SAMPLE_TYPES, sessionEndTime } from '../_shared/health.ts';
+import { DAILY_TYPES, dailyRows, dailyVitalsRows, rawRows, SAMPLE_TYPES, sessionEndTime, stepsVitalsRows } from '../_shared/health.ts';
 import { json, readJson, serve } from '../_shared/http.ts';
 import { hrMinuteRows, hrvToRows, sleepToRow, spo2ToRows } from '../_shared/rows.ts';
 import { type Db, must, serviceClient, upsertChunks } from '../_shared/supabase.ts';
-import { DAY, HOUR, ictDate, utcDay } from '../_shared/time.ts';
+import { DAY, HOUR, ictAt, ictDate, utcDay } from '../_shared/time.ts';
 
 interface PersonResult {
   personId: string;
@@ -138,6 +140,14 @@ async function syncPerson(db: Db, personId: string, hours: number, sleepDays: nu
     });
   }
 
+  await step('steps', async () => {
+    // 1-min intervals; whole local days so each daily total is complete (today's grows with every sync).
+    const stepsFrom = ictAt(ictDate(from), '00:00');
+    const points = await pull('steps', { filter: intervalFilter('steps', stepsFrom, now), dataSourceFamily: 'google-wearables', pageSize: 10_000 });
+    await archive('steps', points);
+    return upsertChunks(db, 'health_vitals_daily', stepsVitalsRows(personId, points), 'person_id,date');
+  });
+
   await step('sleep', async () => {
     // dataSourceFamily isn't supported for sleep.
     const points = await pull('sleep', { filter: intervalFilter('sleep', sleepFrom, now, 'end_time'), pageSize: 25 });
@@ -159,12 +169,15 @@ async function syncPerson(db: Db, personId: string, hours: number, sleepDays: nu
   });
 
   for (const dataType of DAILY_TYPES) {
+    let points: unknown[] = [];
     await step(dataType, async () => {
       const since = utcDay(sleepFrom);
-      const points = await pull(dataType, { filter: `${dataType.replace(/-/g, '_')}.date >= "${since}"`, pageSize: 25 }, { pageSize: 14 });
+      points = await pull(dataType, { filter: `${dataType.replace(/-/g, '_')}.date >= "${since}"`, pageSize: 25 }, { pageSize: 14 });
       await archive(dataType, points);
       return upsertChunks(db, 'health_daily', dailyRows(personId, dataType, points), 'person_id,data_type,date');
     });
+    // Own step so a vitals failure (e.g. migration 0003 not applied yet) doesn't mark health_daily as failed.
+    if (points.length) await step(`${dataType}:vitals`, () => upsertChunks(db, 'health_vitals_daily', dailyVitalsRows(personId, dataType, points), 'person_id,date'));
   }
 
   await db.from('oauth_tokens').update({ last_sync_at: new Date().toISOString(), last_error: res.ok ? null : res.errors.join('; ').slice(0, 1000) })

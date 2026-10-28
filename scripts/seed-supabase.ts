@@ -22,6 +22,7 @@ import {
   sleepToRow,
   spo2ToRows,
 } from '../supabase/functions/_shared/rows.ts';
+import { addDays } from '../supabase/functions/_shared/time.ts';
 
 type Row = Record<string, unknown>;
 
@@ -68,7 +69,17 @@ const tables: Record<string, { rows: Row[]; onConflict: string }> = {
   health_hrv: { rows: [], onConflict: 'person_id,ts' },
   health_spo2: { rows: [], onConflict: 'person_id,ts' },
   health_daily: { rows: [], onConflict: 'person_id,data_type,date' },
+  health_vitals_daily: { rows: [], onConflict: 'person_id,date' },
   reports: { rows: [], onConflict: 'date' },
+};
+// health_vitals_daily (0003) is keyed by calendar date: a night's steps belong to the day before its wake date.
+// Rows are merged per (person, date) so every row carries the same columns.
+const vitals = new Map<string, Row>();
+const vitalsRow = (personId: string, date: string): Row => {
+  const k = `${personId}|${date}`;
+  let r = vitals.get(k);
+  if (!r) vitals.set(k, (r = { person_id: personId, date, steps: null, resting_hr: null, resting_hr_method: null, hrv_daily_ms: null, deep_rmssd_ms: null }));
+  return r;
 };
 // Events have no natural key: replaced per night (sim_truth + detector) instead of upserted.
 const events: Row[] = [];
@@ -106,6 +117,8 @@ for (const [i, n] of nights.entries()) {
         value: { nightlyTemperatureCelsius: 34.5 + p.tempDeviationC, baselineTemperatureCelsius: 34.5, sim: true },
       });
     }
+    if (p.steps !== undefined) vitalsRow(p.personId, addDays(n.date, -1)).steps = p.steps;
+    if (p.restingHr !== undefined) Object.assign(vitalsRow(p.personId, n.date), { resting_hr: p.restingHr, resting_hr_method: 'WITH_SLEEP' });
   }
 
   if (withReports) {
@@ -114,6 +127,7 @@ for (const [i, n] of nights.entries()) {
     tables.reports!.rows.push({ date: n.date, report, rule_report: report, generated_by: 'rules', model: null });
   }
 }
+tables.health_vitals_daily!.rows.push(...vitals.values());
 
 const simMs = performance.now() - t0;
 const counts = Object.fromEntries([...Object.entries(tables).map(([k, v]) => [k, v.rows.length]), ['events', events.length]]);
@@ -140,7 +154,7 @@ async function upsert(table: string, rows: Row[], onConflict: string, chunk = 10
 }
 
 // Parents first (nights before ac_commands / reports; people before health tables).
-for (const name of ['people', 'curves', 'devices', 'nights', 'readings', 'outdoor_readings', 'ac_commands', 'sleep_sessions', 'health_hr', 'health_hrv', 'health_spo2', 'health_daily']) {
+for (const name of ['people', 'curves', 'devices', 'nights', 'readings', 'outdoor_readings', 'ac_commands', 'sleep_sessions', 'health_hr', 'health_hrv', 'health_spo2', 'health_daily', 'health_vitals_daily']) {
   const t = tables[name]!;
   await upsert(name, t.rows, t.onConflict);
 }

@@ -302,6 +302,8 @@ export function SleepWakeCompare({ stages, ours, start, end }: { stages: StageSe
 }
 
 // ---------- 4.8 trends with baseline band ----------
+// Thousands as '12k' so step counts fit the narrow y axis.
+const kTick = (v: number) => (Math.abs(v) >= 1000 ? `${fmt(v / 1000, Math.abs(v) % 1000 ? 1 : 0)}k` : String(v));
 export function TrendBand({ rows: all, show, color, unit, digits = 0, label }: { rows: { date: string; v: number }[]; show: number; color: string; unit: string; digits?: number; label: string }) {
   // Band from the full history so the first visible nights have a baseline too.
   const fullBand = rollingBand(all.map((r) => r.v), 30, 5);
@@ -323,7 +325,7 @@ export function TrendBand({ rows: all, show, color, unit, digits = 0, label }: {
         <ComposedChart data={data} margin={MARGIN}>
           <CartesianGrid {...GRID} />
           <XAxis dataKey="ts" type="number" domain={['dataMin', 'dataMax']} tickFormatter={(v: number) => shortDate(new Date(v).toISOString().slice(0, 10))} minTickGap={40} {...AXIS} />
-          <YAxis width={Y_WIDTH} domain={[ticks[0]!, ticks.at(-1)!]} ticks={ticks} {...AXIS} />
+          <YAxis width={Y_WIDTH} domain={[ticks[0]!, ticks.at(-1)!]} ticks={ticks} tickFormatter={kTick} {...AXIS} />
           <Tooltip
             cursor={CURSOR}
             content={(p) => {

@@ -1,4 +1,4 @@
-import { civilDate, dailyRows, rawRows, sessionEndTime } from '../_shared/health.ts';
+import { civilDate, dailyRows, dailyVitalsRows, rawRows, sessionEndTime, stepsVitalsRows } from '../_shared/health.ts';
 import { ictDate } from '../_shared/time.ts';
 import { defaultSchedule, nightDateFor, nightWindow } from '../_shared/time.ts';
 
@@ -52,4 +52,28 @@ Deno.test('per-session summaries are keyed by the wake date (interval end), not 
     return t === null ? null : ictDate(t);
   });
   assert(rows[0]?.date === '2026-10-28', `wake date, got ${rows[0]?.date}`);
+});
+
+Deno.test('stepsVitalsRows sums 1-min intervals per ICT day', () => {
+  const st = (start: string, count: string) => ({
+    steps: { interval: { startTime: start, endTime: new Date(Date.parse(start) + 60_000).toISOString() }, count },
+  });
+  const rows = stepsVitalsRows('a', { dataPoints: [st('2026-10-27T16:59:00Z', '30'), st('2026-10-27T17:00:00Z', '12'), st('2026-10-28T03:00:00Z', '100')] });
+  assert(rows.length === 2, 'two local days');
+  assert(rows[0]!.date === '2026-10-27' && rows[0]!.steps === 30, 'day before local midnight');
+  assert(rows[1]!.date === '2026-10-28' && rows[1]!.steps === 112, 'local day after 17:00Z');
+  assert(rows.every((r) => Object.keys(r).sort().join() === 'date,person_id,steps,updated_at'), 'steps rows touch only steps');
+});
+
+Deno.test('dailyVitalsRows maps resting HR and daily HRV to their own columns', () => {
+  const rhr = dailyVitalsRows('b', 'daily-resting-heart-rate', {
+    dataPoints: [{ dailyRestingHeartRate: { date: { year: 2026, month: 10, day: 28 }, beatsPerMinute: '57', dailyRestingHeartRateMetadata: { calculationMethod: 'WITH_SLEEP' } } }],
+  });
+  assert(rhr.length === 1 && rhr[0]!.date === '2026-10-28' && rhr[0]!.resting_hr === 57 && rhr[0]!.resting_hr_method === 'WITH_SLEEP', 'resting hr');
+  assert(!('steps' in rhr[0]!) && !('hrv_daily_ms' in rhr[0]!), 'no foreign columns');
+  const hrv = dailyVitalsRows('b', 'daily-heart-rate-variability', {
+    dataPoints: [{ dailyHeartRateVariability: { date: { year: 2026, month: 10, day: 28 }, averageHeartRateVariabilityMilliseconds: 41.5 } }],
+  });
+  assert(hrv[0]!.hrv_daily_ms === 41.5 && hrv[0]!.deep_rmssd_ms === null, 'hrv columns, missing deep value is null');
+  assert(dailyVitalsRows('b', 'daily-oxygen-saturation', { dataPoints: [] }).length === 0, 'other types');
 });

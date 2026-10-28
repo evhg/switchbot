@@ -9,12 +9,19 @@ Pure TypeScript with no runtime dependencies. It runs unchanged in Node 22, Deno
 - Every module is re-exported from `src/index.ts`.
 - Tests go in `packages/core/test/*.test.ts` and run with vitest.
 
+**Daily vitals (optional fields, added after Phase 0)**
+- `PersonNight.steps`: total steps on the ICT calendar day *before* the wake date (the day leading into the night).
+- `PersonNight.restingHr`: Google `daily-resting-heart-rate` for the wake date, bpm.
+- `PersonNight.hrvDailyMs` / `deepRmssdMs`: Google `daily-heart-rate-variability` average and deep-sleep RMSSD for the wake date, ms.
+- `PersonNightMetrics.steps` / `restingHr` / `deepRmssd` mirror them. All are optional; a missing day stays `undefined`.
+- Supabase stores them in `health_vitals_daily` (one row per person and *calendar* date; see migration 0003).
+
 ## sim/: deterministic simulator (owner: sim agent)
 ```ts
 export interface Rng { next(): number; normal(mean?: number, sd?: number): number; int(min: number, max: number): number; chance(p: number): boolean; pick<T>(xs: readonly T[]): T }
 export function createRng(seed: number): Rng
 
-export const DEFAULT_PEOPLE: Person[]            // [{id:'a',name:'Alex',colorKey:'personA'},{id:'b',name:'Sam',colorKey:'personB'}]
+export const DEFAULT_PEOPLE: Person[]            // [{id:'a',name:'You',colorKey:'personA'},{id:'b',name:'Erik',colorKey:'personB'}]; the PWA lets you rename both
 export interface SimOptions {
   seed?: number;               // default 42
   nights?: number;             // default 60
@@ -25,6 +32,8 @@ export interface SimOptions {
   volumeM3?: number;           // default 120
 }
 export function simulateNights(opts?: SimOptions): Night[]               // oldest → newest, 1-min room data 18:00→12:00 ICT, truth populated
+// PersonNight also carries daily values: steps (day before the wake date; personal mean, weekday/weekend pattern, +3–6k on
+// late_exercise days, about +1 min deep sleep per +1k steps over the mean, capped) and restingHr (≈ nadir + 3.5–4 bpm).
 export function simulateLiveReading(now: Ms, opts?: SimOptions): RoomReading   // plausible "current" reading for any instant
 ```
 
@@ -67,6 +76,8 @@ export function detectEvents(readings: RoomReading[], opts?: { lightsOut?: Ms; w
   // shower (RH spike), door_open (sharp CO2 drop), in_bed / both_in_bed (CO2 rise rate), room_empty
 export function roomNightMetrics(night: Night, curve: TemperatureCurve): RoomNightMetrics
 export function personNightMetrics(night: Night, personId: string, history?: Night[]): PersonNightMetrics
+  // passes through steps / restingHr; deepRmssd = PersonNight.deepRmssdMs, else HRV windows centred in deep sleep;
+  // rmssdMean falls back to PersonNight.hrvDailyMs when there are no HRV samples
 export function baselineBand(values: number[], k?: number): { mean: number; sd: number; lo: number; hi: number }
 export function buildRuleReport(night: Night, history: Night[], curve: TemperatureCurve): NightReport
 export function downsample<T extends { ts: Ms }>(xs: T[], bucketMs: number, pick: 'mean' | 'last'): T[]
@@ -89,5 +100,10 @@ export function parseHeartRate(json: unknown): HrSample[]
 export function parseHrv(json: unknown): HrvSample[]
 export function parseSpo2(json: unknown): Spo2Sample[]
 export function parseSleep(json: unknown, personId: string): SleepSession[]
+export function parseCivilDate(v: unknown): string | null                       // Google Date {year,month,day} or "YYYY-MM-DD"
+export function parseStepIntervals(json: unknown): { start: Ms; end: Ms; count: number }[]
+export function dailyStepTotals(json: unknown, utcOffsetMin?: number): { date: string; steps: number }[]   // default ICT (+420)
+export function parseDailyRestingHr(json: unknown): { date: string; bpm: number; method?: string }[]
+export function parseDailyHrv(json: unknown): { date: string; averageMs?: number; deepSleepRmssdMs?: number; nonRemHr?: number }[]
 export async function verifyGoogleHealthSignature(...): Promise<boolean>   // best effort; see docs/research/health-data.md
 ```

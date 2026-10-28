@@ -1,7 +1,7 @@
 import type { HrSample, HrvSample, PersonNight, SleepStage, Spo2Sample, StageSegment, TagKey } from '../types.ts';
 import { nightRng, poisson, type NightPlan, type PersonPlan } from './plan.ts';
 import type { RoomSim } from './room.ts';
-import { MIN } from './time.ts';
+import { addDays, MIN, weekday } from './time.ts';
 
 const EPOCH = 30_000;
 const DEEP_W = [0.42, 0.3, 0.14, 0.05, 0.02];
@@ -28,9 +28,27 @@ export interface Exposure {
   rhOver60Min: number;
 }
 
+/**
+ * Steps on the day before the wake date: personal mean, weekday/weekend pattern, log-normal day-to-day spread,
+ * +3–6k on exercise days and about half when sick. Own RNG stream, so adding
+ * steps leaves every other simulated signal's random draws unchanged.
+ */
+export function simulateSteps(plan: NightPlan, p: PersonPlan, seed: number): number {
+  const rng = nightRng(seed, plan.date, 300 + p.index);
+  const wd = weekday(addDays(plan.date, -1));
+  const weekend = wd === 0 || wd === 6;
+  let steps = p.profile.stepsMean * (weekend ? p.profile.weekendSteps : 1) * Math.exp(rng.normal(0, 0.22));
+  if (plan.tags.includes('late_exercise')) steps += 3000 + 3000 * rng.next();
+  if (p.sick) steps *= 0.45;
+  return Math.round(clamp(steps, 1500, 24000));
+}
+
 export function simulateBody(plan: NightPlan, p: PersonPlan, room: RoomSim, seed: number): PersonNight {
   const rng = nightRng(seed, plan.date, 100 + p.index);
   const tags = new Set<TagKey>(plan.tags);
+  const steps = simulateSteps(plan, p, seed);
+  // Separate stream for the daily extras (resting HR) for the same reason.
+  const dailyRng = nightRng(seed, plan.date, 400 + p.index);
   const alcohol = tags.has('alcohol');
   const lateMeal = tags.has('late_meal');
   const t0 = plan.t0;
@@ -57,7 +75,9 @@ export function simulateBody(plan: NightPlan, p: PersonPlan, room: RoomSim, seed
     (1.2 * co2Excess) / 100 -
     (tags.has('late_caffeine') ? 8 : 0) -
     (p.sick ? 10 : 0) +
-    (tags.has('late_exercise') ? 3 : 0);
+    (tags.has('late_exercise') ? 3 : 0) +
+    // A more active day deepens sleep a little: about +3 min per +3k steps over the personal mean, capped.
+    3 * clamp((steps - p.profile.stepsMean) / 3000, -1, 1.5);
   const deepScale = clamp(1 + deepDelta / 80, 0.35, 1.6);
   const remScale = clamp(1 + rng.normal(0, 0.12) - (alcohol ? 0.2 : 0) - (p.sick ? 0.1 : 0), 0.5, 1.4);
 
@@ -185,6 +205,9 @@ export function simulateBody(plan: NightPlan, p: PersonPlan, room: RoomSim, seed
   const tempDeviationC =
     Math.round((rng.normal(0, 0.12) + (p.sick ? 0.6 : 0) + (alcohol ? 0.15 : 0) + 0.05 * (warm - 20)) * 100) / 100;
 
+  // Google's daily resting HR blends the sleeping minimum with calm awake minutes, so it sits a few bpm above the nadir.
+  const restingHr = Math.round(nadir + p.profile.rhrOverNadir + dailyRng.normal(0, 1.2));
+
   return {
     personId: p.person.id,
     sleep: {
@@ -199,5 +222,7 @@ export function simulateBody(plan: NightPlan, p: PersonPlan, room: RoomSim, seed
     spo2,
     respRate,
     tempDeviationC,
+    steps,
+    restingHr,
   };
 }

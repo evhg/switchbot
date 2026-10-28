@@ -88,6 +88,28 @@ async function dailyExtras(db: Db, personId: string, date: string): Promise<Pick
   return out;
 }
 
+type Vitals = Pick<PersonNight, 'steps' | 'restingHr' | 'hrvDailyMs' | 'deepRmssdMs'>;
+
+/** health_vitals_daily (0003) for one night: steps from the day before the wake date, resting HR / daily HRV from the wake date. */
+async function dailyVitals(db: Db, personId: string, date: string): Promise<Vitals> {
+  const { data } = await db.from('health_vitals_daily').select('date,steps,resting_hr,hrv_daily_ms,deep_rmssd_ms')
+    .eq('person_id', personId).in('date', [addDays(date, -1), date]);
+  return vitalsFromRows((data ?? []) as Obj[], date);
+}
+
+/** Shared with the PWA's reader (apps/web/lib/data/supabase.ts vitalsFor). Postgres numerics may arrive as strings. */
+export function vitalsFromRows(rows: Obj[], date: string): Vitals {
+  const n = (v: unknown) => (typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
+  const prev = rows.find((r) => r.date === addDays(date, -1));
+  const same = rows.find((r) => r.date === date);
+  const out: Vitals = {};
+  if (Number.isFinite(n(prev?.steps))) out.steps = n(prev?.steps);
+  if (Number.isFinite(n(same?.resting_hr))) out.restingHr = n(same?.resting_hr);
+  if (Number.isFinite(n(same?.hrv_daily_ms))) out.hrvDailyMs = n(same?.hrv_daily_ms);
+  if (Number.isFinite(n(same?.deep_rmssd_ms))) out.deepRmssdMs = n(same?.deep_rmssd_ms);
+  return out;
+}
+
 /** Main sleep session ending in the night's window, with its HR / HRV / SpO2 series. */
 export async function loadPersonNight(db: Db, personId: string, date: string): Promise<PersonNight | null> {
   const from = ictAt(addDays(date, -1), '18:00');
@@ -102,7 +124,7 @@ export async function loadPersonNight(db: Db, personId: string, date: string): P
   if (!main) return null;
   const a = iso(main.start - 30 * MIN);
   const b = iso(main.end + 30 * MIN);
-  const [hr, hrv, spo2, extras] = await Promise.all([
+  const [hr, hrv, spo2, extras, vitals] = await Promise.all([
     selectAll<{ ts: string; bpm: number }>(
       (x, y) => db.from('health_hr').select('ts,bpm').eq('person_id', personId).gte('ts', a).lte('ts', b).order('ts').range(x, y),
       'health_hr',
@@ -116,8 +138,9 @@ export async function loadPersonNight(db: Db, personId: string, date: string): P
       'health_spo2',
     ),
     dailyExtras(db, personId, date),
+    dailyVitals(db, personId, date),
   ]);
-  return { personId, sleep: main, hr: hr.map(rowToHr), hrv: hrv.map(rowToHrv), spo2: spo2.map(rowToSpo2), ...extras };
+  return { personId, sleep: main, hr: hr.map(rowToHr), hrv: hrv.map(rowToHrv), spo2: spo2.map(rowToSpo2), ...extras, ...vitals };
 }
 
 /**

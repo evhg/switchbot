@@ -1,5 +1,5 @@
 'use client';
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Night, PersonNightMetrics, RoomNightMetrics, RoomReading } from '@sleep-lab/core';
 import { HOUR } from '../format.ts';
 import { usePref } from '../prefs.ts';
@@ -18,7 +18,15 @@ interface DataCtx {
   /** Wake date of the night being viewed (shared across tabs). */
   date: string | null;
   setDate: (d: string) => void;
+  /** Display-name overrides per person id (System → People), stored on this device. Already applied to dataset.people. */
+  names: Record<string, string>;
+  /** People as the source names them, before overrides (what an empty override falls back to). */
+  sourcePeople: readonly { id: string; name: string }[] | null;
+  setPersonName: (id: string, name: string) => void;
 }
+
+/** Longest display name accepted from the People editor. */
+export const MAX_NAME_LENGTH = 24;
 
 const Ctx = createContext<DataCtx | null>(null);
 
@@ -33,6 +41,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
     progress: 'Simulating 90 nights…',
   });
   const [date, setDate] = useState<string | null>(null);
+  const [names, setNames] = usePref<Record<string, string>>('names', {});
+  const setPersonName = useCallback(
+    (id: string, name: string) => setNames((prev) => ({ ...prev, [id]: name.slice(0, MAX_NAME_LENGTH) })),
+    [setNames],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -57,9 +70,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
     };
   }, [source, sourceKind]);
 
+  // Names flow everywhere through dataset.people; an empty override falls back to the source's name.
+  const dataset = useMemo<Dataset | null>(() => {
+    const ds = state.dataset;
+    if (!ds) return null;
+    if (!ds.people.some((p) => names[p.id]?.trim())) return ds;
+    return { ...ds, people: ds.people.map((p) => ({ ...p, name: names[p.id]?.trim() || p.name })) };
+  }, [state.dataset, names]);
+
   const value = useMemo<DataCtx>(
-    () => ({ sourceKind, setSourceKind, source, ...state, date, setDate }),
-    [sourceKind, setSourceKind, source, state, date],
+    () => ({ sourceKind, setSourceKind, source, ...state, dataset, date, setDate, names, sourcePeople: state.dataset?.people ?? null, setPersonName }),
+    [sourceKind, setSourceKind, source, state, dataset, date, names, setPersonName],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
