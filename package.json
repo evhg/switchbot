@@ -2,13 +2,20 @@
   "name": "sleep-lab",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
-    "test": "npm run test -w @sleep-lab/core",
-    "typecheck": "npm run typecheck --workspaces --if-present",
-    "build": "npm run build -w @sleep-lab/web",
     "dev": "npm run dev -w @sleep-lab/web",
-    "sim": "node --experimental-strip-types scripts/sim-cli.ts"
+    "build": "npm run build -w @sleep-lab/web",
+    "test": "npm run test -w @sleep-lab/core",
+    "test:functions": "deno test --config supabase/functions/deno.json supabase/functions/tests/",
+    "typecheck": "npm run typecheck --workspaces --if-present && npm run typecheck:functions",
+    "typecheck:functions": "deno check --config supabase/functions/deno.json supabase/functions/*/index.ts && deno check packages/core/src/index.ts",
+    "check": "npm run typecheck && npm test && npm run build",
+    "sim": "node --experimental-strip-types scripts/sim-cli.ts",
+    "seed": "node --experimental-strip-types scripts/seed-supabase.ts"
   },
   "devDependencies": {
     "typescript": "5.9.3",

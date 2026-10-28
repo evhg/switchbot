@@ -1,0 +1,248 @@
+// Read-only Supabase source. Columns follow supabase/migrations/0001_init.sql; RLS only lets signed-in
+// household members read, so the anon key alone returns nothing (see supabaseSignIn). The row → type
+// mapping is isolated in the to* functions below so a migration rename is a one-line fix here.
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import type { AcCommand, AcMode, FanSpeed, Night, Person, PersonNight, RoomEvent, RoomEventKind, RoomReading, SleepSession, StageSegment, TagKey } from '@sleep-lab/core';
+import { addDays, DAY, HOUR, ictDate, ictMidnight } from '../format.ts';
+import { runEngine } from './engine-client.ts';
+import type { Dataset, DataSource, NightDetail } from './types.ts';
+
+type Row = Record<string, unknown>;
+
+const num = (v: unknown, d = NaN) => (typeof v === 'number' ? v : typeof v === 'string' && v !== '' ? Number(v) : d);
+const ms = (v: unknown) => (typeof v === 'number' ? v : typeof v === 'string' ? Date.parse(v) : NaN);
+const str = (v: unknown, d = '') => (typeof v === 'string' ? v : d);
+
+export function supabaseConfigured(): boolean {
+  return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+}
+
+export const toReading = (r: Row): RoomReading => ({
+  ts: ms(r.ts),
+  tempC: num(r.temp_c),
+  rh: num(r.rh),
+  co2: num(r.co2),
+  source: (str(r.source, 'poll') as RoomReading['source']),
+});
+
+export const toAcCommand = (r: Row): AcCommand => {
+  const state = (r.state ?? {}) as Row;
+  return {
+    ts: ms(r.ts),
+    state: {
+      power: Boolean(state.power ?? r.power ?? true),
+      setpointC: num(state.setpointC ?? r.setpoint_c, 20),
+      mode: str(state.mode ?? r.mode, 'cool') as AcMode,
+      fan: str(state.fan ?? r.fan, 'auto') as FanSpeed,
+    },
+    via: str(r.via, 'setAll') === 'customize' ? 'customize' : 'setAll',
+    button: typeof r.button === 'string' ? r.button : undefined,
+    reason: str(r.reason),
+    landed: typeof r.landed === 'boolean' ? r.landed : null,
+  };
+};
+
+export const toEvent = (r: Row): RoomEvent => ({
+  kind: str(r.kind) as RoomEventKind,
+  start: ms(r.start_ts ?? r.start),
+  end: r.end_ts ?? r.end ? ms(r.end_ts ?? r.end) : undefined,
+  confidence: num(r.confidence, 1),
+  detail: (r.detail ?? undefined) as RoomEvent['detail'],
+});
+
+async function pageAll(q: () => { range(a: number, b: number): PromiseLike<{ data: Row[] | null; error: { message: string } | null }> }, max = 200_000): Promise<Row[]> {
+  const out: Row[] = [];
+  const size = 1000;
+  for (let from = 0; from < max; from += size) {
+    const { data, error } = await q().range(from, from + size - 1);
+    if (error) throw new Error(error.message);
+    if (!data?.length) break;
+    out.push(...data);
+    if (data.length < size) break;
+  }
+  return out;
+}
+
+let client: SupabaseClient | null = null;
+const db = () => (client ??= createClient(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '', process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ''));
+
+/** Magic-link sign-in; the session persists in this browser so RLS lets the household read. */
+export async function supabaseSignIn(email: string): Promise<string | null> {
+  const { error } = await db().auth.signInWithOtp({ email, options: { emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined } });
+  return error ? error.message : null;
+}
+
+/** Stores this browser's push subscription for the signed-in member (RPC checks household membership). */
+export async function pushSubscribe(sub: PushSubscriptionJSON, userAgent: string): Promise<string | null> {
+  if (!supabaseConfigured()) return 'Supabase is not configured.';
+  const { endpoint, keys } = sub;
+  if (!endpoint || !keys?.p256dh || !keys.auth) return 'The browser returned an incomplete subscription.';
+  const { error } = await db().rpc('register_push_subscription', { p_endpoint: endpoint, p_p256dh: keys.p256dh, p_auth: keys.auth, p_user_agent: userAgent.slice(0, 200) });
+  return error ? error.message : null;
+}
+
+export async function supabaseUserEmail(): Promise<string | null> {
+  if (!supabaseConfigured()) return null;
+  const { data } = await db().auth.getSession();
+  return data.session?.user.email ?? null;
+}
+
+/** First finite number under any of `keys`, depth-first (Google daily payloads are nested; mirrors the backend's findNumber). */
+export function findNumber(v: unknown, keys: string[]): number | undefined {
+  if (typeof v !== 'object' || v === null) return undefined;
+  for (const k of keys) {
+    const x = (v as Row)[k];
+    if (typeof x === 'number' && Number.isFinite(x)) return x;
+    if (typeof x === 'string' && x.trim() !== '' && Number.isFinite(Number(x))) return Number(x);
+  }
+  for (const x of Object.values(v as Row)) {
+    const n = findNumber(x, keys);
+    if (n !== undefined) return n;
+  }
+  return undefined;
+}
+
+/** respRate / tempDeviationC from health_daily rows, as supabase/functions/_shared/load.ts dailyExtras does. */
+export function dailyExtras(rows: Row[]): Pick<PersonNight, 'respRate' | 'tempDeviationC'> {
+  const out: Pick<PersonNight, 'respRate' | 'tempDeviationC'> = {};
+  for (const r of rows) {
+    const t = str(r.data_type);
+    if (t === 'daily-sleep-temperature-derivations') {
+      const n = findNumber(r.value, ['nightlyTemperatureCelsius']);
+      const b = findNumber(r.value, ['baselineTemperatureCelsius']);
+      if (n !== undefined && b !== undefined) out.tempDeviationC = Math.round((n - b) * 100) / 100;
+    } else if ((t === 'daily-respiratory-rate' || t === 'respiratory-rate-sleep-summary') && out.respRate === undefined) {
+      const v = findNumber(r.value, ['breathsPerMinute', 'fullSleepBreathsPerMinute', 'averageBreathsPerMinute']);
+      if (v !== undefined) out.respRate = v;
+    }
+  }
+  return out;
+}
+
+/** Same rule as the backend's effectiveCommands: drop failed sends, and dry runs once a night has live commands. */
+export function effectiveCommandRows(rows: Row[]): Row[] {
+  const ok = rows.filter((r) => r.sent_ok !== false);
+  return ok.some((r) => r.dry_run !== true) ? ok.filter((r) => r.dry_run !== true) : ok;
+}
+
+/** The room meter: NEXT_PUBLIC_METER_DEVICE_ID, else the devices row of kind 'meter', else the simulated meter. */
+async function meterDeviceId(): Promise<string | null> {
+  const env = process.env.NEXT_PUBLIC_METER_DEVICE_ID;
+  if (env) return env;
+  const { data } = await db().from('devices').select('device_id,kind,name');
+  const rows = (data ?? []) as Row[];
+  const pick = rows.find((r) => r.kind === 'meter') ?? rows.find((r) => r.kind === 'sim' && /meter/i.test(`${str(r.device_id)} ${str(r.name)}`));
+  return pick ? str(pick.device_id) : null;
+}
+
+const toStages = (v: unknown): StageSegment[] =>
+  Array.isArray(v) ? (v as Row[]).map((x) => ({ start: ms(x.start), end: ms(x.end), stage: str(x.stage, 'light') as StageSegment['stage'] })).filter((x) => Number.isFinite(x.start)) : [];
+
+export function createSupabaseSource(days = 90): DataSource {
+  let dataset: Promise<Dataset> | null = null;
+  let meter: string | null | undefined;
+  const readingsQ = () => {
+    const q = db().from('readings').select('ts,temp_c,rh,co2,source');
+    return meter ? q.eq('device_id', meter) : q;
+  };
+  const details = new Map<string, Promise<NightDetail>>();
+
+  async function load(onProgress?: (m: string) => void): Promise<Dataset> {
+    const now = Date.now();
+    const fromDate = addDays(ictDate(now), -days);
+    onProgress?.('Loading nights…');
+    const nightsRes = await db().from('nights').select('*').gte('date', fromDate).order('date');
+    if (nightsRes.error) throw new Error(nightsRes.error.message);
+    const nightRows = (nightsRes.data ?? []) as Row[];
+    const from = ictMidnight(fromDate) - 6 * HOUR;
+    onProgress?.('Loading room readings…');
+    meter ??= await meterDeviceId();
+    const readings = (await pageAll(() => readingsQ().gte('ts', new Date(from).toISOString()).order('ts'))).map(toReading);
+    onProgress?.('Loading aircon log…');
+    const acRows = await pageAll(() => db().from('ac_commands').select('*').gte('ts', new Date(from).toISOString()).order('ts'));
+    const iso = new Date(from).toISOString();
+    onProgress?.('Loading body data…');
+    const [peopleRows, sessions, hr, hrv, spo2, daily] = await Promise.all([
+      pageAll(() => db().from('people').select('id,name,color_key').order('id')),
+      pageAll(() => db().from('sleep_sessions').select('person_id,start_ts,end_ts,stages,update_time').gte('end_ts', iso).order('end_ts')),
+      pageAll(() => db().from('health_hr').select('person_id,ts,bpm').gte('ts', iso).order('ts')),
+      pageAll(() => db().from('health_hrv').select('person_id,ts,rmssd_ms').gte('ts', iso).order('ts')),
+      pageAll(() => db().from('health_spo2').select('person_id,ts,pct').gte('ts', iso).order('ts')),
+      pageAll(() => db().from('health_daily').select('person_id,data_type,date,value').gte('date', fromDate)),
+    ]);
+    const people: Person[] = peopleRows.map((r) => ({ id: str(r.id), name: str(r.name, str(r.id)), colorKey: str(r.color_key, 'personA') }));
+    const dailyFor = (pid: string, date: string) => dailyExtras(daily.filter((d) => d.person_id === pid && d.date === date));
+
+    const nights: Night[] = nightRows.map((r) => {
+      const date = str(r.date);
+      const lightsOut = ms(r.lights_out) || ictMidnight(date) - 1.5 * HOUR;
+      const wake = ms(r.wake) || ictMidnight(date) + 6.5 * HOUR;
+      const winFrom = ictMidnight(date) - 6 * HOUR;
+      const winTo = ictMidnight(date) + 12 * HOUR;
+      const tags = (Array.isArray(r.tags) ? r.tags : []) as TagKey[];
+      // The sleep session that ends closest to this night's wake time, per person.
+      const nightPeople: PersonNight[] = people.flatMap((p) => {
+        const s = sessions
+          .filter((x) => x.person_id === p.id && Math.abs(ms(x.end_ts) - wake) < 6 * HOUR)
+          .sort((a, b) => Math.abs(ms(a.end_ts) - wake) - Math.abs(ms(b.end_ts) - wake))[0];
+        if (!s) return [];
+        const sleep: SleepSession = { personId: p.id, start: ms(s.start_ts), end: ms(s.end_ts), stages: toStages(s.stages), updateTime: s.update_time ? ms(s.update_time) : undefined };
+        const inS = (x: Row) => x.person_id === p.id && ms(x.ts) >= sleep.start - HOUR && ms(x.ts) <= sleep.end + HOUR;
+        return [{
+          personId: p.id,
+          sleep,
+          hr: hr.filter(inS).map((x) => ({ ts: ms(x.ts), bpm: num(x.bpm) })),
+          hrv: hrv.filter(inS).map((x) => ({ ts: ms(x.ts), rmssdMs: num(x.rmssd_ms) })),
+          spo2: spo2.filter(inS).map((x) => ({ ts: ms(x.ts), pct: num(x.pct) })),
+          ...dailyFor(p.id, date),
+        }];
+      });
+      return {
+        date,
+        lightsOut,
+        wake,
+        room: readings.filter((x) => x.ts >= winFrom && x.ts < winTo),
+        outdoor: [],
+        ac: effectiveCommandRows(acRows.filter((x) => str(x.night_date) === date || (!x.night_date && ms(x.ts) >= winFrom && ms(x.ts) < winTo))).map(toAcCommand),
+        curveId: str(r.curve_id, 'default-v1'),
+        events: [],
+        people: nightPeople,
+        tags,
+      };
+    });
+    onProgress?.('Computing metrics…');
+    return runEngine<Dataset>({ type: 'compute', nights, source: 'supabase', clipTs: now + DAY });
+  }
+
+  return {
+    kind: 'supabase',
+    label: 'Supabase',
+    loadDataset(onProgress) {
+      dataset ??= load(onProgress).catch((e) => {
+        dataset = null;
+        throw e;
+      });
+      return dataset;
+    },
+    loadNightDetail(date) {
+      let d = details.get(date);
+      if (!d) {
+        d = runEngine<NightDetail>({ type: 'detail', date });
+        details.set(date, d);
+        d.catch(() => details.delete(date));
+      }
+      return d;
+    },
+    async liveReading() {
+      meter ??= await meterDeviceId();
+      const { data, error } = await readingsQ().order('ts', { ascending: false }).limit(1);
+      if (error || !data?.[0]) return null;
+      return toReading(data[0] as Row);
+    },
+    async liveWindow(from, to) {
+      meter ??= await meterDeviceId();
+      const rows = await pageAll(() => readingsQ().gte('ts', new Date(from).toISOString()).lte('ts', new Date(to).toISOString()).order('ts'), 5000);
+      return rows.map(toReading);
+    },
+  };
+}

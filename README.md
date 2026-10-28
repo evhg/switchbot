@@ -6,3 +6,6 @@ A personal sleep-optimisation system built on SwitchBot (Hub Mini, Meter Pro CO2
 - [docs/RESEARCH.md](docs/RESEARCH.md): verified findings and sleep-science targets
 - [docs/VISUALIZATIONS.md](docs/VISUALIZATIONS.md): every chart we can build
 - [docs/research/](docs/research/): full research reports with sources and fact-checks
+- [docs/SETUP.md](docs/SETUP.md): device installation order and steps
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): running locally, layout, simulator, tests
+- [docs/BACKEND.md](docs/BACKEND.md): Supabase schema, Edge Functions, deployment

@@ -9,3 +9,9 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 supabase/.temp/
+*.log
+.vercel/
+.turbo/
+playwright-report/
+test-results/
+supabase/.branches/

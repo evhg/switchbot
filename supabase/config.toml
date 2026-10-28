@@ -1,0 +1,48 @@
+# Supabase CLI config for Bedroom Sleep Lab. Only the settings we depend on are listed; the CLI fills in
+# defaults for everything else. Replace project_id with your project ref (or keep it; `supabase link`
+# stores the real ref in supabase/.temp).
+project_id = "sleep-lab"
+
+[api]
+enabled = true
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+major_version = 17
+
+[auth]
+enabled = true
+# The PWA signs in with email magic links; only household_members rows grant data access.
+enable_signup = true
+
+[edge_runtime]
+enabled = true
+policy = "per_worker"
+deno_version = 2
+
+# JWT verification is off for every function: SwitchBot and Google can't send a Supabase JWT, and the
+# scheduled functions authenticate with the x-cron-secret header (or the service-role key) instead.
+# Each function checks its own secret; see supabase/functions/_shared/auth.ts.
+
+[functions.switchbot-webhook]
+verify_jwt = false
+
+[functions.google-health-webhook]
+verify_jwt = false
+
+[functions.google-oauth]
+verify_jwt = false
+
+[functions.poll-meter]
+verify_jwt = false
+
+[functions.ac-curve]
+verify_jwt = false
+
+[functions.google-health-sync]
+verify_jwt = false
+
+[functions.nightly-report]
+verify_jwt = false

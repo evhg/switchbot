@@ -1,0 +1,81 @@
+-- Schedules (pg_cron + pg_net -> Edge Functions), following
+-- https://supabase.com/docs/guides/functions/schedule-functions: the project URL and a shared secret live in
+-- Vault and are read at call time, so nothing secret is stored in cron.job.
+--
+-- Create the two Vault secrets once per project (SQL editor; see docs/BACKEND.md):
+--   select vault.create_secret('https://<project-ref>.supabase.co', 'project_url');
+--   select vault.create_secret('<same value as the CRON_SECRET function secret>', 'cron_secret');
+--
+-- pg_cron runs in UTC. ICT = UTC+7, so ICT hh:mm = UTC (hh-7):mm.
+
+create extension if not exists pg_cron;
+create extension if not exists pg_net with schema extensions;
+
+create or replace function private.invoke_edge_function(
+  p_name text,
+  p_body jsonb default '{}',
+  p_timeout_ms integer default 10000
+) returns bigint
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_url text;
+  v_secret text;
+begin
+  select ds.decrypted_secret into v_url from vault.decrypted_secrets ds where ds.name = 'project_url';
+  select ds.decrypted_secret into v_secret from vault.decrypted_secrets ds where ds.name = 'cron_secret';
+  if v_url is null or v_secret is null then
+    raise warning 'invoke_edge_function(%): vault secrets project_url / cron_secret are not set', p_name;
+    return null;
+  end if;
+  -- Fire and forget: pg_net is async and never retries. Responses land in net._http_response (kept ~6 h).
+  return net.http_post(
+    url := rtrim(v_url, '/') || '/functions/v1/' || p_name,
+    body := coalesce(p_body, '{}'::jsonb) || jsonb_build_object('scheduledAt', now()),
+    headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', v_secret),
+    timeout_milliseconds := p_timeout_ms
+  );
+end $$;
+
+revoke all on function private.invoke_edge_function(text, jsonb, integer) from public;
+
+-- cron.schedule() with an existing job name replaces that job, so this file can be re-run.
+
+-- Meter backstop poll, every minute (~1,440 SwitchBot calls/day of a 5,000 budget).
+select cron.schedule('sleeplab-poll-meter', '* * * * *',
+  $$select private.invoke_edge_function('poll-meter')$$);
+
+-- Temperature curve, every 5 min around the clock. Inside the night's window (precool .. wake + 90 min) it runs
+-- the controller; outside it, it only makes sure an AC we believe is still ON gets switched off (late wake,
+-- a night disabled mid-way, failed OFF sends). No SwitchBot call is made unless a command is due.
+select cron.schedule('sleeplab-ac-curve', '*/5 * * * *',
+  $$select private.invoke_edge_function('ac-curve')$$);
+
+-- Google Health pulls (last 36 h + 7 days of sleep/daily types):
+--   07:20, 08:20, 09:20 ICT = 00:20-02:20 UTC  (after typical wake times, ahead of the report checks)
+--   10:30 ICT = 03:30 UTC  (late syncs / reprocessed stages)
+--   14:00 ICT = 07:00 UTC  (afternoon backstop)
+select cron.schedule('sleeplab-health-sync-morning', '20 0-2 * * *',
+  $$select private.invoke_edge_function('google-health-sync', '{"mode":"full"}', 60000)$$);
+select cron.schedule('sleeplab-health-sync-1030', '30 3 * * *',
+  $$select private.invoke_edge_function('google-health-sync', '{"mode":"full"}', 60000)$$);
+select cron.schedule('sleeplab-health-sync-1400', '0 7 * * *',
+  $$select private.invoke_edge_function('google-health-sync', '{"mode":"full"}', 60000)$$);
+
+-- Drain webhook-queued sync jobs that the webhook's own background call missed. Cheap when the queue is empty.
+select cron.schedule('sleeplab-health-sync-queue', '*/10 * * * *',
+  $$select private.invoke_edge_function('google-health-sync', '{"mode":"queue"}', 60000)$$);
+
+-- Morning report, checked every 15 min from 06:00 to 14:45 ICT (23:00-07:45 UTC). In this scheduled mode the
+-- function decides itself: first report + push once wake + 60 min has passed and everyone's sleep has synced
+-- (or at wake + 4 h regardless), a silent regenerate when late body data arrives, and a final silent
+-- regenerate after max(12:00, wake + 2 h) so the morning CO2-decay ACH is included. Otherwise it returns early.
+select cron.schedule('sleeplab-nightly-report', '*/15 0-7,23 * * *',
+  $$select private.invoke_edge_function('nightly-report', '{"auto":true}', 120000)$$);
+
+-- Housekeeping at 03:17 ICT (20:17 UTC): the 1-min jobs add ~1,700 cron.job_run_details rows per day.
+select cron.schedule('sleeplab-housekeeping', '17 20 * * *', $$
+  delete from cron.job_run_details where end_time < now() - interval '7 days';
+  delete from public.oauth_states where created_at < now() - interval '1 day';
+  delete from public.api_quota_log where ts < now() - interval '60 days';
+  delete from public.health_sync_jobs where done_at < now() - interval '14 days';
+$$);
