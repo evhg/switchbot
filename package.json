@@ -1,0 +1,18 @@
+{
+  "name": "sleep-lab",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "test": "npm run test -w @sleep-lab/core",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build -w @sleep-lab/web",
+    "dev": "npm run dev -w @sleep-lab/web",
+    "sim": "node --experimental-strip-types scripts/sim-cli.ts"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "deno": "2.9.6",
+    "@types/node": "22.20.5"
+  }
+}
