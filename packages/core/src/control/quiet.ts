@@ -86,8 +86,12 @@ export function setpointLimits(curve: TemperatureCurve): { lo: number; hi: numbe
   return { lo: Math.max(16, Math.ceil(curve.minC)), hi: Math.min(30, Math.floor(curve.maxC)) };
 }
 
-export function fanFor(remote: RemoteProfile, phase: CurvePhaseName): FanSpeed {
-  return remote.kind === 'customize' ? 'auto' : phase === 'precool' ? 'high' : 'low';
+/** Fan for a phase: 'auto' for a learned ladder; else the curve phase's own `fan`, else high for precool and low after. */
+export function fanFor(remote: RemoteProfile, phase: CurvePhaseName, curve?: TemperatureCurve): FanSpeed {
+  if (remote.kind === 'customize') return 'auto';
+  const own = curve?.phases.find((p) => p.name === phase)?.fan;
+  if (own) return own;
+  return phase === 'precool' ? 'high' : 'low';
 }
 
 export interface PlannedAcCommand {
@@ -147,7 +151,7 @@ export function planAcSchedule(input: PlanInput): AcPlan {
 
   const push = (ts: Ms, targetC: number, phase: CurvePhaseName, kind: PlannedAcCommand['kind'], label: string) => {
     const sp = clamp(Math.round(targetC + bias), lo, hi);
-    const cmd = remoteCommand(ts, { power: true, setpointC: sp, mode: 'cool', fan: fanFor(remote, phase) }, remote, label);
+    const cmd = remoteCommand(ts, { power: true, setpointC: sp, mode: 'cool', fan: fanFor(remote, phase, curve) }, remote, label);
     if (!cmd) return;
     if (cur && cur.power && cur.setpointC === cmd.state.setpointC && cur.fan === cmd.state.fan && cur.mode === cmd.state.mode) return;
     if (cmd.button !== undefined && cmd.button === curButton) return;

@@ -26,13 +26,14 @@ export const TABS: readonly { href: string; label: string; icon: IconName }[] = 
   { href: '/settings', label: 'System', icon: 'gear' },
 ];
 
-export type SystemSlug = 'plan' | 'tags' | 'general' | 'morning' | 'data' | 'health' | 'co2' | 'setup' | 'diagnostics';
+export type SystemSlug = 'plan' | 'tags' | 'presence' | 'general' | 'morning' | 'data' | 'health' | 'co2' | 'setup' | 'diagnostics';
 export const SYSTEM_GROUPS: readonly { label: string; pages: readonly { slug: SystemSlug; label: string }[] }[] = [
   {
     label: 'Tonight',
     pages: [
       { slug: 'plan', label: 'Tonight’s plan' },
       { slug: 'tags', label: 'Tonight’s tags' },
+      { slug: 'presence', label: 'Presence' },
     ],
   },
   {

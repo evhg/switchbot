@@ -13,6 +13,7 @@ import { linePath, scale } from '../charts/common.tsx';
 import { SYSTEM_GROUPS, systemHref, type SystemSlug } from '../nav.tsx';
 import { FeaturedCard, Group, PageHeader, Row, Skeleton, useWidth } from '../ui.tsx';
 import { clock, driftAlerts, planTimes, tagLabel, useMorningReport, usePlanClock, useSetupProgress, useTonightTags } from './model.ts';
+import { usePresenceSummary } from './presence.tsx';
 import s from './system.module.css';
 
 const M0 = -120;
@@ -53,13 +54,15 @@ export function SystemRoot() {
   const [tags] = useTonightTags();
   const [morning] = useMorningReport();
   const setup = useSetupProgress();
+  const presence = usePresenceSummary();
   const drift = useMemo(() => (dataset ? driftAlerts(dataset).length : null), [dataset]);
   const people = (dataset ?? latest)?.people;
   const ph = curve.phases;
-  const times = planTimes(curve, pc.lightsOut);
+  const times = planTimes(curve, pc.lightsOut, pc.wake);
 
   const values: Record<SystemSlug, ReactNode> = {
     plan: `${fmt(Math.min(...ph.map((p) => p.targetC)), 1)}° coolest`,
+    presence,
     tags: tags.length ? (tags.length > 2 ? `${tags.length} tags` : tags.map(tagLabel).join(', ')) : 'None',
     general: `${MODE[mode]}${people ? ` · ${people.map((p) => p.name).join(', ')}` : ''}`,
     morning: morning ? 'On' : 'Off',

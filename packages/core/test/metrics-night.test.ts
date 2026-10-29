@@ -102,8 +102,9 @@ describe('roomNightMetrics', () => {
     expect(m.minutesTempOver24).toBe(0);
     expect(m.minutesRhInBand).toBe(300);
     expect(m.minutesRhOver60).toBe(180);
+    // The default curve holds 19 °C for the first 4 h (one-beep curve).
     expect(m.tempEarlyMean).toBeLessThan(19.5);
-    expect(m.tempEarlyMean).toBeGreaterThan(19);
+    expect(m.tempEarlyMean).toBeGreaterThanOrEqual(18.9);
   });
 
   it('fits the morning decay ACH', () => {

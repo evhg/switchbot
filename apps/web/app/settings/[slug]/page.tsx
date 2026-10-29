@@ -7,6 +7,7 @@ import type { SystemSlug } from '@/components/nav.tsx';
 const TITLES: Record<SystemSlug, string> = {
   plan: 'Tonight’s plan',
   tags: 'Tonight’s tags',
+  presence: 'Presence',
   general: 'General',
   morning: 'Morning report',
   data: 'Data & devices',

@@ -127,3 +127,20 @@
 .dataSummary { display: grid; gap: var(--sp-2); padding: var(--sp-5) var(--sp-6); margin: 0 0 var(--sp-8); }
 .dataSummary :global(.status) { font-size: var(--t-body); color: var(--text); }
 .dataSummary b { font-weight: 600; }
+
+/* ── Tonight (top of Tonight's plan) and Presence ── */
+.time.time { width: 8.5em; flex: none; text-align: center; }
+.segLi { list-style: none; padding: var(--sp-2) var(--sp-5) var(--sp-3); }
+.hint { align-items: center; flex-wrap: wrap; }
+.hint :global(.btn) { flex: none; }
+.btnLi { list-style: none; padding: var(--sp-3) var(--sp-5) var(--sp-4); }
+.reveal { list-style: none; display: grid; gap: var(--sp-4); padding: var(--sp-4) var(--sp-5); background: var(--surface-2); }
+.copy { display: grid; gap: var(--sp-2); min-width: 0; }
+.copyRow { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
+.copyVal { flex: 1; min-width: 0; overflow-wrap: anywhere; word-break: break-all; font-size: var(--t-sec); line-height: 1.45; }
+.howtoBox { padding: var(--sp-5); display: grid; gap: var(--sp-3); }
+.howtoH { font-size: var(--t-body); font-weight: 600; margin: var(--sp-3) 0 0; }
+.howto { margin: 0; padding: 0 0 0 1.3em; display: grid; gap: var(--sp-2); font-size: var(--t-sec); color: var(--text-2); line-height: 1.55; }
+.howto b { color: var(--text); font-weight: 560; }
+.howto li::marker { color: var(--muted); }
+.howto :global(.code) { overflow-wrap: anywhere; }

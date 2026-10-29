@@ -6,15 +6,24 @@
 // Quiet mode (the receiver beeps on every IR frame): ON by default — from lights-out + 15 min only the planned phase
 // steps plus at most one extra command (an emergency correction or a resend; packages/core CONTRACT.md). AC_QUIET=false (or 0/no/off)
 // switches it off for every night; anything else, or unset, keeps the stored profile's setting (default on).
+// Presence gate (_shared/presence.ts): the command that turns the AC ON for the night (the first power-on command in
+// tonight's log) is only sent when someone is home (a fresh iPhone presence event, a stale one plus rising CO₂, or
+// "Home tonight" in the app), from the pre-cool start until lights-out + 3 h. The decision is stored on the night
+// (precool_status / precool_reason) and returned as `skipped: "precool: …"`; a closed gate also switches off an AC that
+// is still assumed ON. A live pre-cool started by a presence signal sends a push ("Away tonight" is one tap away).
+// "Away tonight" (or the travel tag) keeps the AC off all night, like ac_enabled = false.
 import { decideAcCommand, evaluateLanding, offCommand } from '../../../packages/core/src/control/controller.ts';
 import { DEFAULT_REMOTE, type RemoteProfile, withQuiet } from '../../../packages/core/src/control/remote.ts';
 import { toSwitchBotCommand } from '../../../packages/core/src/switchbot/ac.ts';
 import type { AcCommand, AcState } from '../../../packages/core/src/types.ts';
 import { requireCron } from '../_shared/auth.ts';
-import { env, envFlagSafe } from '../_shared/env.ts';
-import { json, readJson, serve } from '../_shared/http.ts';
+import { knownDeviceId } from '../_shared/devices.ts';
+import { envFlagSafe } from '../_shared/env.ts';
+import { background, json, readJson, serve } from '../_shared/http.ts';
 import { ensureNight, loadCurve, loadRoom } from '../_shared/load.ts';
 import { type AcCommandRow, commandToRow, eventToRow, rowToCommand } from '../_shared/rows.ts';
+import { co2Rising, isAway, loadLatestPresence, needsPresenceGate, presenceGate, recordGate, START_UNTIL_MIN } from '../_shared/presence.ts';
+import { precoolNotice, pushToAll } from '../_shared/push.ts';
 import { must, serviceClient } from '../_shared/supabase.ts';
 import { errorStatus, switchBotSession } from '../_shared/switchbot.ts';
 import { iso, MIN, nightDateFor } from '../_shared/time.ts';
@@ -35,8 +44,9 @@ serve(async (req) => {
   const db = serviceClient();
   await requireCron(req, db);
   const body = await readJson(req);
-  const acId = env('AC_DEVICE_ID');
-  const meterId = env('METER_DEVICE_ID');
+  // AC_DEVICE_ID / METER_DEVICE_ID when set, else the devices discovered by poll-meter (devices table).
+  const [acId, meterId] = await Promise.all([knownDeviceId(db, 'ac'), knownDeviceId(db, 'meter')]);
+  if (!acId || !meterId) return json({ skipped: `not discovered yet: ${!acId ? 'aircon remote' : 'meter'}` });
   // Fail safe: only an explicit DRY_RUN=false|0|no|off sends IR commands; unset or anything else is a dry run.
   // A request can force a dry run ({"dryRun":true}) but never force a live one.
   const dryRun = envFlagSafe('DRY_RUN') || body.dryRun === true;
@@ -48,7 +58,9 @@ serve(async (req) => {
   const curve = await loadCurve(db, night.curve_id);
   const onFrom = lightsOut + Math.min(0, curve.phases[0]?.startMin ?? 0) * MIN;
   // Controller window: precool → an hour past the scheduled OFF (wake + 30), room for one OFF resend.
-  const inWindow = night.ac_enabled && now >= onFrom && now <= wake + 90 * MIN;
+  const away = isAway(night.presence_override, night.tags);
+  const enabled = night.ac_enabled && !away;
+  const inWindow = enabled && now >= onFrom && now <= wake + 90 * MIN;
 
   const stateRow = must(await db.from('ac_state').select('*').eq('device_id', acId).maybeSingle(), 'ac_state') as AcStateRow | null;
   const stored: RemoteProfile = stateRow?.remote ?? DEFAULT_REMOTE;
@@ -67,12 +79,17 @@ serve(async (req) => {
 
   if (!inWindow) {
     // Outside the window (or the night is disabled) the only job is: an AC we believe is ON gets switched off.
+    if (away && night.ac_enabled && now >= onFrom && now <= lightsOut + START_UNTIL_MIN * MIN) {
+      await recordGate(db, night, { status: 'away', reason: 'away tonight (marked in the app)' }, now);
+    }
     if (!lastCommand?.state.power) {
-      return json({ skipped: night.ac_enabled ? 'outside night window' : 'ac disabled for this night', night: night.date });
+      return json({ skipped: !night.ac_enabled ? 'ac disabled for this night' : away ? 'away tonight' : 'outside night window', night: night.date });
     }
     if (now - lastCommand.ts < remote.minIntervalMin * MIN) return json({ skipped: 'ensure off: waiting for minInterval', night: night.date });
     const reason = !night.ac_enabled
       ? 'ensure off: AC disabled for this night'
+      : away
+      ? 'ensure off: away tonight'
       : now > wake
         ? 'ensure off: still on after wake'
         : 'ensure off: still on outside the night window';
@@ -120,6 +137,34 @@ serve(async (req) => {
   // decideAcCommand may set landed on the previous command itself.
   if (lastCommand && lastRow?.id && landedBefore == null && typeof lastCommand.landed === 'boolean') {
     await markLanded(db, lastRow.id, lastCommand.landed, night.date, lastCommand);
+  }
+  // Presence gate: only the command that turns the AC on for the night (pre-cool, or a late start) is gated.
+  if (needsPresenceGate(cmd, tonight)) {
+    const gate = presenceGate({
+      now,
+      precoolStart: onFrom,
+      lightsOut,
+      override: night.presence_override ?? null,
+      tags: night.tags ?? [],
+      latest: await loadLatestPresence(db),
+      co2Rising: co2Rising(recent, now),
+    });
+    await recordGate(db, night, gate, now);
+    if (!gate.allow) {
+      // An AC still assumed ON (e.g. last morning's OFF failed) is switched off rather than left running for nobody.
+      if (lastCommand?.state.power && now - lastCommand.ts >= remote.minIntervalMin * MIN) {
+        const off = offCommand(now, remote, lastCommand.state, `ensure off: pre-cool gate closed (${gate.reason})`);
+        if (off) return await send(db, { acId, dryRun, cmd: off, nightDate: night.date, stateRow, commandsTonight });
+      }
+      return json({ skipped: `precool: ${gate.reason}`, precool: gate.status, dryRun, night: night.date });
+    }
+    const res = await send(db, { acId, dryRun, cmd: cmd!, nightDate: night.date, stateRow, commandsTonight });
+    // Tell the household when a presence signal (not "Home tonight") started a real pre-cool, once per night.
+    if (gate.status === 'started' && !dryRun && res.ok && night.precool_status !== 'started') {
+      const p = background(pushToAll(db, precoolNotice(night.date, gate.reason), 'precool').then((r) => console.log('precool push', JSON.stringify(r))));
+      if (p) await p;
+    }
+    return res;
   }
   if (!cmd) return json({ ok: true, dryRun, quiet: remote.quiet?.enabled !== false, night: night.date, command: null, commandsTonight, lastLanded: lastCommand?.landed ?? null });
   return await send(db, { acId, dryRun, cmd, nightDate: night.date, stateRow, commandsTonight });

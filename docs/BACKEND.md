@@ -47,7 +47,8 @@ All timestamps are `timestamptz` (UTC). A night is keyed by the **ICT wake-up da
 | `raw_switchbot` | Every webhook body unchanged, for measuring cadence and lag | webhook |
 | `outdoor_readings` | Outdoor temp/RH | seed / later a weather source |
 | `calibrations` | CO₂ outdoor calibrations, offsets | manual |
-| `curves` | Temperature curves (`phases` jsonb = `CurvePhase[]`); `default-v1` is inserted by the migration | SQL |
+| `curves` | Temperature curves (`phases` jsonb = `CurvePhase[]`); `default-v1` is inserted by 0001, `one-beep-v1` (the default since 0009) by 0009 | SQL |
+| `presence_events`, `presence_latest` (view) | Arrive/leave-home events from the iPhones (0009); household read, service-role write | presence |
 | `nights` | lights-out, wake, curve, tags, `ac_enabled` | `set_night()` RPC, ac-curve (default schedule), seed |
 | `ac_commands` | Every decision: state, via, button, reason, `landed`, `dry_run`, `sent_ok` | ac-curve |
 | `ac_state` | One row per AC: assumed state, last command, `remote` (RemoteProfile jsonb), `bias_c` | ac-curve / SQL |
@@ -120,12 +121,12 @@ Until a function's required secrets are set it answers `503 {"error":"not config
 | `SWITCHBOT_DAILY_BUDGET` | all SwitchBot calls | Default 5000; the server limit is 10,000 |
 | `SWITCHBOT_AC_RESERVE` | poll-meter | Default 300. Polling stops when fewer calls are left, keeping room for aircon commands |
 | `POLL_SKIP_IF_FRESH_S` | poll-meter | Default 0 (off). For example, 50 skips the poll when a webhook reading is that fresh |
-| `DEFAULT_LIGHTS_OUT`, `DEFAULT_WAKE` | ac-curve, nightly-report | ICT `HH:MM` used when a night has no row yet. Defaults are 22:30 and 06:30 |
+| `DEFAULT_LIGHTS_OUT`, `DEFAULT_WAKE` | ac-curve, nightly-report | ICT `HH:MM` used when a night has no row yet. Defaults are 22:00 (every day) and 06:30 |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | google-oauth, google-health-sync | OAuth client of type "Web application" |
 | `GOOGLE_HEALTH_WEBHOOK_SECRET` | google-health-webhook | The subscriber's `endpointAuthorization.secret` |
 | `GOOGLE_HEALTH_SIGNATURE` | google-health-webhook | `off` / `log` (default) / `enforce`. The ECDSA verifier is best effort |
 | `OAUTH_START_SECRET` | google-oauth | Guards `/google-oauth/start` |
-| `APP_URL` | nightly-report, google-oauth | The PWA origin, for the live app `https://sleep-lab-lac.vercel.app` (push tap target) |
+| `APP_URL` | nightly-report, google-oauth, ac-curve | The PWA origin, for the live app `https://sleep-lab-lac.vercel.app` (push tap target) |
 | `ANTHROPIC_API_KEY` | nightly-report | Optional. Without it, reports are rule-only |
 | `ANTHROPIC_MODEL` | nightly-report | Default `claude-opus-5-5` |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | nightly-report | Base64url raw keys. The PWA uses the same public key as `applicationServerKey` |
@@ -227,6 +228,30 @@ SwitchBot doesn't sign deliveries, so the URL's last path segment is the credent
   ```
   The second call removes the old URL and registers the new one. Workers may accept the old value for up to 5 more minutes (positive cache), after which it is 404.
 - **Delivery vs poll.** The webhook is change-based; the minute poll (`poll-meter`) stays as the reconciler. Compare `readings.source` and `raw_switchbot.received_at` against the poll rows.
+
+## Presence and the pre-cool gate (migrations 0009, 0010)
+
+Decided 2026-10-29: bedtime 22:00 every day, pre-cool at 21:30 **only if someone is home**, one beep per night.
+
+- **Curve** `one-beep-v1` (`DEFAULT_CURVE`): ON at lights-out − 30 min to 19 °C (set 18, fan auto), nothing at lights-out,
+  ONE warming step at +4 h 30 to 21 °C (set 20), OFF at wake + 30 min. Quiet mode plans exactly one command while asleep.
+- **Presence**: each iPhone runs two Shortcuts personal automations (Arrive / Leave home) that `POST` `{"state":"home"|"away"}`
+  to `/functions/v1/presence` with an `X-Presence-Token` header (`verify_jwt = false`; the token is the credential).
+  Tokens (`slp_` + 64 hex) are per person, stored only as SHA-256 in `private.presence_tokens`, created or rotated from
+  System › Presence via `rotate_presence_token(person)` (shown once; only that person's own account or the household
+  owner, migration 0010). `record_presence()` is service-role only; a DB error answers a generic `{"error":"internal"}`.
+- **Gate** (`_shared/presence.ts`, used by ac-curve before the first power-on command in tonight's command log, whatever
+  the assumed AC state): someone home = any person's latest event is `home` and at most 48 h old, or the night's
+  `presence_override = 'home'` ("Home tonight"); `away` override or the `travel` tag keeps the AC off (and switches an
+  assumed-on AC off). A `home` older than 48 h (a lost Leave event) is *stale*: it only counts when bedroom CO₂ also rose
+  ≥ 120 ppm over the last hour (to ≥ 550 ppm), otherwise the night waits with "home signal stale". No presence data ever →
+  no pre-cool. Nobody home → retried every 5 min until lights-out + 3 h; the gate is closed before the pre-cool start. A
+  closed gate also switches off an AC still assumed ON. The decision is stored on `nights.precool_status / precool_reason
+  / precool_at` and returned as `{"skipped":"precool: …"}`. Times older than today show a weekday ("since Mon 18:42").
+- **Push**: when a presence signal (not "Home tonight") starts a live pre-cool, every push subscription gets "Aircon
+  pre-cool started", tapping opens Tonight's plan where "Away tonight" switches it off (no push in dry run).
+- **App**: Tonight's plan shows lights out, an editable wake (`set_night`), Home / Away / Unknown with who and since when,
+  the one-tap override (`set_presence_override`) and the pre-cool line.
 
 ## Schedules (pg_cron runs in UTC; ICT = UTC+7)
 

@@ -28,11 +28,11 @@ export async function loadCurve(db: Db, id: string | null): Promise<TemperatureC
   return data ? rowToCurve(data as CurveRow) : DEFAULT_CURVE;
 }
 
-/** The nights row for `date`, created from DEFAULT_LIGHTS_OUT / DEFAULT_WAKE (ICT) when missing. */
+/** The nights row for `date`, created from DEFAULT_LIGHTS_OUT / DEFAULT_WAKE (ICT; default 22:00 → 06:30 every day) when missing. */
 export async function ensureNight(db: Db, date: string): Promise<NightRow> {
   const existing = must(await db.from('nights').select('*').eq('date', date).maybeSingle(), 'nights');
   if (existing) return existing as NightRow;
-  const { lightsOut, wake } = defaultSchedule(date, optEnv('DEFAULT_LIGHTS_OUT') ?? '22:30', optEnv('DEFAULT_WAKE') ?? '06:30');
+  const { lightsOut, wake } = defaultSchedule(date, optEnv('DEFAULT_LIGHTS_OUT') ?? '22:00', optEnv('DEFAULT_WAKE') ?? '06:30');
   const { data: def } = await db.from('curves').select('id').eq('is_default', true).maybeSingle();
   const row = { date, lights_out: iso(lightsOut), wake: iso(wake), curve_id: (def as { id?: string } | null)?.id ?? null };
   const ins = await db.from('nights').upsert(row, { onConflict: 'date', ignoreDuplicates: true });

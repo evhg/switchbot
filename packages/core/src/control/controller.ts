@@ -152,7 +152,7 @@ export function decideAcCommand(input: ControllerInput): AcCommand | null {
   const target = targetAt(curve, lightsOut, now);
   if (target === null) return null;
   const phase = phaseAt(curve, lightsOut, now)?.phase.name ?? 'precool';
-  const fan: FanSpeed = fanFor(remote, phase);
+  const fan: FanSpeed = fanFor(remote, phase, curve);
   const { offset, settledMean } = offsetEstimate(input);
   const bias = clamp(Math.round(-offset), -2, 2);
   // minC/maxC bound the setpoint itself (hard safety limits), not only the room target.
@@ -274,7 +274,7 @@ function decideQuiet(input: ControllerInput, quiet: ResolvedQuiet): AcCommand | 
   const limits = setpointLimits(curve);
   const { lo, hi } = limits;
   const phase = phaseAt(curve, lightsOut, now)?.phase.name ?? 'precool';
-  const fan = fanFor(remote, phase);
+  const fan = fanFor(remote, phase, curve);
   const steps = quietSteps(curve, lightsOut, wake, quiet);
   const step = steps.filter((st) => st.ts <= now).at(-1);
   const nextStep = steps.find((st) => st.ts > now);

@@ -161,30 +161,49 @@ describe('integration: simulator truth → detectors and metrics', () => {
   }, 60_000);
 
   const remoteGap = DEFAULT_REMOTE.minIntervalMin * MIN;
-  it('quiet controller logs 4–8 commands per night, at most 4 while asleep, no duplicates, respecting minInterval', () => {
+  it('quiet controller (one-beep default curve) logs 3–6 commands per night, at most 2 while asleep, and matches the plan', () => {
     const quiet = resolveQuiet(DEFAULT_REMOTE);
     const counts: number[] = [];
     const asleepCounts: number[] = [];
     for (const n of nights) {
-      const asleep = n.ac.filter((c) => c.ts >= n.lightsOut + quiet.settleMin * MIN && c.ts < n.wake);
+      const from = n.lightsOut + quiet.settleMin * MIN;
+      const asleep = n.ac.filter((c) => c.ts >= from && c.ts < n.wake);
       counts.push(n.ac.length);
       asleepCounts.push(asleep.length);
-      expect(n.ac.length, n.date).toBeGreaterThanOrEqual(4);
-      expect(n.ac.length, n.date).toBeLessThanOrEqual(8);
-      // Hard bound by design: the planned steps (3 for the default curve: a re-measured bias never adds one) plus
-      // one extra command (a resend or an emergency, shared budget) → at most 4 beeps while asleep.
+      expect(n.ac.length, n.date).toBeGreaterThanOrEqual(3);
+      expect(n.ac.length, n.date).toBeLessThanOrEqual(6);
+      // Hard bound by design: the planned steps (1 for the default curve: the warming step; a re-measured bias never
+      // adds one) plus one extra command (a resend or an emergency, shared budget) → at most 2 beeps while asleep.
       const plan = planAcSchedule({ curve: DEFAULT_CURVE, lightsOut: n.lightsOut, wake: n.wake, remote: DEFAULT_REMOTE });
+      expect(plan.asleepCount, n.date).toBe(1);
       const planned = asleep.filter((c) => c.reason.startsWith('curve:'));
       const extra = asleep.filter((c) => !c.reason.startsWith('curve:'));
       expect(planned.length, `${n.date} planned steps while asleep`).toBe(plan.asleepCount);
       expect(extra.length, `${n.date} extras while asleep`).toBeLessThanOrEqual(quiet.maxExtraPerNight);
-      expect(asleep.length, `${n.date} while asleep`).toBeLessThanOrEqual(4);
+      expect(asleep.length, `${n.date} while asleep`).toBeLessThanOrEqual(2);
       for (const c of asleep) expect(c.reason, n.date).toMatch(/^(curve: .*\(quiet\)|resend|emergency)/);
-      // The page's plan and the controller agree: same steps, setpoints within 1 °C (the measured bias).
+      // The page's plan and the controller agree, command by command:
+      //  - the evening ON at the precool start (setpoint within 1 °C, the measured bias),
+      //  - the warming step at its time; setpoint within 1 °C (3 after an emergency: it carries the emergency's ±2 plus one re-measure),
       plan.commands.filter((c) => c.asleep).forEach((p, i) => {
-        expect(Math.abs((planned[i]?.ts ?? Infinity) - p.ts), n.date).toBeLessThanOrEqual(remoteGap);
-        expect(Math.abs((planned[i]?.state.setpointC ?? Infinity) - p.state.setpointC), n.date).toBeLessThanOrEqual(1);
+        const step = planned[i];
+        const tol = extra.some((c) => c.reason.startsWith('emergency') && step && c.ts < step.ts) ? 3 : 1;
+        expect(Math.abs((step?.ts ?? Infinity) - p.ts), n.date).toBeLessThanOrEqual(remoteGap);
+        expect(Math.abs((step?.state.setpointC ?? Infinity) - p.state.setpointC), n.date).toBeLessThanOrEqual(tol);
       });
+      const firstOn = n.ac.find((c) => c.state.power)!;
+      expect(Math.abs(firstOn.ts - plan.commands[0]!.ts), `${n.date} precool start`).toBeLessThanOrEqual(5 * MIN);
+      expect(Math.abs(firstOn.state.setpointC - plan.commands[0]!.state.setpointC), `${n.date} precool setpoint`).toBeLessThanOrEqual(1);
+      //  - no planned command around lights-out (precool already holds the lights-out target, same fan),
+      const settle = n.ac.filter((c) => c.ts >= n.lightsOut && c.ts < from);
+      expect(settle.filter((c) => c.reason.startsWith('curve:')), `${n.date} lights-out`).toEqual([]);
+      //  - the evening (precool → settle) adds only resends/corrections of the precool, never another planned step,
+      const evening = n.ac.filter((c) => c.ts < from && c !== firstOn);
+      for (const c of evening) expect(c.reason, `${n.date} evening`).toMatch(/^(resend|correction)/);
+      //  - and OFF at wake + 30 min, as planned.
+      expect(n.ac.at(-1)!.state.power, n.date).toBe(false);
+      const off = n.ac.find((c) => !c.state.power)!; // the scheduled OFF (a resend of it may follow)
+      expect(Math.abs(off.ts - plan.commands.at(-1)!.ts), `${n.date} OFF`).toBeLessThanOrEqual(5 * MIN);
       for (const c of n.ac) if (c.state.power) {
         expect(c.state.setpointC).toBeGreaterThanOrEqual(DEFAULT_CURVE.minC);
         expect(c.state.setpointC).toBeLessThanOrEqual(DEFAULT_CURVE.maxC);
@@ -195,17 +214,17 @@ describe('integration: simulator truth → detectors and metrics', () => {
     asleepCounts.sort((a, b) => a - b);
     report.acCommands = `min ${counts[0]}, median ${counts[counts.length >> 1]}, max ${counts[counts.length - 1]}`;
     report.acWhileAsleep = `min ${asleepCounts[0]}, median ${asleepCounts[asleepCounts.length >> 1]}, max ${asleepCounts[asleepCounts.length - 1]} (beeps)`;
-    // ~2–4 beeps a night: median ≤ 3, never more than 4.
-    expect(asleepCounts[asleepCounts.length >> 1]).toBeLessThanOrEqual(3);
-    expect(asleepCounts[asleepCounts.length - 1]).toBeLessThanOrEqual(4);
+    // One beep a night: median 1, never more than 2.
+    expect(asleepCounts[asleepCounts.length >> 1]).toBe(1);
+    expect(asleepCounts[asleepCounts.length - 1]).toBeLessThanOrEqual(2);
   });
 
-  it('closed-loop controller (quiet off) still logs 4–16 commands per night, no duplicates, respecting minInterval', () => {
+  it('closed-loop controller (quiet off) still logs 3–16 commands per night, no duplicates, respecting minInterval', () => {
     const loud = simulateNights({ nights: 20, seed: 2024, endDate: '2026-10-28', remote: withQuiet(DEFAULT_REMOTE, false) });
     const counts: number[] = [];
     for (const n of loud) {
       counts.push(n.ac.length);
-      expect(n.ac.length, n.date).toBeGreaterThanOrEqual(4);
+      expect(n.ac.length, n.date).toBeGreaterThanOrEqual(3);
       expect(n.ac.length, n.date).toBeLessThanOrEqual(Math.min(16, DEFAULT_REMOTE.maxCommandsPerNight));
       expectWellSpaced(n);
     }

@@ -4,11 +4,12 @@
  * static copy (tags, setup steps, devices), the stores kept on this device, and the selectors that turn the dataset
  * into plan clock times, "last night on this plan", nights with complete data and CO₂ drift alerts.
  */
-import { useEffect, useMemo, useState } from 'react';
-import { DEFAULT_CURVE, DEFAULT_REMOTE, planAcSchedule, withQuiet, type CurvePhaseName, type TagKey, type TemperatureCurve } from '@sleep-lab/core';
+import { useEffect, useState } from 'react';
+import { DEFAULT_CURVE, DEFAULT_PEOPLE, DEFAULT_REMOTE, planAcSchedule, withQuiet, type CurvePhaseName, type TagKey, type TemperatureCurve } from '@sleep-lab/core';
 import { useData } from '@/lib/data/context.tsx';
+import { useTonight, type Tonight } from '@/lib/tonight.ts';
 import type { Dataset } from '@/lib/data/types.ts';
-import { addDays, ictDate, ictHour, ictMinuteOfDay, MIN } from '@/lib/format.ts';
+import { addDays, ictDate, ictHour, MIN } from '@/lib/format.ts';
 import { usePref } from '@/lib/prefs.ts';
 
 // ───────────────────────────── static copy ─────────────────────────────
@@ -64,7 +65,7 @@ export const PHASE_ABOUT: Record<CurvePhaseName, string> = {
   precool: 'Cools the room before you get into bed.',
   onset: 'Comfortable while you fall asleep. Always starts at lights out.',
   deep: 'Coolest stretch, timed for the first sleep cycles.',
-  middle: 'The middle of the night, between deep sleep and the REM-rich hours.',
+  middle: 'The middle of the night. In the default plan this is the one warming step, the only command while you sleep.',
   late: 'A little warmer for the REM-rich last hours.',
   wake: 'A warm room to wake up into.',
 };
@@ -90,37 +91,24 @@ export function relWords(m: number): string {
   return `${d} ${m < 0 ? 'before' : 'after'} lights out`;
 }
 
-const median = (xs: number[]) => {
-  if (!xs.length) return NaN;
-  const s = [...xs].sort((a, b) => a - b);
-  const i = Math.floor(s.length / 2);
-  return s.length % 2 ? s[i]! : (s[i - 1]! + s[i]!) / 2;
-};
-/** Minute of day for an evening/morning instant, continuous across midnight (18:00 → 1080 … 06:00 → 1800). */
-const eveningMin = (ts: number) => {
-  const m = ictMinuteOfDay(ts);
-  return m < 12 * 60 ? m + 1440 : m;
-};
 
 // ───────────────────────────── selectors ─────────────────────────────
 
 export interface PlanClock {
-  /** Typical lights out, minute of day (median of the last 14 nights; 23:00 before data). */
+  /** Tonight's lights out, minute of day: 22:00 every day unless tonight's night says otherwise. */
   lightsOut: number;
-  /** Typical wake, minute of day. */
+  /** Tonight's wake, minute of day: 06:30 until you set it (Tonight's plan). */
   wake: number;
   ready: boolean;
+  tonight: Tonight;
 }
 
+/** Tonight's schedule (lib/tonight.ts): the backend's night when signed in, else this device's settings. */
 export function usePlanClock(): PlanClock {
-  const { latest } = useData();
-  return useMemo(() => {
-    const nights = (latest?.nights ?? []).slice(-14);
-    if (!nights.length) return { lightsOut: 23 * 60, wake: 7 * 60, ready: false };
-    const lo = Math.round(median(nights.map((n) => eveningMin(n.lightsOut))));
-    const wk = Math.round(median(nights.map((n) => eveningMin(n.wake))));
-    return { lightsOut: lo % 1440, wake: wk % 1440, ready: true };
-  }, [latest]);
+  const { dataset, latest } = useData();
+  const people = (dataset ?? latest)?.people ?? DEFAULT_PEOPLE;
+  const tonight = useTonight(people);
+  return { lightsOut: tonight.lightsOutMin, wake: tonight.wakeMin, ready: tonight.date !== null, tonight };
 }
 
 export interface PlanTimes {
@@ -132,10 +120,14 @@ export interface PlanTimes {
   off: number;
   coolest: number;
 }
-/** Tonight's plan on the clock, from one lights-out anchor (the typical one). Today and System both read this. */
-export function planTimes(curve: TemperatureCurve, lightsOut: number): PlanTimes {
+/**
+ * Tonight's plan on the clock, from the lights-out anchor. `wakeMin` (minute of day) is tonight's wake; without it the
+ * curve's wake phase start stands in. Today and System both read this.
+ */
+export function planTimes(curve: TemperatureCurve, lightsOut: number, wakeMin?: number): PlanTimes {
   const ph = curve.phases;
-  const wake = lightsOut + (ph.find((p) => p.name === 'wake') ?? ph.at(-1)!).startMin;
+  const wake =
+    wakeMin !== undefined ? (wakeMin < lightsOut ? wakeMin + 1440 : wakeMin) : lightsOut + (ph.find((p) => p.name === 'wake') ?? ph.at(-1)!).startMin;
   return {
     starts: lightsOut + ph[0]!.startMin,
     wake,
@@ -172,8 +164,8 @@ const PLAN_DAY = Date.UTC(2026, 0, 1);
  * (the bed reads about 1° above the aircon's sensor). The backend sends the same number of steps while asleep; a set
  * point may differ by 1° once it has measured the room's offset.
  */
-export function aircon(curve: TemperatureCurve, lightsOut: number, quiet = true, biasC?: number): AirconPlan {
-  const t = planTimes(curve, lightsOut);
+export function aircon(curve: TemperatureCurve, lightsOut: number, quiet = true, biasC?: number, wakeMin?: number): AirconPlan {
+  const t = planTimes(curve, lightsOut, wakeMin);
   const lo = PLAN_DAY + lightsOut * MIN;
   const wake = lo + (t.wake - lightsOut) * MIN;
   const plan = planAcSchedule({ curve, lightsOut: lo, wake, remote: withQuiet(DEFAULT_REMOTE, quiet), ...(biasC !== undefined ? { biasC } : {}) });

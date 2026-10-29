@@ -64,6 +64,11 @@ export interface CurvePhase {
   targetC: number;
   /** If true, linearly ramp from this phase's target to the next phase's target. */
   ramp?: boolean;
+  /**
+   * Fan speed for this phase (setAll remotes). Omitted = 'high' for precool, 'low' after. A curve that wants no
+   * command at lights-out gives every phase the same fan, so the precool → onset boundary is not a fan-only change.
+   */
+  fan?: FanSpeed;
 }
 
 export interface TemperatureCurve {

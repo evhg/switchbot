@@ -123,6 +123,11 @@ export interface NightRow {
   tags: string[];
   ac_enabled: boolean;
   is_sim?: boolean;
+  /** 0009: "Home tonight" / "Away tonight" from the app. */
+  presence_override?: 'home' | 'away' | null;
+  /** 0009: the ac-curve presence gate's last decision (see _shared/presence.ts). */
+  precool_status?: string | null;
+  precool_reason?: string | null;
 }
 
 /** 1-minute means (the stored resolution of health_hr). */

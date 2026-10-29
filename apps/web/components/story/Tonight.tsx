@@ -19,7 +19,7 @@ import s from './story.module.css';
 export function tonightCopy(plan: TemperatureCurve, night: Night, room: RoomNightMetrics): { head: string; tipBold: string; tip: string; short: string; onCurve: number } {
   const nightMin = Math.max(1, (night.wake - night.lightsOut) / MIN);
   const onCurve = Math.round((room.minutesTempInTarget / nightMin) * 100);
-  const same = plan.id === night.curveId || (plan.id === 'default-v1' && night.curveId.startsWith('default'));
+  const same = plan.id === night.curveId;
   const stale = room.co2Mean >= 1000 || room.minutesCo2Over1000 >= 90;
   const humid = room.minutesRhOver60 >= 60;
   const head = `${same ? 'Same curve.' : 'New curve.'} ${stale ? 'More air.' : humid ? 'Drier air.' : onCurve < 70 ? 'Earlier start.' : 'Same again.'}`;
@@ -63,7 +63,7 @@ export function Tonight({ plan, night, room, onLatest }: { plan: TemperatureCurv
     });
   // Tonight's times come from the same selector and lights-out anchor as System › Tonight's plan.
   const pc = usePlanClock();
-  const times = planTimes(plan, pc.lightsOut);
+  const times = planTimes(plan, pc.lightsOut, pc.wake);
   return (
     <>
       <Scene id="tonight" title="Tonight">

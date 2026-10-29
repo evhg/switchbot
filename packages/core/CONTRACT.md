@@ -5,7 +5,19 @@ Pure TypeScript with no runtime dependencies. It runs unchanged in Node 22, Deno
 **Rules**
 - Imports must use explicit `.ts` extensions. Deno needs them.
 - Use only Web-standard APIs: `fetch`, `crypto.subtle`, `crypto.randomUUID`, `TextEncoder`. No Node built-ins.
-- Data types live in `src/types.ts`. Curve helpers (`DEFAULT_CURVE`, `phaseAt`, `targetAt`) live in `src/curve.ts`. Both are fixed: don't change them without updating every consumer.
+- Data types live in `src/types.ts`. Curve helpers (`DEFAULT_CURVE`, `CURVE_V1`, `phaseAt`, `targetAt`) live in `src/curve.ts`. Both are fixed: don't change them without updating every consumer.
+
+**Default curve: "one beep per night" (`one-beep-v1`, since 2026-10-29)**
+```ts
+export const DEFAULT_CURVE: TemperatureCurve   // id 'one-beep-v1', every phase fan 'auto':
+//   precool −30 min 19 °C · onset 0 19 · deep +30 19 · middle +270 (4 h 30) 21 = THE warming step · late +360 21 · wake +510 21
+//   Quiet mode plan (bias −1): ON 18 at lights-out − 30 · nothing at lights-out · set 20 at +4 h 30 (the ONE command while
+//   asleep) · OFF at wake + 30 min. Reasoning in curve.ts (RESEARCH.md §6).
+export const CURVE_V1: TemperatureCurve        // the previous default ('default-v1': precool −90, ramp, 3 beeps while asleep)
+// CurvePhase.fan?: FanSpeed (optional): the phase's fan for setAll remotes; omitted = 'high' for precool, 'low' after.
+// fanFor(remote, phaseName, curve?) applies it (a ladder remote is always 'auto').
+```
+The backend inserts `one-beep-v1` as the default `curves` row (migration 0009); nights stored with `default-v1` keep it.
 - Every module is re-exported from `src/index.ts`.
 - Tests go in `packages/core/test/*.test.ts` and run with vitest.
 
@@ -98,7 +110,7 @@ export function decideAcCommand(input: ControllerInput): AcCommand | null
 //    target quiet mode holds (the staircase, not the ramp), the room is not converging, the last command is ≥ 45 min
 //    old and no planned step in the same direction is due within 30 min. setpoint ± round(deviation), max 2.
 //  - resend: only of a planned "curve: …" command that is not a fan-only change.
-//  → at most asleepCount + maxExtraPerNight commands (beeps) while asleep: 3 + 1 for the default curve.
+//  → at most asleepCount + maxExtraPerNight commands (beeps) while asleep: 1 + 1 for the default curve (3 + 1 for CURVE_V1).
 //  - always: minInterval, the nightly cap (last slot kept for OFF), setpoint within ceil(minC)..floor(maxC) and 16..30.
 //  Reasons: "curve: <phase> start (quiet) …", "curve: <phase> ramp (one step) (quiet) …", "emergency: …", "resend: …".
 
@@ -112,8 +124,11 @@ export interface AcPlan { quiet: boolean; commands: PlannedAcCommand[]; asleepCo
 export function planAcSchedule(input: { curve; lightsOut: Ms; wake: Ms; remote: RemoteProfile; biasC?: number }): AcPlan
 // Pure: the schedule the controller plans (constant bias: biasC rounded, default −1; no misses or emergencies; each
 // command at least minInterval after the previous one; same step rules as above). The controller's planned steps while
-// asleep match it in number; their setpoints may differ by 1 °C once the bias is measured. Default curve, quiet ON:
-// precool 20 · onset 19 · deep 18 · middle ramp step 20 (at +280 min) · late 21 · (wake skipped, still 21) · OFF → 3 while asleep.
+// asleep match it in number; their setpoints may differ by 1 °C once the bias is measured (more after an emergency).
+// Default (one-beep) curve, quiet ON: precool 18 at −30 · (onset, deep skipped: same setpoint and fan) · middle 20 at
+// +270 · (late, wake skipped) · OFF at wake + 30 → 1 while asleep (3 + 1 extra for CURVE_V1: precool 20 · onset 19 ·
+// deep 18 · middle ramp step 20 at +280 · late 21 · OFF). test/integration.test.ts checks plan vs. controller per command
+// on simulated nights.
 ```
 
 ## metrics/: analysis (owner: metrics agent)

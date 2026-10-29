@@ -43,6 +43,7 @@ import {
   useQuietMode,
   useTonightTags,
 } from './model.ts';
+import { PresencePage, TonightBlock } from './presence.tsx';
 import s from './system.module.css';
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ');
@@ -67,9 +68,9 @@ export function PlanPage({ back = true }: { back?: boolean }) {
   const [curve, setCurve, resetCurve] = usePlannedCurve();
   const pc = usePlanClock();
   const ph = curve.phases;
-  const times = planTimes(curve, pc.lightsOut);
+  const times = planTimes(curve, pc.lightsOut, pc.wake);
   const [quiet, setQuiet] = useQuietMode();
-  const plan = aircon(curve, pc.lightsOut, quiet);
+  const plan = aircon(curve, pc.lightsOut, quiet, undefined, pc.wake);
   const last = useMemo(() => lastNightOnPlan(dataset ?? latest), [dataset, latest]);
   const actual = useMemo(() => {
     const n = (dataset ?? latest)?.nights.at(-1);
@@ -93,12 +94,13 @@ export function PlanPage({ back = true }: { back?: boolean }) {
       title="Tonight’s plan"
       lede={
         <>
-          The temperature the aircon aims for at bed height, phase by phase from lights out (usually {pcReady ? clock(pc.lightsOut) : <Skel w={44} />}).
+          The temperature the aircon aims for at bed height, phase by phase from lights out ({pcReady ? clock(pc.lightsOut) : <Skel w={44} />} every day).
         </>
       }
     >
       <div className={s.planGrid}>
         <div className={s.planMain}>
+          <TonightBlock t={pc.tonight} />
           <div className={s.summary}>
             <Readouts n={3}>
               <Readout label="Starts" value={<span className="num">{clock(times.starts)}</span>} />
@@ -767,6 +769,7 @@ export function DiagnosticsPage() {
 export const SYSTEM_SCREENS: Record<SystemSlug, () => ReactNode> = {
   plan: () => <PlanPage />,
   tags: () => <TagsPage />,
+  presence: () => <PresencePage />,
   general: () => <GeneralPage />,
   morning: () => <MorningPage />,
   data: () => <DataPage />,
