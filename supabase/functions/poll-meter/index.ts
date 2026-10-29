@@ -2,7 +2,8 @@
 import { SwitchBotError } from '../../../packages/core/src/switchbot/client.ts';
 import { parseMeterStatus } from '../../../packages/core/src/switchbot/parse.ts';
 import { requireCron } from '../_shared/auth.ts';
-import { env, envNumber } from '../_shared/env.ts';
+import { discoverDevices, knownDeviceId } from '../_shared/devices.ts';
+import { envNumber } from '../_shared/env.ts';
 import { json, serve } from '../_shared/http.ts';
 import { readingToRow } from '../_shared/rows.ts';
 import { serviceClient } from '../_shared/supabase.ts';
@@ -12,13 +13,13 @@ import { floorMinute, iso } from '../_shared/time.ts';
 serve(async (req) => {
   const db = serviceClient();
   await requireCron(req, db);
-  const deviceId = env('METER_DEVICE_ID');
+  let deviceId = await knownDeviceId(db, 'meter');
   const now = Date.now();
 
   // Optional quota saver: skip when the webhook already delivered this minute (default off, so week 1
   // can compare webhook vs poll).
   const freshS = envNumber('POLL_SKIP_IF_FRESH_S', 0);
-  if (freshS > 0) {
+  if (deviceId && freshS > 0) {
     const { data } = await db.from('readings').select('ts').eq('device_id', deviceId).gte('ts', iso(now - freshS * 1000)).limit(1);
     if (data?.length) return json({ skipped: 'fresh' });
   }
@@ -32,6 +33,15 @@ serve(async (req) => {
   }
 
   try {
+    if (!deviceId) {
+      // First run after the token was entered: find the meter (and the aircon remote) once.
+      const found = await discoverDevices(db, sb);
+      if (!found.meter) {
+        await sb.finish('error:no-meter', JSON.stringify(found.devices).slice(0, 300));
+        return json({ ok: false, error: 'no Meter Pro CO2 in this SwitchBot account', discovered: found }, 404);
+      }
+      deviceId = found.meter;
+    }
     const body = await sb.client.getStatus(deviceId);
     const reading = parseMeterStatus(body, now);
     if (!reading) {
