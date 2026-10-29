@@ -5,21 +5,14 @@ import { Shell } from '@/components/Shell.tsx';
 import { THEME_BOOT } from '@/lib/theme-boot.ts';
 import './globals.css';
 
-// Display + UI face (variable 100–900; we use 300–800) and the mono label face (docs/DESIGN.md §2).
-// Self-hosted latin subsets (OFL) because next/font/google fails to fetch inside Vercel builds.
-const display = localFont({
+// v2 "Instrument" (docs/DESIGN.md §4.1): Inter Tight only, variable 100–900 (we use 250–600), tabular numerals.
+// Self-hosted latin subset (OFL) via next/font/local; next/font/google breaks the Vercel build.
+const sans = localFont({
   src: './fonts/InterTight-latin-var.woff2',
   weight: '100 900',
   variable: '--font-display',
   display: 'swap',
   fallback: ['system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
-});
-const mono = localFont({
-  src: './fonts/GeistMono-latin-var.woff2',
-  weight: '100 900',
-  variable: '--font-geist-mono',
-  display: 'swap',
-  fallback: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
 });
 
 export const metadata: Metadata = {
@@ -40,13 +33,13 @@ export const viewport: Viewport = {
   initialScale: 1,
   viewportFit: 'cover',
   // Overwritten before first paint by THEME_BOOT and on theme change by ThemeProvider (THEME_COLOR).
-  themeColor: '#000000',
+  themeColor: '#0e0e0f',
   colorScheme: 'dark light',
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={`${display.variable} ${mono.variable}`} suppressHydrationWarning>
+    <html lang="en" className={sans.variable} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
       </head>

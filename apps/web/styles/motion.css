@@ -1,4 +1,4 @@
-/* Motion primitives (docs/DESIGN.md §9). Only transform and opacity animate. Night mode = 'calm' level,
+/* Motion primitives (docs/DESIGN.md §8, v2). Rise = 18 px, reveal = 700 ms, no overshoot, no glow / sky / stars. Only transform and opacity animate. Night mode = 'calm' level,
    reduced motion = final states. JS counterpart: components/motion.tsx + lib/motion/scroll-engine.ts. */
 
 /* ---------- Reveal (one-shot, IO adds .in) ---------- */
@@ -17,13 +17,12 @@
 .draw { stroke-dasharray: 1 1; stroke-dashoffset: 1; }
 .draw.in { stroke-dashoffset: 0; transition: stroke-dashoffset var(--d-draw) var(--ease-out); transition-delay: var(--rv-delay, 0ms); }
 .draw.scrub { transition: none; }
-.fade-late { opacity: 0; transition: opacity var(--d-base) var(--ease-out); transition-delay: calc(var(--d-draw) - 200ms); }
+.fade-late { opacity: 0; transition: opacity var(--d-base) var(--ease-out); transition-delay: calc(var(--rv-delay, 0ms) + 240ms); }
 .in > .fade-late, .in .fade-late, .fade-late.in, .draw.in ~ .fade-late { opacity: 1; }
 
 /* ---------- Score ring draw ---------- */
 .ring-arc { transition: stroke-dashoffset var(--d-ring) var(--ease-out); }
-.ring-glow { opacity: .5; }
-:root[data-theme='night'] .ring-glow { display: none; }
+.ring-glow { display: none; }
 
 /* ---------- Chapters ---------- */
 .chapter { position: relative; isolation: isolate; }
@@ -34,36 +33,23 @@
 .chapter:not([data-pinned]) > .pin { position: relative; }
 .chapter-inner {
   position: relative; z-index: 1; height: 100%;
-  max-width: var(--content-max); margin: 0 auto;
-  padding: calc(env(safe-area-inset-top) + 96px) max(var(--gutter), env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 112px) max(var(--gutter), env(safe-area-inset-left));
+  /* v1 story column. Today's v2 scenes set --chapter-max: none and lay out with .grid12 / .split (§8.3). */
+  max-width: var(--chapter-max, 640px); margin: 0 auto;
+  padding: calc(env(safe-area-inset-top) + var(--topbar-h) + var(--sp-6)) max(var(--pad-x), env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + var(--tabbar-space) + var(--sp-8)) max(var(--pad-x), env(safe-area-inset-left));
+}
+@media (min-width: 1024px) {
+  .chapter-inner { padding: var(--sp-16) var(--pad-x); }
 }
 .chapter[data-pinned] .chapter-inner { padding-bottom: calc(env(safe-area-inset-bottom) + var(--tabbar-space) + 12px); display: flex; flex-direction: column; }
+@media (min-width: 1024px) { .chapter[data-pinned] .chapter-inner { padding-bottom: var(--sp-10); } }
 .chapter.lazy { content-visibility: auto; contain-intrinsic-size: auto 900px; }
-.chapter-glow {
-  position: absolute; z-index: 0; inset: 0; pointer-events: none;
-  background: radial-gradient(60% 40% at 30% 20%, var(--ch-accent), transparent 70%);
-  opacity: var(--glow-o);
-}
-.chapter-num {
-  position: absolute; z-index: 0; top: calc(env(safe-area-inset-top) + 72px); right: -6px; pointer-events: none;
-  font-family: var(--font-num); font-size: 180px; line-height: .8; font-weight: 800; letter-spacing: -0.06em;
-  color: transparent; -webkit-text-stroke: 1px var(--hairline-2);
-}
-:root[data-theme='night'] .chapter-glow, :root[data-theme='night'] .chapter-num { display: none; }
+/* RETIRED (v2 §8.3: flat --bg, no per-chapter glow or outlined numerals). Elements may still be rendered. */
+.chapter-glow, .chapter-num { display: none; }
 /* Things driven per-frame from JS get a compositor layer only while their chapter is on screen. */
 .chapter.active .will { will-change: transform, opacity; }
 
-/* ---------- Sky (3 crossfading layers + stars). Hidden in night mode ---------- */
-.sky { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
-.sky-layer { position: absolute; inset: 0; opacity: 0; transition: opacity 900ms var(--ease-io); }
-.sky-layer.dusk { background: var(--sky-dusk); }
-.sky-layer.mid { background: var(--sky-mid); }
-.sky-layer.dawn { background: var(--sky-dawn); }
-.sky-dim { position: absolute; inset: 0; background: var(--bg); opacity: 0; }
-.sky-stars { position: absolute; left: 0; right: 0; top: 0; height: 140%; color: var(--star); will-change: transform; }
-.sky-stars svg { width: 100%; height: 100%; display: block; }
-.sky-noise { position: absolute; inset: 0; opacity: .05; mix-blend-mode: overlay; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .5 0 0 0 0 .5 0 0 0 0 .5 0 0 0 1 0'/></filter><rect width='128' height='128' filter='url(%23n)'/></svg>"); }
-:root[data-theme='night'] .sky { display: none; }
+/* ---------- Sky: RETIRED in v2 (flat --bg). <Sky/> may still render; it paints nothing. ---------- */
+.sky { display: none; }
 
 /* ---------- Scrub wipe (compositor-only reveal) + cursor ---------- */
 .wipe { position: relative; }
@@ -74,7 +60,7 @@
 /* Layers only while the chapter is near the viewport (keeps iOS layer memory low). */
 .chapter.active .wipe-outer, .chapter.active .wipe-inner, .chapter.active .cursor { will-change: transform; }
 .cursor::before { content: ''; position: absolute; top: 0; bottom: 0; left: -.5px; width: 1px; background: var(--hairline-2); }
-.cursor.accent::before { background: var(--ch-accent); opacity: .8; }
+.cursor.accent::before { background: var(--signal); }
 .hit-mark { opacity: 0; transform: scale(.4); transform-box: fill-box; transform-origin: center; transition: opacity 300ms var(--ease-pop), transform 300ms var(--ease-pop); }
 .hit-mark.hit { opacity: 1; transform: none; }
 
@@ -93,14 +79,14 @@
 @keyframes cue { 0% { transform: scaleY(0); } 50% { transform: scaleY(1); } 100% { transform: scaleY(1); opacity: 0; } }
 
 /* ---------- Page transitions ---------- */
-.page { animation: page-in 380ms var(--ease-out) backwards; } /* opacity only: a transform here would trap position:fixed children */
+.page { animation: page-in var(--d-base) var(--ease) backwards; } /* opacity only: a transform here would trap position:fixed children */
 :root[data-vt] .page { animation: none; }
 @keyframes page-in { from { opacity: 0; } }
-::view-transition-old(root) { animation: vt-out 220ms var(--ease-io) both; }
-::view-transition-new(root) { animation: vt-in 380ms var(--ease-out) both; }
+::view-transition-old(root) { animation: vt-out 200ms var(--ease-io) both; }
+::view-transition-new(root) { animation: vt-in var(--d-base) var(--ease) both; }
 ::view-transition-group(tabbar) { animation: none; }
-@keyframes vt-out { to { opacity: 0; transform: scale(.985); } }
-@keyframes vt-in { from { opacity: 0; transform: translate3d(0, 12px, 0); } }
+@keyframes vt-out { to { opacity: 0; } }
+@keyframes vt-in { from { opacity: 0; } }
 /* Theme swap: circular reveal from the tap point (set --vt-x/--vt-y). */
 :root[data-vt='theme']::view-transition-old(root) { animation: none; }
 :root[data-vt='theme']::view-transition-new(root) { animation: vt-circle 500ms var(--ease-io) both; }
@@ -111,7 +97,7 @@
 :root[data-theme='night'] .rv-mask .sh-line > span { transform: none; }
 :root[data-theme='night'] .draw.in { transition-duration: 500ms; }
 :root[data-theme='night'] .ring-arc { transition-duration: 600ms; }
-:root[data-theme='night'] .cue-line, :root[data-theme='night'] .btn .shine { animation: none; display: none; }
+:root[data-theme='night'] .cue-line { animation: none; display: none; }
 :root[data-theme='night'] .page { animation-duration: 250ms; animation-name: page-fade; }
 @keyframes page-fade { from { opacity: 0; } }
 :root[data-theme='night'] .parallax { animation: none; }
@@ -126,20 +112,11 @@
   .chapter[data-pinned] > .pin { position: relative; height: auto; overflow: visible; }
   .chapter[data-pinned] .chapter-inner { min-height: 100svh; }
   .cue-line, .btn .shine, .sk::after, .sk-status::before, .parallax, .page { animation: none !important; }
-  .sky-layer { transition: none; }
-  .sky-stars { transform: none !important; }
   ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
   * { scroll-behavior: auto !important; }
 }
 .rv-group.in > .rv { opacity: 1; transform: none; }
 .rv-group > .rv { transition-delay: calc(var(--rv-delay, 0ms) + min(var(--i, 0), 8) * var(--stagger)); }
-
-/* Full-bleed story chapter inside the padded .shell (cancels the shell's side + top padding). */
-.bleed {
-  margin-left: calc(-1 * max(var(--gutter), env(safe-area-inset-left)));
-  margin-right: calc(-1 * max(var(--gutter), env(safe-area-inset-right)));
-}
-.bleed.first { margin-top: calc(-1 * (env(safe-area-inset-top) + 12px)); }
 
 /* ---------- Safety net: reveal states are armed only while the motion system runs ----------
    THEME_BOOT sets <html data-motion> when IntersectionObserver exists and removes it if the app hasn't hydrated

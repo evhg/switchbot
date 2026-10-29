@@ -10,9 +10,9 @@ export interface SparkPoint {
 }
 
 /**
- * Vitals trend (docs/DESIGN.md §8.3): the last N nights as a recessive --spark-line over the personal baseline band
- * (mean ± 1 SD, --spark-band), ending in a dot in the person's colour. The line draws in on reveal (1.3 s) and the
- * dot fades in after it. Gaps (missing nights) break the line. Hover / touch shows that night's value in a glass chip.
+ * Vitals trend (docs/DESIGN.md §7.1): the last N nights as a 1.5 px --spark-line over the person's usual range
+ * (mean ± 1 SD, --spark-band), ending in a readout dot (--bg fill, 2 px ring in the person's colour). The line draws in
+ * once on reveal; gaps (missing nights) break it. Hover / touch shows that night's value in a plain tooltip.
  */
 export function VitalSpark({
   points,
@@ -85,18 +85,18 @@ export function VitalSpark({
           {showBand && <rect x={0} y={y(band.hi)} width={w} height={Math.max(1, y(band.lo) - y(band.hi))} rx={2.5} fill="var(--spark-band)" />}
           {runs.map((r, i) =>
             r.length > 1 ? (
-              <DrawPath key={i} d={linePath(r)} fill="none" stroke="var(--spark-line)" strokeWidth={1.4} strokeLinejoin="round" strokeLinecap="round" delay={150} />
+              <DrawPath key={i} d={linePath(r)} fill="none" stroke="var(--spark-line)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" delay={150} />
             ) : (
-              <circle key={i} cx={r[0]!.x} cy={r[0]!.y} r={1.3} fill="var(--spark-line)" />
+              <circle key={i} cx={r[0]!.x} cy={r[0]!.y} r={1.5} fill="var(--spark-line)" />
             ),
           )}
           {h && <line x1={hx} x2={hx} y1={0} y2={height} stroke="var(--hairline-2)" />}
-          {Number.isFinite(last.v) && <circle className="fade-late" cx={x(lastIdx)} cy={y(last.v)} r={3} fill={color} stroke="var(--bg)" strokeWidth={1.5} />}
+          {Number.isFinite(last.v) && <circle className="fade-late" cx={x(lastIdx)} cy={y(last.v)} r={3.5} fill="var(--bg)" stroke={color} strokeWidth={2} />}
           {h && hi !== lastIdx && <circle cx={hx} cy={y(h.v)} r={2.5} fill="var(--text-2)" stroke="var(--bg)" strokeWidth={1.5} />}
         </svg>
       )}
       {h && (
-        <div className="tip" style={{ position: 'absolute', bottom: height + 6, right: 0, padding: '4px 8px', minWidth: 0, whiteSpace: 'nowrap', zIndex: 5 }}>
+        <div className="tip" style={{ position: 'absolute', bottom: height + 6, right: 0, minWidth: 0, whiteSpace: 'nowrap', zIndex: 5 }}>
           {format(h.v, h.date)}
         </div>
       )}

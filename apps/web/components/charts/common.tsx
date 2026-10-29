@@ -1,57 +1,67 @@
 'use client';
 /**
- * Shared chart theme (docs/DESIGN.md §8). Every Recharts chart spreads these; custom SVG charts use the helpers.
+ * Shared chart theme, v2 (docs/DESIGN.md §7). Every Recharts chart spreads these; custom SVG charts use the helpers.
+ * Rules: the title is the finding; label series on the chart (no legends); ≤ 2 hues + a dashed --muted series;
+ * ticks are .cap (13/14/15 px, CSS sets the size), tabular, --muted.
  *
- *   <XAxis {...AXIS} … />  <YAxis width={Y_WIDTH} {...AXIS} … />  <CartesianGrid {...GRID} />
- *   <Tooltip cursor={CURSOR} content={(p) => <Tip {...p} … />} />          glass chip, mono, value-first
- *   <Line {...useChartAnim()} … />                                          animates once (900 ms) on mount;
- *        off in night mode and under reduced motion. Mount the chart in <LazyMount> (components/motion.tsx)
- *        so it animates when scrolled into view, not on page load.
- *   <defs><AreaGradient id="g-co2" color="var(--co2)" /></defs>  <Area fill="url(#g-co2)" />
- *        vertical 35 % → 0 % wash (flat 12 % in night mode — no gradients there).
- *   REF_LINE  – props for dashed reference lines (target °C, 1,000 ppm); refLabel(text) for their right label.
- *   SERIES    – CSS var per data series (you, erik, temp, co2, rh, setpoint, …).
- *   mix(color, pct) – color-mix(in oklab, color pct%, transparent) for washes.
- *   scale(), linePath(), areaPath() – custom-SVG helpers.
+ *   <XAxis {...AXIS} … />  <YAxis width={Y_WIDTH} orientation="right" {...AXIS} … />  <CartesianGrid {...GRID} />
+ *   <Tooltip cursor={CURSOR} content={(p) => <Tip {...p} … />} />          --surface, r-m, value-first
+ *   <Line {...useChartAnim()} strokeWidth={STROKE.primary} … />           draws once on mount; off at night / reduced
+ *   <defs><AreaGradient id="g" color="var(--text)" /></defs>              v2: flat 6 % ink wash (no gradient)
+ *   PLAN_LINE   – dashed 4/4 --muted plan / setpoint (on Tonight & plan charts use --signal instead)
+ *   THRESHOLD   – dotted 2/3 --signal limit (1,000 ppm, 60 % RH); thresholdLabel(text) labels its right end;
+ *                 tint only the area beyond it with --signal-soft
+ *   REF_LINE    – v1 name, = PLAN_LINE. refLabel(text) = right-end label.
+ *   GHOST       – opacity for unrevealed data ('var(--ghost)')
+ *   SERIES      – CSS var per data series (you, erik, temp, co2, rh, setpoint, …)
+ *   mix(color, pct), scale(), linePath(), areaPath(), thinByPixels()
  */
 import { useId, type ReactNode } from 'react';
 import { useMotionPrefs } from '../motion.tsx';
 
-export const MONO = 'var(--font-mono)';
+/** @deprecated v1 mono label face; v2 has one family. */
+export const MONO = 'var(--font)';
 
-/** Recessive axes: no axis line, no tick lines, mono 9.5 px muted ticks. */
+/** Recessive axes: no axis line, no tick lines, --t-cap muted tabular ticks (size from CSS). */
 export const AXIS = {
-  tick: { fill: 'var(--muted)', fontSize: 9.5, fontFamily: 'var(--font-mono)' },
+  tick: { fill: 'var(--muted)', fontSize: 13, fontFamily: 'var(--font)' },
   axisLine: false,
   tickLine: false,
   stroke: 'var(--axis)',
-  tickMargin: 3,
+  tickMargin: 6,
 } as const;
-/** Horizontal gridlines only. */
+/** Horizontal gridlines only, at key values. */
 export const GRID = { stroke: 'var(--grid)', strokeDasharray: undefined, vertical: false } as const;
-export const MARGIN = { top: 8, right: 10, bottom: 0, left: 0 };
-export const Y_WIDTH = 34;
+export const MARGIN = { top: 8, right: 8, bottom: 0, left: 0 };
+export const Y_WIDTH = 44;
 /** Crosshair: 1 px hairline. */
 export const CURSOR = { stroke: 'var(--hairline-2)', strokeWidth: 1 };
-/** Dashed reference line (target °C, 1,000 ppm). */
-export const REF_LINE = { stroke: 'var(--text-2)', strokeOpacity: 0.6, strokeDasharray: '3 4', strokeWidth: 1 } as const;
-/** Right-end label for a reference line, knocked out of whatever data runs behind it. */
-export const refLabel = (value: string) => ({
-  value,
+/** Plan / setpoint: dashed 4/4 --muted. */
+export const PLAN_LINE = { stroke: 'var(--muted)', strokeDasharray: '4 4', strokeWidth: 1.5 } as const;
+/** Limit (1,000 ppm, 60 % RH): dotted 2/3 in the signal colour. */
+export const THRESHOLD = { stroke: 'var(--signal)', strokeDasharray: '2 3', strokeWidth: 1 } as const;
+/** v1 name for reference lines; now the plan style. */
+export const REF_LINE = PLAN_LINE;
+/** Opacity of not-yet-revealed data. */
+export const GHOST = 'var(--ghost)';
+const labelBase = {
   position: 'insideTopRight' as const,
-  fill: 'var(--muted)',
-  fontSize: 9.5,
-  fontFamily: 'var(--font-mono)',
-  stroke: 'var(--surface)',
-  strokeWidth: 3,
+  fontSize: 13,
+  fontFamily: 'var(--font)',
+  stroke: 'var(--bg)',
+  strokeWidth: 4,
   strokeLinejoin: 'round' as const,
   style: { paintOrder: 'stroke' as const },
-});
+};
+/** Right-end label for a plan / reference line, knocked out of whatever runs behind it. */
+export const refLabel = (value: string) => ({ ...labelBase, value, fill: 'var(--muted)' });
+/** Right-end label for a threshold line. */
+export const thresholdLabel = (value: string) => ({ ...labelBase, value, fill: 'var(--signal)' });
 /** Spread on a labelled ReferenceLine so it (and its label) draw above lines and dots. */
 export const REF_FRONT = { zIndex: 650 } as const;
 
-/** Line widths (§8.1). */
-export const STROKE = { primary: 2.2, secondary: 1.5, ref: 1 } as const;
+/** Line widths (§7.1): 2 px hero series, 1.5 px others, 1 px references. */
+export const STROKE = { primary: 2, secondary: 1.5, ref: 1 } as const;
 
 /** Series colours. Text is never coloured by series — use a Key dot next to the label. */
 export const SERIES = {
@@ -89,13 +99,12 @@ export function useChartAnim(duration = 900) {
   return { isAnimationActive: level === 'full', animationDuration: duration, animationEasing: 'ease-out' as const };
 }
 
-/** Vertical area gradient (35 % → 0 %), flat 12 % in night mode. Put inside <defs>. */
-export function AreaGradient({ id, color, from = 0.35, to = 0 }: { id: string; color: string; from?: number; to?: number }) {
-  const { night } = useMotionPrefs();
+/** Area wash for <Area fill="url(#id)">. v2: a flat 6 % wash (no gradients); `from`/`to` are ignored. Put in <defs>. */
+export function AreaGradient({ id, color }: { id: string; color: string; from?: number; to?: number }) {
   return (
     <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" style={{ stopColor: color, stopOpacity: night ? 0.12 : from }} />
-      <stop offset="100%" style={{ stopColor: color, stopOpacity: night ? 0.12 : to }} />
+      <stop offset="0%" style={{ stopColor: color, stopOpacity: 0.06 }} />
+      <stop offset="100%" style={{ stopColor: color, stopOpacity: 0.06 }} />
     </linearGradient>
   );
 }
@@ -115,7 +124,7 @@ export interface TipItem {
   payload?: unknown;
 }
 
-/** Recharts tooltip body: value first (strong), series name secondary, keyed by a short bar. */
+/** Recharts tooltip body (§7.1): time in .cap above, values in .sec with tabular numerals, keyed by a short bar. */
 export function Tip({
   active,
   payload,
@@ -150,7 +159,7 @@ export function Tip({
   );
 }
 
-/** Floating tooltip for custom SVG charts, clamped inside the chart box, lifted 24 px above the touch point. */
+/** Floating tooltip for custom SVG charts, clamped inside the chart box. */
 export function FloatTip({ x, y, width, children }: { x: number; y: number; width: number; children: ReactNode }) {
   const left = Math.min(Math.max(x, 70), Math.max(70, width - 70));
   return (

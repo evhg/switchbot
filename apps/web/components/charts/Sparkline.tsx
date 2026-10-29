@@ -4,7 +4,7 @@ import { DrawPath } from '../motion.tsx';
 import { linePath, scale } from './common.tsx';
 
 /**
- * Small trend line that draws in on reveal (1.3 s), with an end dot that fades in after it.
+ * Small trend line that draws in on reveal (1.4 s), with an end dot that fades in after it.
  * Hover / touch shows the value at the pointer when `format` is given.
  *
  *   <Sparkline values={[{ ts, v }]} color="var(--person-a)" height={26} band={{ lo, hi }} lineColor="var(--spark-line)" />
@@ -17,7 +17,7 @@ export function Sparkline({
   format,
   band,
   lineColor,
-  strokeWidth = 1.6,
+  strokeWidth = 1.5,
   dot = true,
 }: {
   values: { ts: number; v: number }[];
@@ -82,7 +82,7 @@ export function Sparkline({
             <rect x={0} width={w} y={y(band.hi)} height={Math.max(1, y(band.lo) - y(band.hi))} rx={2} fill="var(--spark-band)" />
           )}
           <DrawPath d={linePath(pts.map((p) => ({ x: x(p.ts), y: y(p.v) })))} fill="none" stroke={lineColor ?? color} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" />
-          {dot && <circle className="fade-late" cx={x(last.ts)} cy={y(last.v)} r={3} fill={color} stroke="var(--surface)" strokeWidth={1.5} />}
+          {dot && <circle className="fade-late" cx={x(last.ts)} cy={y(last.v)} r={3.5} fill="var(--bg)" stroke={color} strokeWidth={2} />}
           {h && (
             <>
               <line x1={x(h.ts)} x2={x(h.ts)} y1={0} y2={height} stroke="var(--hairline-2)" />
@@ -92,7 +92,7 @@ export function Sparkline({
         </svg>
       )}
       {h && format && (
-        <div className="tip" style={{ position: 'absolute', top: -34, left: Math.min(Math.max(0, x(h.ts) - 40), w - 90), padding: '4px 7px' }}>
+        <div className="tip" style={{ position: 'absolute', top: -44, left: Math.min(Math.max(0, x(h.ts) - 48), w - 112), padding: '6px 10px', minWidth: 0 }}>
           {format(h.v, h.ts)}
         </div>
       )}

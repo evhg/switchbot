@@ -1,50 +1,62 @@
 'use client';
-// Today: the story of last night, told chapter by chapter as you scroll (docs/DESIGN.md §10). The chapters live
-// in components/story/*; this file owns data, the drill-down sheets and the date (browsing another night re-tells
-// that night's story from the top).
+// Today: the story of last night, told scene by scene as you scroll (docs/DESIGN.md §8.3, §9.1).
+//   1 Last night · 2 Before bed · 3 The night (pinned, scrubbed) · 4 The air · 5 Your bodies · 6 What drove it
+//   · 7 Tonight · close.
+// This file owns the data wiring (components/story/model.ts), the phone top bar (current scene + progress line),
+// the desktop "On this page" rail and the drill-in sheets. Browsing another night re-tells that night from the top.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_CURVE, SLEEP_AIR_WEIGHTS, SLEEP_SCORE_WEIGHTS } from '@sleep-lab/core';
+import { DEFAULT_CURVE, SLEEP_AIR_WEIGHTS, SLEEP_SCORE_WEIGHTS, type PersonNightMetrics } from '@sleep-lab/core';
 import { personColor, personName, useData, useNightDetail, useSelectedNight, withNames } from '@/lib/data/context.tsx';
 import { usePlannedCurve } from '@/lib/curve-store.ts';
-import { dayLabel, fmt, tidyReport } from '@/lib/format.ts';
-import { useTheme } from '@/lib/theme.tsx';
-import { EVENT_LABEL, EventGlyph, NightStrip, STAGE_LABEL, STAGE_ORDER, stageColor } from '../charts/NightStrip.tsx';
+import { dayLabel, dur, fmt, hm, tidyReport } from '@/lib/format.ts';
+import { EVENT_LABEL, EventGlyph, NightStrip } from '../charts/NightStrip.tsx';
 import { Waterfall } from '../charts/Waterfall.tsx';
-import { Sky, StoryAccent } from '../motion.tsx';
+import { subscribeScroll, useActiveChapter } from '../motion.tsx';
+import { setTopbarProgress, useChrome } from '../nav.tsx';
 import { useStoryChrome } from '../Shell.tsx';
-import { Legend, Placeholder, Sheet } from '../ui.tsx';
+import { EventList, OnThisPage, Placeholder, Sheet } from '../ui.tsx';
+import { VitalsHistory } from '../Vitals.tsx';
 import { Bodies } from '../story/Bodies.tsx';
 import { Drivers, type DriverRow } from '../story/Drivers.tsx';
 import { LightsOut } from '../story/LightsOut.tsx';
-import { buildStory } from '../story/model.ts';
-import { StoryHeader } from '../story/StoryHeader.tsx';
+import { buildStory, co2CrossAt, co2PeakAt, nightSteps, whoLabel } from '../story/model.ts';
 import { TheAir } from '../story/TheAir.tsx';
 import { TheNight } from '../story/TheNight.tsx';
-import { Tonight } from '../story/Tonight.tsx';
+import { Tonight, tonightCopy } from '../story/Tonight.tsx';
 import { Verdict, VerdictSkeleton, type HeroPerson } from '../story/Verdict.tsx';
 import s from '../story/story.module.css';
 
-type Sheet = { kind: 'room' } | { kind: 'person'; id: string } | { kind: 'strip' } | { kind: 'waterfall' } | null;
+type SheetKind = { kind: 'room' } | { kind: 'person'; id: string } | { kind: 'strip' } | { kind: 'waterfall' } | { kind: 'vitals' } | null;
+
+const SCENES = [
+  { id: 'verdict', label: 'Last night' },
+  { id: 'before', label: 'Before bed' },
+  { id: 'night', label: 'The night' },
+  { id: 'air', label: 'The air' },
+  { id: 'bodies', label: 'Your bodies' },
+  { id: 'drivers', label: 'What drove it' },
+  { id: 'tonight', label: 'Tonight' },
+] as const;
 
 function SubScores({ items }: { items: { label: string; value: number; weight: number }[] }) {
   return (
-    <div className={s.subs}>
+    <ul className={s.subs}>
       {items.map((it) => (
-        <div key={it.label} className={s.sub}>
-          <span className="t2">
-            {it.label} <span className="muted mono">×{it.weight}</span>
+        <li key={it.label}>
+          <span>
+            {it.label} <span className="cap">weight {it.weight}</span>
           </span>
-          <span className={s.subBar}>
+          <span className={s.subBar} aria-hidden>
             <i style={{ transform: `scaleX(${Math.max(0.02, Math.min(1, it.value / 100))})` }} />
           </span>
           <b className="num">{fmt(it.value)}</b>
-        </div>
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 
-/** First sentence of the hero verdict, from the people's sleep scores. */
+/** First sentence of the verdict, from the people's sleep scores. */
 function peopleLead(people: HeroPerson[], deepVsBase: (id: string) => number): string {
   const here = people.filter((p) => !p.away && Number.isFinite(p.sleep));
   if (!here.length) return 'No sleep data last night.';
@@ -57,20 +69,43 @@ function peopleLead(people: HeroPerson[], deepVsBase: (id: string) => number): s
   return low.name.toLowerCase() === 'you' ? `${good[0]!.name} slept well, you less so.` : `${low.name} slept lighter.`;
 }
 
-/** "Sleep Air 75: humidity > 60% for 2 h held it back" → "Humidity > 60% for 2 h held it back." */
+/** "Sleep Air 75: humidity > 60% for 2 h held it back" → "Humidity above 60% for 2h 00m held the room back." */
 function roomClause(headline: string): string {
-  const t = headline.replace(/^Sleep Air \d+:\s*/, '').trim();
+  const t = tidyReport(headline.replace(/^Sleep Air \d+:\s*/, '').trim()).replace(/held it back/, 'held the room back');
   return t ? `${t[0]!.toUpperCase()}${t.slice(1)}${/[.!?]$/.test(t) ? '' : '.'}` : '';
 }
 
+/** Phone top bar: the scene being read, and the 2 px page progress line (one scroll subscriber, no renders). */
+function useStoryTopbar() {
+  const active = useActiveChapter();
+  useChrome({ title: SCENES.find((c) => c.id === active)?.label ?? 'Last night' });
+  useEffect(() => {
+    let max = 1;
+    const measure = () => {
+      max = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(document.body);
+    window.addEventListener('resize', measure);
+    const off = subscribeScroll((y) => setTopbarProgress(y / max));
+    return () => {
+      off();
+      ro.disconnect();
+      window.removeEventListener('resize', measure);
+      setTopbarProgress(0);
+    };
+  }, []);
+}
+
 export function TodayScreen() {
-  useStoryChrome();
+  useStoryChrome({ topbar: true });
+  useStoryTopbar();
   const { latest, progress, date, setDate } = useData();
   const sel = useSelectedNight();
   const { detail: rawDetail } = useNightDetail(date);
   const [plan] = usePlannedCurve();
-  const [sheet, setSheet] = useState<Sheet>(null);
-  const { resolved: theme } = useTheme();
+  const [sheet, setSheet] = useState<SheetKind>(null);
   const dataset = latest;
   // useNightDetail keeps the previous night's detail while the next loads: never mix nights.
   const detail = rawDetail && sel && rawDetail.date === sel.night.date ? rawDetail : null;
@@ -86,21 +121,40 @@ export function TodayScreen() {
     window.scrollTo({ top: 0, behavior: 'auto' });
   }, [date]);
 
-  const colorOf = (id: string) => personColor(dataset?.people ?? [], id);
   const model = useMemo(
     () => (sel && dataset ? buildStory(sel.night, dataset.people, (id) => personColor(dataset.people, id), detail, DEFAULT_CURVE) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sel?.night, dataset?.people, detail],
   );
+  const room = sel?.room;
+  const peakAt = useMemo(() => (sel && room ? co2PeakAt(sel.night, room.co2Max) : 0), [sel, room]);
+  const steps = useMemo(() => (model && room ? nightSteps(model, room.co2Max, peakAt, room.minutesCo2Over1000) : []), [model, room, peakAt]);
+  const crossAt = useMemo(() => (model ? co2CrossAt(model) : null), [model]);
 
-  if (!dataset || !sel || !model) return <VerdictSkeleton status={progress || 'Loading…'} />;
-  const { night, room } = sel;
+  if (!dataset || !sel || !model || !room) return <VerdictSkeleton status={progress || 'Loading…'} />;
+  const { night } = sel;
   const personM = (id: string) => detail?.people.find((p) => p.personId === id) ?? sel.person[id] ?? null;
 
+  // That person's typical night: the mean of the 30 nights before this one (as in the Your bodies table).
+  const typicalOf = (id: string, f: (m: PersonNightMetrics) => number): number | null => {
+    const xs = (dataset.person[id] ?? []).slice(Math.max(0, sel.index - 30), sel.index).flatMap((m) => (m && Number.isFinite(f(m)) ? [f(m)] : []));
+    return xs.length >= 7 ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+  };
   const heroPeople: HeroPerson[] = dataset.people.map((p) => {
     const away = !night.people.some((x) => x.personId === p.id);
     const m = away ? null : personM(p.id);
-    return { id: p.id, name: p.name, color: colorOf(p.id), sleep: m?.sleepScore ?? NaN, recovery: detail && m ? m.recoveryScore : null, away: away || !m };
+    return {
+      id: p.id,
+      name: p.name,
+      color: personColor(dataset.people, p.id),
+      sleep: m?.sleepScore ?? NaN,
+      recovery: detail && m ? m.recoveryScore : null,
+      asleep: m?.totalSleepMin,
+      away: away || !m,
+      hrv: m?.rmssdMean,
+      hrvTypical: typicalOf(p.id, (x) => x.rmssdMean),
+      low: m?.hrNadir,
+    };
   });
   const deepVsBase = (id: string) => {
     const m = detail?.people.find((p) => p.personId === id);
@@ -115,73 +169,92 @@ export function TodayScreen() {
   const bodyDrivers = allDrivers.filter((d) => isPerson(d.label));
   const driverRows: DriverRow[] = allDrivers.map((d) => {
     const p = dataset.people.find((x) => d.label.startsWith(`${x.id}:`));
-    return { ...d, source: p ? p.name : 'Room', text: p ? d.label.slice(p.id.length + 1).trim() : d.label };
+    const text = (p ? d.label.slice(p.id.length + 1).trim() : d.label).replace(/^HR nadir/, 'Lowest heart rate').replace(/\s?°C/g, '°');
+    return { ...d, source: p ? p.name : 'Room', text };
   });
   const meanRecovery = detail && detail.people.length ? Math.round(detail.people.reduce((a, p) => a + p.recoveryScore, 0) / detail.people.length) : null;
   const vitalsReady = !sel.partial || dataset.nights.length > 30;
   const history = !sel.partial || dataset.nights.length > 30 ? dataset.room.slice(Math.max(0, sel.index - 29), sel.index + 1) : null;
+  const baseline = history ? dataset.room.slice(Math.max(0, sel.index - 30), sel.index) : null;
   const latestDate = dataset.nights.at(-1)!.date;
+  const isLatest = night.date === latestDate;
   const focusPerson = sheet?.kind === 'person' ? sheet.id : null;
+  const tonight = tonightCopy(plan, night, room);
+  const glance = [
+    { label: 'Lights out', value: hm(night.lightsOut) },
+    { label: 'On the curve', value: `${tonight.onCurve}%` },
+    { label: 'CO₂ over 1,000', value: room.minutesCo2Over1000 > 0 ? dur(room.minutesCo2Over1000) : 'Never' },
+    { label: 'Tonight', value: tonight.short },
+  ];
 
   return (
     <>
-      <Sky initial={{ dusk: 1 }} />
-      <StoryAccent />
-      <StoryHeader />
       <div key={night.date} className={s.story}>
-        <Verdict revealKey={night.date} kicker={night.date === latestDate ? 'The story of last night' : `The story of ${dayLabel(night.date)}`} score={room.sleepAirScore} verdict={verdict} people={heroPeople} onFocus={(f) => setSheet(f === 'room' ? { kind: 'room' } : { kind: 'person', id: f })} />
+        <Verdict
+          label={isLatest ? 'Last night' : dayLabel(night.date)}
+          revealKey={night.date}
+          score={room.sleepAirScore}
+          verdict={verdict}
+          people={heroPeople}
+          glance={glance}
+          model={model}
+          onFocus={(f) => setSheet(f === 'room' ? { kind: 'room' } : { kind: 'person', id: f })}
+        />
         <LightsOut model={model} />
-        <TheNight model={model} curve={DEFAULT_CURVE} onOpenStrip={() => setSheet({ kind: 'strip' })} />
-        <TheAir model={model} room={room} history={history} baseline={history ? dataset.room.slice(Math.max(0, sel.index - 30), sel.index) : null} index={sel.index} />
-        <Bodies people={heroPeople} dataset={dataset} index={sel.index} ready={vitalsReady} />
+        <TheNight model={model} steps={steps} onOpenStrip={() => setSheet({ kind: 'strip' })} />
+        <TheAir model={model} room={room} history={history} baseline={baseline} peakAt={peakAt} crossAt={crossAt} />
+        <Bodies people={heroPeople} dataset={dataset} index={sel.index} detail={detail} ready={vitalsReady} onHistory={() => setSheet({ kind: 'vitals' })} />
         <Drivers
           rows={driverRows}
           sleepAir={room.sleepAirScore}
           meanRecovery={meanRecovery}
-          insights={(detail?.report.insights ?? []).map((t) => withNames(t, dataset))}
+          insights={(detail?.report.insights ?? []).map((t) => tidyReport(withNames(t, dataset)))}
           loading={!detail}
           onWaterfall={() => setSheet({ kind: 'waterfall' })}
         />
-        <Tonight plan={plan} night={night} room={room} onLatest={night.date !== latestDate ? () => setDate(latestDate) : null} />
+        <Tonight plan={plan} night={night} room={room} onLatest={!isLatest ? () => setDate(latestDate) : null} />
       </div>
+      <OnThisPage items={SCENES} />
 
       <Sheet
         open={sheet !== null}
         onClose={() => setSheet(null)}
-        kicker={sheet?.kind === 'room' ? 'Sleep Air · room' : focusPerson ? 'Sleep · recovery' : sheet?.kind === 'strip' ? '03 · The night' : sheet?.kind === 'waterfall' ? '06 · What drove it' : undefined}
+        wide={sheet?.kind === 'strip' || sheet?.kind === 'vitals'}
         title={
           sheet?.kind === 'room'
-            ? `Sleep Air ${fmt(room.sleepAirScore)}`
+            ? `Room score ${fmt(room.sleepAirScore)}`
             : focusPerson
-              ? `${personName(dataset, focusPerson)} ${fmt(personM(focusPerson)?.sleepScore ?? NaN)}`
+              ? `${personName(dataset, focusPerson)}: sleep ${fmt(personM(focusPerson)?.sleepScore ?? NaN)}`
               : sheet?.kind === 'strip'
-                ? 'Full night strip'
+                ? 'The whole night'
                 : sheet?.kind === 'waterfall'
-                  ? 'Drivers as waterfalls'
-                  : ''
+                  ? 'What drove it, step by step'
+                  : sheet?.kind === 'vitals'
+                    ? 'Vitals, last 14 nights'
+                    : ''
         }
       >
         {sheet?.kind === 'room' &&
           (detail ? (
-            <div>
+            <div className={s.sheetBody}>
+              <p className="sec">Four parts, weighted. A typical night scores {70}.</p>
               <SubScores
                 items={[
                   { label: 'CO₂', value: detail.roomParts.co2 * 100, weight: SLEEP_AIR_WEIGHTS.co2 },
-                  { label: 'On curve', value: detail.roomParts.temp * 100, weight: SLEEP_AIR_WEIGHTS.temp },
+                  { label: 'On the curve', value: detail.roomParts.temp * 100, weight: SLEEP_AIR_WEIGHTS.temp },
                   { label: 'Humidity', value: detail.roomParts.rh * 100, weight: SLEEP_AIR_WEIGHTS.rh },
                   { label: 'Stability', value: detail.roomParts.stability * 100, weight: SLEEP_AIR_WEIGHTS.stability },
                 ]}
               />
-              <div style={{ marginTop: 18 }}>
-                <Waterfall drivers={roomDrivers} total={room.sleepAirScore} totalLabel="Sleep Air" />
-              </div>
+              <h3 className="label">From a typical night to {fmt(room.sleepAirScore)}</h3>
+              <Waterfall drivers={roomDrivers} total={room.sleepAirScore} totalLabel="Room score" />
             </div>
           ) : (
             <Placeholder height={200} />
           ))}
         {focusPerson &&
           (detail?.personParts[focusPerson] ? (
-            <div>
+            <div className={s.sheetBody}>
               <SubScores
                 items={[
                   { label: 'Duration', value: detail.personParts[focusPerson].sleep.duration * 100, weight: SLEEP_SCORE_WEIGHTS.duration },
@@ -190,79 +263,64 @@ export function TodayScreen() {
                   { label: 'Awakenings', value: detail.personParts[focusPerson].sleep.awakenings * 100, weight: SLEEP_SCORE_WEIGHTS.awakenings },
                 ]}
               />
-              <p className="card-note">
-                Recovery {fmt(personM(focusPerson)?.recoveryScore ?? NaN)} compares HRV, HR nadir and breathing rate with {personName(dataset, focusPerson)}&apos;s last{' '}
+              <p className="sec">
+                Recovery {fmt(personM(focusPerson)?.recoveryScore ?? NaN)} compares HRV, the lowest heart rate and breathing rate with {personName(dataset, focusPerson)}&rsquo;s last{' '}
                 {detail.personParts[focusPerson].recovery.baselineNights} nights.
               </p>
               {bodyDrivers.some((d) => d.label.startsWith(`${focusPerson}:`)) && (
-                <div style={{ marginTop: 14 }}>
+                <>
+                  <h3 className="label">What moved recovery</h3>
                   <Waterfall
                     drivers={bodyDrivers.filter((d) => d.label.startsWith(`${focusPerson}:`)).map((d) => ({ ...d, label: d.label.slice(focusPerson.length + 1).trim() }))}
                     total={personM(focusPerson)?.recoveryScore ?? 0}
                     totalLabel="Recovery"
                   />
-                </div>
+                </>
               )}
             </div>
           ) : (
             <Placeholder height={200} />
           ))}
         {sheet?.kind === 'strip' && (
-          <div>
-            <Legend
-              items={[
-                ...STAGE_ORDER.map((st) => ({ label: STAGE_LABEL[st], color: stageColor(st), shape: 'rect' as const })),
-                { label: 'Room °C', color: 'var(--temp)' },
-                { label: 'Target', color: 'var(--text-2)', shape: 'dash' as const },
-                { label: 'RH', color: 'var(--rh)' },
-                { label: 'CO₂', color: 'var(--co2)' },
-              ]}
-            />
+          <div className={s.sheetBody}>
+            <p className="sec">Both hypnograms over room temperature (plan dashed), humidity and CO₂. Touch the strip to read any minute.</p>
             <NightStrip night={night} people={dataset.people} curve={DEFAULT_CURVE} events={detail?.events ?? []} />
-            <div className="legend" style={{ marginTop: 6 }}>
+            <div className={`cap ${s.glyphKey}`}>
               {(['shower', 'door_open', 'in_bed', 'both_in_bed', 'out_of_bed'] as const).map((k) => (
                 <span key={k}>
-                  <svg width={14} height={14} aria-hidden>
-                    <EventGlyph kind={k} x={7} y={7} s={0.9} />
+                  <svg width={16} height={16} aria-hidden>
+                    <EventGlyph kind={k} x={8} y={8} s={0.9} />
                   </svg>
                   {EVENT_LABEL[k]}
                 </span>
               ))}
               <span>
-                <i className="key-line" style={{ color: 'var(--critical)' }} /> AC tick: missed?
+                <svg width={16} height={16} aria-hidden>
+                  <line x1={8} x2={8} y1={2} y2={14} stroke="var(--signal)" strokeWidth={2} strokeLinecap="round" />
+                </svg>
+                Aircon command that may have been missed
               </span>
             </div>
-            <p className="card-note">
-              {theme === 'night'
-                ? 'CO₂ bands, darkest to brightest: <800 · 800–1,000 · 1,000–1,500 · >1,500 ppm.'
-                : 'CO₂ bands: green <800 · amber 800–1,000 · orange 1,000–1,500 · red >1,500 ppm.'}{' '}
-              Touch the strip to read any minute.
-            </p>
+            <h3 className="label">Every moment</h3>
+            <EventList items={model.moments.map((m) => ({ time: hm(m.t), title: m.text, detail: m.who ? whoLabel(m, model.people) : undefined }))} />
           </div>
         )}
         {sheet?.kind === 'waterfall' &&
           (detail ? (
-            <div style={{ display: 'grid', gap: 22 }}>
-              <div>
-                <div className="t-label t2" style={{ marginBottom: 8 }}>
-                  What drove Sleep Air · points vs a typical night (70)
-                </div>
-                <Waterfall drivers={roomDrivers} total={room.sleepAirScore} totalLabel="Sleep Air" />
-              </div>
-              <div>
-                <div className="t-label t2" style={{ marginBottom: 8 }}>
-                  Body drivers · vs each person&apos;s 30-night baseline
-                </div>
-                {bodyDrivers.length && meanRecovery !== null ? (
-                  <Waterfall drivers={bodyDrivers.map((d) => ({ ...d, label: withNames(d.label, dataset) }))} total={meanRecovery} totalLabel="Mean recovery" />
-                ) : (
-                  <p className="small muted">Needs 7+ nights of history.</p>
-                )}
-              </div>
+            <div className={s.sheetBody}>
+              <h3 className="label">Room score, against a typical night ({70})</h3>
+              <Waterfall drivers={roomDrivers} total={room.sleepAirScore} totalLabel="Room score" />
+              <h3 className="label">Bodies, against each person&rsquo;s 30-night baseline</h3>
+              {bodyDrivers.length && meanRecovery !== null ? (
+                <Waterfall drivers={bodyDrivers.map((d) => ({ ...d, label: withNames(d.label, dataset) }))} total={meanRecovery} totalLabel="Mean recovery" />
+              ) : (
+                <p className="sec">Needs 7 or more nights of history.</p>
+              )}
             </div>
           ) : (
             <Placeholder height={240} />
           ))}
+        {sheet?.kind === 'vitals' && <VitalsHistory dataset={dataset} index={sel.index} />}
       </Sheet>
     </>
   );

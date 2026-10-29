@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sleep Lab · Today</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .story { max-width: 1240px; margin: 0 auto; }
+  @media (min-width: 1920px) { .story { max-width: 1400px; } }
+
+  /* Scenes: text left, instrument right (desktop) */
+  .scene { padding: var(--section) 0; border-top: 1px solid var(--line); }
+  .scene:first-child { border-top: 0; }
+  .grid { display: grid; gap: 40px; }
+  @media (min-width: 1024px) {
+    .grid { grid-template-columns: repeat(12, 1fr); column-gap: 48px; align-items: start; }
+    .c-text { grid-column: 1 / span 5; position: sticky; top: 96px; }
+    .c-vis { grid-column: 7 / span 6; }
+  }
+  .c-text .label { display: block; margin-bottom: 20px; }
+  .c-text .title { margin: 18px 0 16px; max-width: 18ch; }
+  .c-text .sec { max-width: 40ch; }
+  .vis-title { font-size: var(--t-body); font-weight: 560; margin-bottom: 4px; }
+  .vis-sub { font-size: var(--t-sec); color: var(--ink-3); margin-bottom: 20px; }
+
+  /* Hero */
+  .hero { padding-top: 32px; display: flex; flex-direction: column; }
+  @media (min-width: 1024px) { .hero { padding-top: 72px; min-height: min(100vh, 1080px); } .strip { padding-top: 72px; } }
+  .hero-grid { display: grid; gap: 40px; }
+  @media (min-width: 1024px) { .hero-grid { grid-template-columns: 7fr 5fr; column-gap: 64px; align-items: end; } }
+  .score { display: flex; align-items: flex-start; gap: 10px; margin-top: 8px; }
+  .score .big { font-size: calc(var(--t-display) * 1.5); font-weight: 220; letter-spacing: -.055em; line-height: .82; }
+  .score .of { font-size: var(--t-sec); color: var(--ink-3); margin-top: 10px; }
+  .scale { margin: 26px 0 30px; max-width: 520px; }
+  .scale svg { width: 100%; height: 40px; display: block; overflow: visible; }
+  .verdict { font-size: var(--t-title); font-weight: 560; letter-spacing: -.02em; line-height: 1.2; max-width: 22ch; }
+  .verdict span { color: var(--ink-2); font-weight: 400; }
+  .people { display: grid; }
+  .person { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 6px 16px; padding: 22px 0; border-top: 1px solid var(--line); }
+  .person:last-child { border-bottom: 1px solid var(--line); }
+  .who { display: flex; align-items: center; gap: 10px; font-weight: 560; font-size: var(--t-body); }
+  .sw { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .sw.you { background: var(--you); } .sw.erik { background: var(--erik); }
+  .person .reading { grid-row: span 2; text-align: right; }
+  .person .meta { font-size: var(--t-sec); color: var(--ink-2); }
+  .person .meta b { color: var(--ink); font-weight: 500; }
+  .strip { margin-top: auto; padding-top: 48px; }
+  .strip svg { width: 100%; display: block; }
+  .strip .cue { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; }
+  .cue-arrow { display: inline-flex; gap: 8px; align-items: center; color: var(--ink-2); font-size: var(--t-sec); }
+  .cue-arrow svg { width: 18px; height: 18px; transform: rotate(90deg); animation: nudge 2.4s var(--ease) infinite; }
+  @keyframes nudge { 0%, 100% { transform: rotate(90deg) translateX(0); } 50% { transform: rotate(90deg) translateX(4px); } }
+  .still .cue-arrow svg { animation: none; }
+
+  /* Event list */
+  .events { list-style: none; padding: 0; margin: 28px 0 0; border-top: 1px solid var(--line); }
+  .events li { display: grid; grid-template-columns: 64px 1fr; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--line); font-size: var(--t-sec); }
+  @media (min-width: 1920px) { .events li { grid-template-columns: 76px 1fr; } }
+  .events time { color: var(--ink-3); }
+  .events b { font-weight: 500; color: var(--ink); }
+  .events span { color: var(--ink-2); }
+
+  .chartbox { position: relative; }
+  .chartbox svg { width: 100%; display: block; overflow: visible; }
+  .draw path.trace { stroke-dasharray: var(--len); stroke-dashoffset: var(--len); transition: stroke-dashoffset 1.6s var(--ease); }
+  .draw.in path.trace { stroke-dashoffset: 0; }
+  .still .draw path.trace { stroke-dasharray: none; stroke-dashoffset: 0; transition: none; }
+
+  /* The night: pinned instrument, scrubbed by scroll */
+  .scrub { position: relative; border-top: 1px solid var(--line); }
+  .pin { position: sticky; top: 56px; height: calc(100vh - 56px - 72px); display: flex; flex-direction: column; padding: 20px var(--gutter) 12px; }
+  @media (min-width: 1024px) { .pin { top: 0; height: 100vh; padding: 64px var(--gutter) 48px; justify-content: center; } .pin .nightfig { flex: none; height: calc(100vh - 300px); max-height: 760px; } }
+  @media (min-width: 1920px) { .pin .nightfig { height: calc(100vh - 360px); max-height: 900px; } }
+  .pin-grid { display: grid; gap: 14px; min-height: 0; flex: 1; }
+  @media (min-width: 1024px) { .pin-grid { grid-template-columns: 4fr 8fr; column-gap: 56px; align-items: center; flex: none; } }
+  .readout { display: grid; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+  @media (max-width: 1023px) {
+    .pin-grid { display: flex; flex-direction: column; gap: 0; }
+    .pin-text { display: contents; }
+    .pin-head { order: 0; margin-bottom: 12px; }
+    .pin-grid > div:last-child { order: 1; flex: 1; min-height: 0; }
+    .steps { order: 2; }
+    .ro-cells { grid-template-columns: repeat(4, 1fr) !important; gap: 8px !important; }
+    .ro-cells div { display: grid !important; gap: 0 !important; }
+    .ro-cells b { font-size: var(--t-sec); }
+  }
+  .readout .clock { font-size: var(--t-num); font-weight: 250; letter-spacing: -.03em; line-height: 1; }
+  .ro-cells { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 16px; }
+  .ro-cells div { display: flex; justify-content: space-between; gap: 8px; font-size: var(--t-sec); }
+  .ro-cells span { color: var(--ink-3); }
+  .ro-cells b { font-weight: 500; }
+  @media (min-width: 1024px) {
+    .readout { grid-template-columns: auto 1fr; gap: 48px; padding-bottom: 20px; }
+    .readout .clock { font-size: calc(var(--t-num) * 1.25); }
+    .ro-cells { grid-template-columns: repeat(4, auto); justify-content: end; gap: 0 40px; }
+    .ro-cells div { display: grid; gap: 2px; }
+    .ro-cells b { font-size: var(--t-head); font-weight: 400; }
+  }
+  .nightfig { margin-top: 16px; flex: 1; min-height: 0; }
+  .nightfig svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  .ghost { opacity: var(--ghost); }
+  .ghost rect { fill: none; stroke: currentColor; stroke-width: 1; }
+  .steps { list-style: none; margin: 0; padding: 0; }
+  .steps li { transition: opacity .35s var(--ease), color .35s; }
+  .steps time { display: block; font-size: var(--t-sec); color: var(--ink-3); }
+  .steps b { display: block; font-size: var(--t-head); font-weight: 600; letter-spacing: -.01em; }
+  .steps span { display: block; font-size: var(--t-sec); color: var(--ink-2); margin-top: 2px; }
+  /* phone: one step at a time under the figure */
+  .steps { position: relative; height: 92px; margin-top: 14px; }
+  .steps li { position: absolute; inset: 0; opacity: 0; }
+  .steps li.on { opacity: 1; }
+  @media (min-width: 1024px) {
+    .steps { height: auto; margin-top: 28px; border-left: 1px solid var(--line); }
+    .steps li { position: relative; opacity: 1; padding: 12px 0 12px 22px; color: var(--ink-3); }
+    .steps li b { font-size: var(--t-body); font-weight: 500; color: var(--ink-3); }
+    .steps li span { color: var(--ink-3); opacity: 0; max-height: 0; overflow: hidden; transition: opacity .35s, max-height .35s; }
+    .steps li.on b { color: var(--ink); font-size: var(--t-head); font-weight: 600; }
+    .steps li.on span { opacity: 1; max-height: 80px; color: var(--ink-2); }
+    .steps li.on::before { content: ''; position: absolute; left: -1px; top: 12px; bottom: 12px; width: 2px; background: var(--signal); }
+    .steps li.past b { color: var(--ink-2); }
+  }
+  .pin-head .title { margin: 10px 0 0; }
+  @media (max-width: 1023px) { .pin-head { display: flex; justify-content: space-between; align-items: baseline; } .pin-head .title { font-size: var(--t-head); margin: 0; } }
+
+  /* Air */
+  .bars svg { height: 220px; }
+  .gauge { margin-top: 48px; padding-top: 32px; border-top: 1px solid var(--line); }
+  .gauge svg { height: 84px; }
+
+  /* Bodies table */
+  .vtable { width: 100%; border-collapse: collapse; font-size: var(--t-body); }
+  .vtable th { text-align: left; font-weight: 560; font-size: var(--t-sec); color: var(--ink-2); padding: 0 0 12px; }
+  .vtable th:not(:first-child), .vtable td:not(:first-child) { text-align: right; }
+  .vtable td { padding: 14px 0; border-top: 1px solid var(--line); vertical-align: baseline; }
+  .vtable td:first-child { color: var(--ink-2); font-size: var(--t-sec); }
+  .vtable td b { font-weight: 500; }
+  .vtable td small { display: block; font-size: var(--t-cap); color: var(--ink-3); margin-top: 2px; }
+  .stages { display: grid; gap: 18px; margin-bottom: 40px; }
+  .stagebar { display: flex; height: 12px; border-radius: 3px; overflow: hidden; gap: 2px; margin-top: 8px; }
+  .stagebar i { display: block; height: 100%; }
+  .stage-key { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: var(--t-cap); color: var(--ink-3); margin-top: 8px; }
+  .stage-key b { color: var(--ink-2); font-weight: 500; }
+
+  /* Drivers */
+  .drivers { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--line); }
+  .drivers li { display: grid; grid-template-columns: 52px 1fr; gap: 4px 16px; padding: 16px 0; border-bottom: 1px solid var(--line); align-items: baseline; }
+  @media (min-width: 1024px) { .drivers li { grid-template-columns: 56px 1fr 180px; } }
+  .drivers .pts { font-weight: 500; text-align: right; font-size: var(--t-body); }
+  .drivers .pts.neg { color: var(--signal); }
+  .drivers .txt { font-size: var(--t-body); }
+  .drivers .txt small { display: block; color: var(--ink-3); font-size: var(--t-cap); }
+  .drivers .bar { grid-column: 2; height: 4px; position: relative; background: var(--line); border-radius: 2px; align-self: center; }
+  @media (min-width: 1024px) { .drivers .bar { grid-column: 3; } }
+  .drivers .bar i { position: absolute; top: 0; bottom: 0; border-radius: 2px; background: var(--ink); }
+  .drivers .bar i.neg { background: var(--signal); }
+  .drivers .bar::after { content: ''; position: absolute; left: 50%; top: -4px; bottom: -4px; width: 1px; background: var(--line-2); }
+
+  /* Tonight */
+  .advice { margin: 28px 0; padding: 22px 24px; border-radius: var(--r-m); background: var(--surface); border: 1px solid var(--line); }
+  .advice b { display: block; font-size: var(--t-head); font-weight: 600; }
+  .advice span { font-size: var(--t-sec); color: var(--ink-2); }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  details.log { margin-top: 36px; border-top: 1px solid var(--line); }
+  details.log summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; padding: 16px 0; font-size: var(--t-sec); font-weight: 560; color: var(--ink-2); }
+  details.log summary::-webkit-details-marker { display: none; }
+  details.log summary svg { width: 16px; height: 16px; transform: rotate(90deg); transition: transform .3s; }
+  details.log[open] summary svg { transform: rotate(-90deg); }
+  .log table { width: 100%; border-collapse: collapse; font-size: var(--t-sec); }
+  .log td { padding: 11px 0; border-top: 1px solid var(--line); color: var(--ink-2); }
+  .log td:first-child { color: var(--ink-3); width: 72px; }
+  .log td:nth-child(2) { width: 56px; color: var(--ink); font-weight: 500; }
+
+  .close { padding: var(--section) 0 calc(var(--section) * .8); border-top: 1px solid var(--line); text-align: left; }
+  .close p { font-size: var(--t-title); font-weight: 400; color: var(--ink-2); letter-spacing: -.02em; }
+  .close .sec { margin-top: 10px; font-size: var(--t-sec); }
+
+  /* topbar progress + chapter */
+  .topbar .chap { font-size: var(--t-sec); color: var(--ink-3); }
+  .progress { position: absolute; left: 0; bottom: -1px; height: 2px; width: 100%; transform-origin: 0 50%; transform: scaleX(0); background: var(--ink); opacity: .7; }
+
+  /* Desktop "on this page" */
+  .toc { display: none; }
+  @media (min-width: 1880px) {
+    .toc { display: block; position: fixed; right: 48px; top: 50%; transform: translateY(-50%); width: 180px; }
+    .toc a { display: flex; align-items: center; gap: 12px; padding: 7px 0; font-size: var(--t-cap); color: var(--ink-3); }
+    .toc a i { width: 14px; height: 1px; background: var(--line-2); transition: width .3s var(--ease), background .3s; }
+    .toc a.on { color: var(--ink); }
+    .toc a.on i { width: 28px; background: var(--signal); }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail" aria-label="Navigation"></aside>
+  <div style="min-width:0">
+    <header class="topbar">
+      <div><div class="date">Thu 29 Oct</div></div>
+      <div class="chap" id="chap">Last night</div>
+      <div class="sp"></div>
+      <button class="iconbtn" aria-label="Previous night"></button>
+      <button class="iconbtn" aria-label="Next night" disabled></button>
+      <div class="progress" id="prog"></div>
+    </header>
+
+    <main class="main">
+      <div class="story">
+
+        <!-- 1 · Verdict -->
+        <section class="scene hero" id="c-verdict" data-chap="Last night">
+          <div class="hero-grid">
+            <div>
+              <p class="label rv">Room score, last night</p>
+              <div class="score rv d1"><span class="big num" id="score">75</span><span class="of">/ 100</span></div>
+              <div class="scale rv d2"><svg id="scale" viewBox="0 0 520 40" preserveAspectRatio="none"></svg></div>
+              <h1 class="verdict rv d2">You both slept well. <span>Humidity above 60% for 2h 04m held the room back.</span></h1>
+            </div>
+            <div class="people rv d3">
+              <div class="person">
+                <div class="who"><span class="sw you"></span>You</div>
+                <div class="reading num">97<span class="unit">sleep</span></div>
+                <div class="meta">Recovery <b>79</b> · asleep <b id="you-asleep">6h 41m</b></div>
+              </div>
+              <div class="person">
+                <div class="who"><span class="sw erik"></span>Erik</div>
+                <div class="reading num">99<span class="unit">sleep</span></div>
+                <div class="meta">Recovery <b>93</b> · asleep <b id="erik-asleep">7h 02m</b></div>
+              </div>
+            </div>
+          </div>
+          <div class="strip rv d3">
+            <svg id="strip" height="64"></svg>
+            <div class="cue"><span class="cap">23:00</span><span class="cue-arrow">Scroll through the night ${'' }<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span><span class="cap">07:00</span></div>
+          </div>
+        </section>
+
+        <!-- 2 · Pre-cool -->
+        <section class="scene" id="c-precool" data-chap="Before bed">
+          <div class="grid">
+            <div class="c-text">
+              <p class="label rv">Before bed</p>
+              <div class="reading num rv d1">21:47</div>
+              <h2 class="title rv d1">The room was cool before you were in bed.</h2>
+              <p class="sec rv d2">Aircon set to 20° for a 20.5° target, 90 minutes ahead of lights out. The room dropped 8.8° in 64 minutes.</p>
+            </div>
+            <div class="c-vis">
+              <p class="vis-title rv">Room temperature, 21:30 – 23:30</p>
+              <p class="vis-sub rv">Plan 20.5° shown dashed</p>
+              <div class="chartbox draw rv d1" id="precool"></div>
+              <ul class="events rv d2">
+                <li><time>21:47</time><div><b>Aircon on.</b> <span>Pre-cool to 20.5°, room at 29.0°.</span></div></li>
+                <li><time>22:51</time><div><b>Ready.</b> <span>Room 20.2°, 26 minutes before bed.</span></div></li>
+                <li><time>23:17</time><div><b>Lights out.</b> <span>Room 20.2°, humidity 56%.</span></div></li>
+              </ul>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- 3 · The night (full-bleed pinned scrub, still constrained to story width) -->
+    <section class="scrub" id="c-night" data-chap="The night" style="height:520vh">
+      <div class="pin main">
+        <div class="story" style="width:100%; display:flex; flex-direction:column; min-height:0; flex:1">
+          <div class="pin-grid">
+            <div class="pin-text">
+              <div class="pin-head"><p class="label">The night</p><h2 class="title">7 h 23 m in the dark.</h2></div>
+              <ol class="steps" id="steps"></ol>
+            </div>
+            <div style="display:flex; flex-direction:column; min-height:0; height:100%">
+              <div class="readout">
+                <div class="clock num" id="ro-clock">23:17</div>
+                <div class="ro-cells">
+                  <div><span>You</span><b id="ro-you">—</b></div>
+                  <div><span>Erik</span><b id="ro-erik">—</b></div>
+                  <div><span>Room</span><b class="num" id="ro-temp">—</b></div>
+                  <div><span>CO₂</span><b class="num" id="ro-co2">—</b></div>
+                </div>
+              </div>
+              <div class="nightfig" id="nightfig"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <main class="main">
+      <div class="story">
+        <!-- 4 · Air -->
+        <section class="scene" id="c-air" data-chap="The air">
+          <div class="grid">
+            <div class="c-text">
+              <p class="label rv">The air</p>
+              <div class="reading num rv d1" id="above">4h 02m</div>
+              <p class="cap rv d1" style="margin-top:8px">above 1,000 ppm CO₂</p>
+              <h2 class="title rv d1">Fresh at first, stale by morning.</h2>
+              <p class="sec rv d2">Last night averaged <b class="num" style="color:var(--ink);font-weight:500">958 ppm</b>, 34 above your 30-night mean. Two sleepers need about 1.9× the fresh air this room got.</p>
+            </div>
+            <div class="c-vis">
+              <p class="vis-title rv" id="bars-title">Nightly CO₂ average, last 30 nights</p>
+              <p class="vis-sub rv">Nights over 1,000 ppm marked</p>
+              <div class="chartbox bars rv d1" id="bars"></div>
+              <div class="gauge rv d2">
+                <p class="vis-title">Fresh air: 0.17 air changes an hour</p>
+                <p class="vis-sub">Two sleepers need about 0.32 to stay under 1,000 ppm</p>
+                <div class="chartbox" id="gauge"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 5 · Bodies -->
+        <section class="scene" id="c-bodies" data-chap="Your bodies">
+          <div class="grid">
+            <div class="c-text">
+              <p class="label rv">Your bodies</p>
+              <h2 class="title rv d1">Erik recovered better than usual. You, about as usual.</h2>
+              <p class="sec rv d2">Each figure is compared with that person’s own typical night over the last 30, not with each other.</p>
+            </div>
+            <div class="c-vis">
+              <div class="stages rv" id="stages"></div>
+              <table class="vtable rv d1">
+                <thead><tr><th></th><th><span class="sw you"></span>&nbsp; You</th><th><span class="sw erik"></span>&nbsp; Erik</th></tr></thead>
+                <tbody>
+                  <tr><td>Sleep score</td><td><b>97</b><small>typical 91</small></td><td><b>99</b><small>typical 90</small></td></tr>
+                  <tr><td>Recovery</td><td><b>79</b><small>typical 77</small></td><td><b>93</b><small>typical 81</small></td></tr>
+                  <tr><td>Lowest heart rate</td><td><b>52 bpm</b><small>↑ 1 vs typical 51</small></td><td><b>49 bpm</b><small>↓ 4 vs typical 53</small></td></tr>
+                  <tr><td>Heart rate variability</td><td><b>46 ms</b><small>↑ 4% vs typical</small></td><td><b>62 ms</b><small>↑ 24% vs typical</small></td></tr>
+                  <tr><td>Blood oxygen</td><td><b>96%</b><small>typical 96</small></td><td><b>97%</b><small>typical 97</small></td></tr>
+                  <tr><td>Breathing rate</td><td><b>14.2</b><small>per min · typical 14.0</small></td><td><b>13.1</b><small>per min · typical 13.4</small></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- 6 · Drivers -->
+        <section class="scene" id="c-drivers" data-chap="What drove it">
+          <div class="grid">
+            <div class="c-text">
+              <p class="label rv">What drove it</p>
+              <div class="reading num rv d1">+5<span class="unit">points</span></div>
+              <h2 class="title rv d1">The curve carried the night. Humidity cost the most.</h2>
+              <p class="sec rv d2">The room scored 75 against a typical 70. Your bodies came in 17 points above their own baselines, with mean recovery 86.</p>
+            </div>
+            <div class="c-vis">
+              <ul class="drivers rv d1" id="drivers"></ul>
+              <p class="cap rv d2" style="margin-top:14px">Points add up to the change from a typical night: room +5, bodies +17.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- 7 · Tonight -->
+        <section class="scene" id="c-tonight" data-chap="Tonight">
+          <div class="grid">
+            <div class="c-text">
+              <p class="label rv">Tonight</p>
+              <h2 class="title rv d1">Same curve. More air.</h2>
+              <p class="sec rv d1">The curve held last night, 92% of the time on target, so keep it. Fresh air is the one thing missing.</p>
+              <div class="advice rv d2"><b>Crack the door 2 cm.</b><span>The simplest way to roughly double the room’s fresh air.</span></div>
+              <div class="actions rv d2">
+                <a class="btn primary" href="system.html#plan">Edit tonight’s plan</a>
+                <span class="cap">Starts 21:47 · coolest 19.0°</span>
+              </div>
+            </div>
+            <div class="c-vis">
+              <p class="vis-title rv">Tonight’s plan, with last night’s room</p>
+              <p class="vis-sub rv">Plan in colour, last night in grey</p>
+              <div class="chartbox draw rv d1" id="plan"></div>
+              <details class="log rv d2" id="log">
+                <summary>Last night’s aircon commands · 7 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m9 5 7 7-7 7"/></svg></summary>
+                <table id="logt"></table>
+              </details>
+            </div>
+          </div>
+        </section>
+
+        <footer class="close">
+          <p class="rv">That was last night.</p>
+          <p class="sec rv d1"><a class="link" href="#">Room</a>, <a class="link" href="#">Body</a> and <a class="link" href="#">Lab</a> hold the detail. Sleep well.</p>
+        </footer>
+      </div>
+    </main>
+    <div class="phone-pad"></div>
+  </div>
+</div>
+<nav class="tabbar" aria-label="Tabs"></nav>
+<nav class="toc" id="toc" aria-label="On this page"></nav>
+
+<script src="shell.js"></script>
+<script>
+renderShell('today');
+document.querySelectorAll('.topbar .iconbtn')[0].innerHTML = svgI('left');
+document.querySelectorAll('.topbar .iconbtn')[1].innerHTML = svgI('right');
+document.querySelector('.cue-arrow').firstChild.textContent = 'Scroll through the night ';
+
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const hm = (m) => Math.floor(m / 60) + 'h ' + String(Math.round(m % 60)).padStart(2, '0') + 'm';
+function el(tag, attrs, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+function svgIn(box, h) { box.innerHTML = ''; const w = box.clientWidth; const s = el('svg', { width: w, height: h, viewBox: `0 0 ${w} ${h}`, class: 'chart' }); box.appendChild(s); return [s, w]; }
+const isDesk = () => innerWidth >= 1024;
+
+/* --- derived numbers (one source of truth) --- */
+const stat = {};
+for (const k of ['you', 'erik']) {
+  const s = HYP[k]; let a = 0, d = 0, r = 0, l = 0, w = 0, best = null;
+  for (const x of s) { const L = x.e - x.s; if (x.st > 0) a += L; else w += L; if (x.st === 3) { d += L; if (!best || L > best.e - best.s) best = x; } if (x.st === 1) r += L; if (x.st === 2) l += L; }
+  stat[k] = { asleep: a, deep: d, rem: r, light: l, awake: w, best };
+}
+document.getElementById('you-asleep').textContent = hm(stat.you.asleep);
+document.getElementById('erik-asleep').textContent = hm(stat.erik.asleep);
+let above = 0, cross = null; for (let t = NIGHT.lightsOut; t < NIGHT.wake; t++) if (co2(t) >= 1000) { above++; if (cross === null) cross = t; }
+document.getElementById('above').textContent = hm(above);
+
+/* --- hero scale --- */
+(function () {
+  const s = document.getElementById('scale'); let h = '';
+  for (let i = 0; i <= 100; i += 5) { const x = i * 5.2; h += `<line x1="${x}" x2="${x}" y1="${i % 10 ? 12 : 8}" y2="20" stroke="var(--line-2)" stroke-width="1" vector-effect="non-scaling-stroke"/>`; }
+  h += `<line x1="0" x2="${75 * 5.2}" y1="20" y2="20" stroke="var(--ink)" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+  h += `<line x1="${70 * 5.2}" x2="${70 * 5.2}" y1="4" y2="24" stroke="var(--ink-3)" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
+  h += `<rect x="${75 * 5.2 - 1.5}" y="2" width="3" height="22" fill="var(--signal)"/>`;
+  s.innerHTML = h;
+  s.parentElement.insertAdjacentHTML('beforeend', `<div class="cap" style="position:relative;height:20px;margin-top:4px"><span style="position:absolute;left:0">0</span><span style="position:absolute;left:70%;transform:translateX(-50%)">typical 70</span><span style="position:absolute;right:0">100</span></div>`);
+})();
+
+/* --- hero strip: both hypnograms, whole night --- */
+function drawStrip() {
+  const box = document.getElementById('strip'); const w = box.parentElement.clientWidth; const h = isDesk() ? 112 : 64; const rh = isDesk() ? 12 : 7, bh = isDesk() ? 10 : 6, off = isDesk() ? 60 : 34; box.setAttribute('height', h);
+  box.setAttribute('width', w); box.setAttribute('viewBox', `0 0 ${w} ${h}`); box.innerHTML = '';
+  const X = (t) => (t - NIGHT.x0) / (NIGHT.x1 - NIGHT.x0) * w;
+  [['you', 0], ['erik', off]].forEach(([k, y0]) => {
+    for (const s of HYP[k]) { const y = y0 + s.st * rh; el('rect', { x: X(s.s), y, width: Math.max(1, X(s.e) - X(s.s) - .5), height: bh, rx: 1, fill: `var(--${k})`, opacity: [.35, .65, .8, 1][s.st] }, box); }
+  });
+}
+
+/* --- pre-cool chart --- */
+function drawPrecool() {
+  const box = document.getElementById('precool'); const H = isDesk() ? 300 : 220; const [s, w] = svgIn(box, H);
+  const pl = 34, pr = 8, pt = 10, pb = 28, a = M(21, 30), b = M(23, 30), lo = 19, hi = 30;
+  const X = (t) => pl + (t - a) / (b - a) * (w - pl - pr), Y = (v) => pt + (hi - v) / (hi - lo) * (H - pt - pb);
+  for (const v of [20, 25, 30]) { el('line', { x1: pl, x2: w - pr, y1: Y(v), y2: Y(v), class: 'grid' }, s); el('text', { x: 0, y: Y(v) + 4 }, s).textContent = v + '°'; }
+  for (const t of [M(21, 30), M(22, 0), M(22, 30), M(23, 0), M(23, 30)]) el('text', { x: X(t), y: H - 6, 'text-anchor': t === a ? 'start' : t === b ? 'end' : 'middle' }, s).textContent = clock(t);
+  el('line', { x1: pl, x2: w - pr, y1: Y(20.5), y2: Y(20.5), stroke: 'var(--ink-3)', 'stroke-dasharray': '4 4' }, s);
+  for (const t of [M(21, 47), M(22, 51), M(23, 17)]) el('line', { x1: X(t), x2: X(t), y1: pt, y2: H - pb, stroke: 'var(--line-2)' }, s);
+  const p = el('path', { d: line(sample(roomTemp, a, b, 1).map(([t, v]) => [X(t), Y(v)])), fill: 'none', stroke: 'var(--ink)', 'stroke-width': 2, class: 'trace' }, s);
+  p.style.setProperty('--len', p.getTotalLength());
+  el('circle', { cx: X(M(22, 51)), cy: Y(roomTemp(M(22, 51))), r: 4, fill: 'var(--signal)' }, s);
+}
+
+/* --- the night (pinned) --- */
+const STEP = [
+  { t: NIGHT.lightsOut, b: 'Lights out.', s: 'Erik in bed; you followed at 23:34. Room 20.2°.' },
+  { t: stat.erik.best.s, b: `Erik’s deepest stretch: ${Math.round(stat.erik.best.e - stat.erik.best.s)} min.`, s: 'The room was settling onto its 19° deep-sleep target.' },
+  { t: cross, b: 'CO₂ crossed 1,000 ppm.', s: 'Two sleepers, a closed door, no fresh air.' },
+  { t: M(3, 55), b: 'Aircon nudged up 1°.', s: 'The room ran 0.6° below the plan.' },
+  { t: M(5, 48), b: 'Room warmed to 22.2°.', s: 'Above the 21.5° the plan asked for.' },
+  { t: NIGHT.wake, b: 'Awake. CO₂ peaked at 1,257 ppm.', s: `${hm(above)} above 1,000 overall.` },
+];
+document.getElementById('steps').innerHTML = STEP.map((x) => `<li><time class="num">${clock(x.t)}</time><b>${x.b}</b><span>${x.s}</span></li>`).join('');
+let NF = null;
+function drawNight() {
+  const box = document.getElementById('nightfig'); const desk = isDesk();
+  const H = Math.max(300, Math.min(desk ? 860 : 520, box.clientHeight || 400));
+  const [s, w] = svgIn(box, H);
+  const pl = desk ? 96 : 0, pr = desk ? 52 : 34, top = desk ? 8 : 4;
+  const X = (t) => pl + (t - NIGHT.x0) / (NIGHT.x1 - NIGHT.x0) * (w - pl - pr);
+  // vertical budget
+  const lab = desk ? 0 : 18, gap = desk ? 22 : 12, axis = desk ? 26 : 30, ac = 16;
+  const free = H - top - axis - ac - gap * 4 - lab * 4;
+  const hH = Math.round(free * (desk ? .17 : .2)), cH = Math.round(free * (desk ? .33 : .3));
+  let y = top; const rows = {};
+  for (const [k, hh] of [['you', hH], ['erik', hH], ['temp', cH], ['co2', cH], ['ac', ac]]) { y += lab; rows[k] = [y, hh]; y += hh + gap; }
+  const ghost = el('g', { class: 'ghost' }, s), live = el('g', {}, s);
+  const clipId = 'cl' + Math.random().toString(36).slice(2);
+  const cp = el('clipPath', { id: clipId }, el('defs', {}, s)); const cr = el('rect', { x: 0, y: -10, width: 0, height: H + 20 }, cp);
+  live.setAttribute('clip-path', `url(#${clipId})`);
+  const label = (txt, yy, k) => { const t = el('text', desk ? { x: 0, y: yy + 12 } : { x: 0, y: yy - 6 }, s); t.textContent = txt; t.style.fill = 'var(--ink-2)'; t.style.fontWeight = 500; return t; };
+  // grid ticks
+  for (let hr = 23; hr <= 31; hr += 2) { const t = hr * 60; el('line', { x1: X(t), x2: X(t), y1: top, y2: y - gap, class: 'grid' }, s); el('text', { x: X(t), y: H - 4, 'text-anchor': (!desk && hr === 23) ? 'start' : (!desk && hr === 31) ? 'end' : 'middle' }, s).textContent = clock(t); }
+  // hypnograms
+  for (const k of ['you', 'erik']) {
+    const [y0, hh] = rows[k]; const rh = hh / 4;
+    label(k === 'you' ? 'You' : 'Erik', y0, k);
+    if (desk) ['Awake', 'REM', 'Light', 'Deep'].forEach((n, i) => { if (i === 0 || i === 3) { const t = el('text', { x: w - pr + 8, y: y0 + i * rh + rh * .75 }, s); t.textContent = n; t.style.fontSize = '12px'; } });
+    for (const g of [ghost, live]) for (const x of HYP[k]) el('rect', { x: X(x.s), y: y0 + x.st * rh + 1, width: Math.max(1, X(x.e) - X(x.s) - .6), height: Math.max(3, rh - 3), rx: 1.5, fill: `var(--${k})`, color: `var(--${k})`, opacity: g === live ? [.4, .7, .85, 1][x.st] : 1 }, g);
+  }
+  // temperature
+  { const [y0, hh] = rows.temp; const lo = 18, hi = 23; const Y = (v) => y0 + (hi - v) / (hi - lo) * hh;
+    label('Room °C', y0); for (const v of [19, 21, 23]) { el('line', { x1: X(NIGHT.x0), x2: w - pr, y1: Y(v), y2: Y(v), class: 'grid' }, s); el('text', { x: w - pr + 8, y: Y(v) + 4 }, s).textContent = v + '°'; }
+    const plan = sample(planAt, NIGHT.lightsOut, NIGHT.x1, 2).map(([t, v]) => [X(t), Y(v)]);
+    el('path', { d: line(plan), fill: 'none', stroke: 'var(--ink-3)', 'stroke-dasharray': '3 4', 'stroke-width': 1.2 }, s);
+    const tp = sample(roomTemp, NIGHT.lightsOut, NIGHT.x1, 2).map(([t, v]) => [X(t), Y(v)]);
+    for (const g of [ghost, live]) el('path', { d: line(tp), fill: 'none', stroke: 'var(--ink)', 'stroke-width': g === live ? 2 : 1.2 }, g);
+    rows.temp.Y = Y; }
+  // CO2
+  { const [y0, hh] = rows.co2; const lo = 400, hi = 1400; const Y = (v) => y0 + (hi - v) / (hi - lo) * hh;
+    label('CO₂ ppm', y0); for (const v of [600, 1000, 1400]) { if (v !== 1000) el('line', { x1: X(NIGHT.x0), x2: w - pr, y1: Y(v), y2: Y(v), class: 'grid' }, s); el('text', { x: w - pr + 8, y: Y(v) + 4 }, s).textContent = fmtN(v); }
+    el('line', { x1: X(NIGHT.x0), x2: w - pr, y1: Y(1000), y2: Y(1000), class: 'threshold' }, s);
+    const cp2 = sample(co2, NIGHT.lightsOut, NIGHT.wake, 2).map(([t, v]) => [X(t), Y(v)]);
+    // status area only above the threshold
+    const above = sample(co2, NIGHT.lightsOut, NIGHT.wake, 2).map(([t, v]) => [X(t), Y(Math.max(1000, v))]);
+    el('path', { d: line(above) + `L${X(NIGHT.wake)} ${Y(1000)}L${X(NIGHT.lightsOut)} ${Y(1000)}Z`, fill: 'var(--signal-soft)' }, live);
+    for (const g of [ghost, live]) el('path', { d: line(cp2), fill: 'none', stroke: 'var(--ink)', 'stroke-width': g === live ? 2 : 1.2 }, g);
+    rows.co2.Y = Y; }
+  // aircon ticks
+  { const [y0, hh] = rows.ac; label('Aircon', y0 - (desk ? 0 : 0));
+    for (const a of AIRCON) if (a.t >= NIGHT.x0 && a.t <= NIGHT.x1) for (const g of [ghost, live]) el('line', { x1: X(a.t), x2: X(a.t), y1: y0, y2: y0 + hh, stroke: 'var(--ink)', 'stroke-width': 2 }, g); }
+  // cursor
+  const cur = el('g', {}, s);
+  el('line', { x1: 0, x2: 0, y1: top, y2: y - gap, stroke: 'var(--signal)', 'stroke-width': 1.5 }, cur);
+  const d1 = el('circle', { r: 4.5, fill: 'var(--bg)', stroke: 'var(--signal)', 'stroke-width': 2 }, s);
+  const d2 = el('circle', { r: 4.5, fill: 'var(--bg)', stroke: 'var(--signal)', 'stroke-width': 2 }, s);
+  NF = { X, cr, cur, d1, d2, rows };
+}
+let lastT = -1;
+function scrubNight() {
+  if (!NF) return;
+  const sec = document.getElementById('c-night'); const r = sec.getBoundingClientRect();
+  const span = sec.offsetHeight - innerHeight * .9; let p = Math.min(1, Math.max(0, -r.top / span));
+  const t = NIGHT.lightsOut + p * (NIGHT.wake - NIGHT.lightsOut);
+  if (Math.abs(t - lastT) < .2) return; lastT = t;
+  const x = NF.X(t); NF.cr.setAttribute('width', x); NF.cur.setAttribute('transform', `translate(${x},0)`);
+  NF.d1.setAttribute('cx', x); NF.d1.setAttribute('cy', NF.rows.temp.Y(roomTemp(t)));
+  NF.d2.setAttribute('cx', x); NF.d2.setAttribute('cy', NF.rows.co2.Y(co2(t)));
+  document.getElementById('ro-clock').textContent = clock(t);
+  const st = (k) => { const v = stageAt(HYP[k], Math.min(t, NIGHT.wake - .5)); return v < 0 ? 'Not in bed' : STAGES[v]; };
+  document.getElementById('ro-you').textContent = st('you');
+  document.getElementById('ro-erik').textContent = st('erik');
+  document.getElementById('ro-temp').textContent = roomTemp(t).toFixed(1) + '°';
+  const c = co2(t); const ce = document.getElementById('ro-co2'); ce.textContent = fmtN(c); ce.style.color = c >= 1000 ? 'var(--signal)' : '';
+  let on = 0; STEP.forEach((x, i) => { if (t >= x.t - 1) on = i; });
+  document.querySelectorAll('#steps li').forEach((li, i) => { li.classList.toggle('on', i === on); li.classList.toggle('past', i < on); });
+}
+
+/* --- air: 30-night bars + fresh air gauge --- */
+function drawBars() {
+  const box = document.getElementById('bars'); const H = isDesk() ? 240 : 200; const [s, w] = svgIn(box, H);
+  const r = rng(30); const vals = []; for (let i = 0; i < 29; i++) vals.push(Math.round(924 + (r() - .5) * 190 + Math.sin(i / 3) * 30)); vals.push(958);
+  const pl = 0, pr = 44, pt = 8, pb = 26, lo = 600, hi = 1150; const bw = (w - pl - pr) / 30;
+  const Y = (v) => pt + (hi - v) / (hi - lo) * (H - pt - pb);
+  for (const v of [800, 1000]) { el('line', { x1: 0, x2: w - pr, y1: Y(v), y2: Y(v), class: v === 1000 ? 'threshold' : 'grid' }, s); el('text', { x: w - pr + 8, y: Y(v) + 4 }, s).textContent = fmtN(v); }
+  const mean = Math.round(vals.slice(0, 29).reduce((a, b) => a + b) / 29);
+  let over = 0;
+  vals.forEach((v, i) => { const last = i === 29; if (v > 1000) over++; el('rect', { x: pl + i * bw + bw * .18, y: Y(v), width: bw * .64, height: Y(lo) - Y(v), rx: 1.5, fill: v > 1000 ? 'var(--signal)' : last ? 'var(--ink)' : 'var(--line-2)' }, s); });
+  el('text', { x: 0, y: H - 6 }, s).textContent = '30 Sep';
+  const lt = el('text', { x: w - pr, y: H - 6, 'text-anchor': 'end' }, s); lt.textContent = 'Last night 958'; lt.style.fill = 'var(--ink)';
+  document.getElementById('bars-title').textContent = `${over} of the last 30 nights averaged over 1,000 ppm`;
+}
+function drawGauge() {
+  const box = document.getElementById('gauge'); const [s, w] = svgIn(box, 84); const pr = 8;
+  const X = (v) => v / .5 * (w - pr); const y = 34;
+  for (let v = 0; v <= .5001; v += .05) { const major = Math.abs((v * 10) % 1) < .01 || Math.abs((v * 10) % 1 - 1) < .01; el('line', { x1: X(v), x2: X(v), y1: y - (major ? 10 : 5), y2: y, stroke: 'var(--line-2)' }, s); if (major) el('text', { x: X(v), y: y + 24, 'text-anchor': v === 0 ? 'start' : 'middle' }, s).textContent = v.toFixed(1); }
+  el('line', { x1: 0, x2: w - pr, y1: y, y2: y, stroke: 'var(--line-2)' }, s);
+  el('rect', { x: 0, y: y - 4, width: X(.17), height: 4, fill: 'var(--ink)' }, s);
+  el('rect', { x: X(.17) - 1.5, y: y - 18, width: 3, height: 22, fill: 'var(--ink)' }, s);
+  const a = el('text', { x: X(.17), y: y - 24, 'text-anchor': 'middle' }, s); a.textContent = '0.17 last night'; a.style.fill = 'var(--ink)';
+  el('rect', { x: X(.32) - 1.5, y: y - 18, width: 3, height: 22, fill: 'var(--signal)' }, s);
+  const b = el('text', { x: X(.32), y: y - 24, 'text-anchor': 'middle' }, s); b.textContent = '0.32 needed'; b.style.fill = 'var(--signal)';
+  el('text', { x: w - pr, y: y + 46, 'text-anchor': 'end' }, s).textContent = 'air changes per hour';
+}
+
+/* --- stage bars --- */
+(function () {
+  const box = document.getElementById('stages');
+  box.innerHTML = ['you', 'erik'].map((k) => { const st = stat[k]; const tot = st.asleep + st.awake; const seg = [[st.deep, 1, 'Deep'], [st.light, .8, 'Light'], [st.rem, .6, 'REM'], [st.awake, .3, 'Awake']];
+    return `<div><div style="display:flex;justify-content:space-between;align-items:baseline"><span class="who" style="font-size:var(--t-sec)"><span class="sw ${k}"></span>${k === 'you' ? 'You' : 'Erik'}</span><span class="num" style="font-size:var(--t-body);font-weight:500">${hm(st.asleep)} <span class="cap">asleep</span></span></div>
+      <div class="stagebar">${seg.map(([m, o]) => `<i style="width:${m / tot * 100}%;background:var(--${k});opacity:${o}"></i>`).join('')}</div>
+      <div class="stage-key">${seg.map(([m, , n]) => `<span>${n} <b class="num">${hm(m)}</b></span>`).join('')}</div></div>`; }).join('');
+})();
+
+/* --- drivers --- */
+(function () {
+  const D = [[10, 'HRV 24% above baseline', 'Erik'], [9, 'On the temperature curve 92% of the night', 'Room · first 4 h averaged 19.6°'], [-5, 'Humidity above 60% for 2h 04m', 'Room'], [5, 'Lowest heart rate 4 bpm below baseline', 'Erik'], [3, 'Steady temperature, ±0.4° around the curve', 'Room'], [3, 'HRV 4% above baseline', 'You'], [-2, `CO₂ above 1,000 for ${hm(above)}`, 'Room'], [-1, 'Lowest heart rate 1 bpm above baseline', 'You']];
+  document.getElementById('drivers').innerHTML = D.map(([p, t, src]) => { const wd = Math.abs(p) / 10 * 50;
+    return `<li><span class="pts num ${p < 0 ? 'neg' : ''}">${p > 0 ? '+' : '−'}${Math.abs(p)}</span><span class="txt">${t}<small>${src}</small></span><span class="bar"><i class="${p < 0 ? 'neg' : ''}" style="${p < 0 ? `right:50%;width:${wd}%` : `left:50%;width:${wd}%`}"></i></span></li>`; }).join('');
+})();
+
+/* --- tonight's plan --- */
+function drawPlan() {
+  const box = document.getElementById('plan'); const H = isDesk() ? 320 : 240; const [s, w] = svgIn(box, H);
+  const a = M(21, 30), b = M(7, 30), lo = 18, hi = 23.5, pl = 0, pr = 34, pt = 30, pb = 26;
+  const X = (t) => pl + (t - a) / (b - a) * (w - pl - pr), Y = (v) => pt + (hi - v) / (hi - lo) * (H - pt - pb);
+  for (const v of [19, 21, 23]) { el('line', { x1: 0, x2: w - pr, y1: Y(v), y2: Y(v), class: 'grid' }, s); el('text', { x: w - pr + 8, y: Y(v) + 4 }, s).textContent = v + '°'; }
+  for (const h of [22, 24, 26, 28, 30]) el('text', { x: X(h * 60), y: H - 6, 'text-anchor': 'middle' }, s).textContent = clock(h * 60);
+  el('path', { d: line(sample(roomTemp, M(22, 40), M(7, 0), 3).map(([t, v]) => [X(t), Y(Math.min(hi, v))])), fill: 'none', stroke: 'var(--ink-3)', 'stroke-width': 1.4 }, s);
+  const pts = sample(planAt, M(21, 47), M(7, 0), 1).map(([t, v]) => [X(t), Y(v)]);
+  // step shape
+  const p = el('path', { d: line(pts), fill: 'none', stroke: 'var(--signal)', 'stroke-width': 2.4, 'stroke-linejoin': 'round', class: 'trace' }, s);
+  p.style.setProperty('--len', p.getTotalLength());
+  const desk = isDesk();
+  PLAN.forEach((ph, i) => { const t = NIGHT.lightsOut + ph.rel; el('circle', { cx: X(t), cy: Y(ph.temp), r: 4, fill: 'var(--bg)', stroke: 'var(--signal)', 'stroke-width': 2 }, s);
+    if (desk || i % 2 === 0 || i === 5) { const tx = el('text', { x: X(t), y: Y(ph.temp) - 12, 'text-anchor': i === 0 ? 'start' : i === 5 ? 'end' : 'middle' }, s); tx.textContent = ph.temp.toFixed(1) + '°'; tx.style.fill = 'var(--ink)'; tx.setAttribute('paint-order','stroke'); tx.setAttribute('stroke','var(--bg)'); tx.setAttribute('stroke-width','5'); } });
+  document.getElementById('logt').innerHTML = AIRCON.map((x) => `<tr><td class="num">${clock(x.t)}</td><td class="num">${x.set}</td><td>${x.what}</td></tr>`).join('');
+  if (desk) document.getElementById('log').open = true;
+}
+
+/* --- chapter tracking: topbar label + progress; desktop toc --- */
+const CH = [...document.querySelectorAll('[data-chap]')];
+document.getElementById('toc').innerHTML = CH.map((c) => `<a href="#${c.id}"><i></i>${c.dataset.chap}</a>`).join('');
+function track() {
+  const y = scrollY + innerHeight * .4; let on = 0; CH.forEach((c, i) => { if (c.getBoundingClientRect().top + scrollY <= y) on = i; });
+  document.getElementById('chap').textContent = CH[on].dataset.chap;
+  document.querySelectorAll('#toc a').forEach((a, i) => a.classList.toggle('on', i === on));
+  const max = document.documentElement.scrollHeight - innerHeight; document.getElementById('prog').style.transform = `scaleX(${max > 0 ? scrollY / max : 0})`;
+}
+
+function drawAll() { drawStrip(); drawPrecool(); drawNight(); drawBars(); drawGauge(); drawPlan(); lastT = -1; scrubNight(); }
+drawAll(); initReveal(); track();
+addEventListener('scroll', () => { scrubNight(); track(); }, { passive: true });
+let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(drawAll, 120); });
+
+/* count-up on the hero number (transform/opacity-free, text only, skipped for reduced motion) */
+if (!document.documentElement.classList.contains('still')) { const e = document.getElementById('score'); const t0 = performance.now(); (function f(n) { const k = Math.min(1, (n - t0) / 1100); e.textContent = Math.round(75 * (1 - Math.pow(1 - k, 3))); if (k < 1) requestAnimationFrame(f); })(t0); }
+</script>
+</body>
+</html>

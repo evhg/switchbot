@@ -1,221 +1,250 @@
 /* =====================================================================================================
-   Design tokens: "Kinetic Night" (docs/DESIGN.md §2–§5, §9.1).
-   Every colour in the app (CSS, inline SVG and Recharts) reads from these custom properties, so the three
-   themes swap in one place. Theme = data-theme on <html> ('light' | 'dark' | 'night'), set before first
-   paint by lib/theme-boot.ts. Token NAMES used by charts are stable; only values change per theme.
+   Design tokens: v2 "Instrument" (docs/DESIGN.md §3–§5, §8.1).
+   One family (Inter Tight), neutral greys, ONE signal colour per theme that only ever means something
+   (selected item, scrub cursor, plan line, over a limit). Theme = data-theme on <html> ('light' | 'dark' |
+   'night'), set before first paint by lib/theme-boot.ts. Charts read only these variables.
+
+   Retired v1 names are kept as ALIASES at the bottom of each block so screens still render until they migrate
+   (§3.4): --ch-accent / --ac-* → --signal, --s1…--s8 → series, --seq/--seq-2 → people, --font-mono → --font,
+   --surface-glass → solid, --sky-* / --star / --glow-o / --shine-o / --raise → none. Do not use them in new code.
    ===================================================================================================== */
 
 :root {
-  /* ---------- Type ---------- */
-  --font: var(--font-display, ui-sans-serif), system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-num: var(--font-display, ui-sans-serif), system-ui, -apple-system, sans-serif;
-  --font-mono: var(--font-geist-mono, ui-monospace), ui-monospace, 'SF Mono', Menlo, monospace;
+  /* ---------- Type (§4) ---------- */
+  --font: var(--font-display, ui-sans-serif), system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-num: var(--font);
+  --font-code: ui-monospace, 'SF Mono', Menlo, monospace; /* Diagnostics .code only */
+  --font-mono: var(--font); /* RETIRED alias (v1 Geist Mono) */
 
-  /* ---------- Spacing (4px grid) ---------- */
+  /* Seven roles; they step at 1024 and 1920 (below). Nothing is smaller than --t-cap. */
+  --t-display: 96px;
+  --t-hero: 144px;   /* Today score only: 1.5 × display */
+  --t-num: 48px;
+  --t-title: 30px;
+  --t-head: 20px;
+  --t-body: 17px;
+  --t-sec: 15px;
+  --t-cap: 13px;
+
+  /* ---------- Spacing (4/8 scale) ---------- */
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px;
-  --sp-8: 32px; --sp-10: 40px; --sp-12: 48px; --sp-16: 64px; --sp-24: 96px;
-  --gutter: 16px;
-  --content-max: 560px;
+  --sp-8: 32px; --sp-10: 40px; --sp-12: 48px; --sp-16: 64px; --sp-20: 80px; --sp-24: 96px;
+  --section: 64px;        /* between sections */
+  --gutter: 20px;         /* phone side padding; desktop uses --pad-x */
+  --pad-x: var(--gutter); /* content side padding (shell) */
 
-  /* ---------- Radii ---------- */
-  --r-xl: 28px; --r-lg: 22px; --r-md: 14px; --r-sm: 10px; --r-pill: 999px;
-  --radius: var(--r-lg);
+  /* ---------- Layout (§5) ---------- */
+  --sidebar-w: 264px;
+  --content-max: 1240px;  /* 12-col grid max (1400 ≥1920) */
+  --measure: 672px;       /* reading column: settings detail, vitals list */
+  --measure-plan: 832px;  /* Tonight's plan */
+  --measure-text: 38rem;  /* body copy */
+  --measure-lede: 30rem;  /* scene ledes */
+  --col-gap: 32px;
+  --topbar-h: 56px;
+  --tabbar-h: 64px;
+  --tabbar-space: calc(var(--tabbar-h) + 16px); /* reserved below content on phone (+ safe area) */
 
-  /* ---------- Chrome sizes ---------- */
-  --tabbar-h: 62px;        /* the floating pill itself */
-  --tabbar-space: 84px;    /* reserved below content */
-  --topbar-h: 48px;
+  /* ---------- Radii: only these four ---------- */
+  --r-s: 10px; --r-m: 14px; --r-l: 20px; --r-pill: 999px;
+  /* RETIRED aliases */
+  --r-sm: var(--r-s); --r-md: var(--r-m); --r-lg: var(--r-l); --r-xl: var(--r-l); --radius: var(--r-l);
 
-  /* ---------- Motion (§9.1) ---------- */
-  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  /* ---------- Motion (§8.1) ---------- */
+  --ease: cubic-bezier(.2, .7, .2, 1);
   --ease-io: cubic-bezier(.65, 0, .35, 1);
-  --ease-pop: cubic-bezier(.34, 1.36, .64, 1);
-  --d-fast: 180ms; --d-base: 320ms; --d-reveal: 900ms; --d-draw: 1300ms; --d-count: 1300ms; --d-ring: 1600ms;
-  --stagger: 70ms; --rise: 28px;
+  --ease-out: var(--ease);           /* v1 name, kept */
+  --ease-pop: var(--ease);           /* RETIRED: no overshoot in v2 */
+  --d-fast: 180ms; --d-base: 300ms; --d-reveal: 700ms; --d-draw: 1400ms; --d-count: 1200ms; --d-ring: 1200ms;
+  --stagger: 80ms; --rise: 18px;
 
-  /* ======================= LIGHT ("ivory paper") — default ======================= */
+  /* ======================= LIGHT (default when no data-theme) ======================= */
   color-scheme: light;
-  --bg: #f5f1e8;
-  --surface: #fffdf9;
-  --surface-2: #efe9dc;
-  --surface-glass: rgba(250, 247, 240, .78);
-  --text: #14131a;
-  --text-2: #55525e;
-  --muted: #8b8794;
-  --hairline: rgba(20, 19, 26, .09);
-  --hairline-2: rgba(20, 19, 26, .16);
-  --border: var(--hairline);
-  --grid: rgba(20, 19, 26, .07);
-  --axis: rgba(20, 19, 26, .18);
-  --ring-track: rgba(20, 19, 26, .08);
+  --bg: #f4f3ef;
+  --rail: #ebeae5;
+  --surface: #ffffff;
+  --surface-2: #efeee9;
+  --hairline: #dfddd6;
+  --hairline-2: #c9c7bf;
+  --grid: #e8e6e0;
+  --axis: #c9c7bf;
+  --text: #141413;
+  --text-2: #4c4b47;
+  --muted: #66655f;
+  --text-3: var(--muted);
+  --signal: #c2410c;
+  --signal-soft: rgba(194, 65, 12, .12);
   --on-accent: #ffffff;
-  --num-color: var(--text);
+  --ring-track: #e3e1da;
+  --ghost: .42;
+  --shadow: 0 1px 2px rgba(20, 20, 19, .05);
+  --scrim: rgba(20, 20, 19, .32);
+  --ink-rgb: 20, 20, 19;
 
-  --person-a: #2f6fe0;
-  --person-b: #d9622a;
-  --temp: #0a8fc0;
-  --co2: #c77d00;
-  --rh: #6250d6;
-  --setpoint: #a86d00;
-  --dew: #c2457a;
-  --outdoor: #d03b3b;
-
-  /* Legacy categorical slots (still read by a few charts). */
-  --s1: var(--person-a); --s2: var(--person-b); --s3: #1f9e5a; --s4: #d99400; --s5: #c2457a; --s7: #6250d6; --s8: #d03b3b;
-
-  --good: #1f9e5a; --warn: #d99400; --serious: #e0763f; --critical: #d03b3b;
-  --good-text: #13703f; --bad-text: #b02a2a;
-  --band-good: rgba(31, 158, 90, .07);
-  --band-warn: rgba(217, 148, 0, .10);
-  --band-serious: rgba(224, 118, 63, .11);
-  --band-critical: rgba(208, 59, 59, .12);
-
-  --stage-deep: #1d3fc4; --stage-light: #4f7fe8; --stage-rem: #9db6f2; --stage-awake: #d99400;
-
-  --seq: #2f6fe0; --seq-2: #d9622a;
-  --div-pos: #5a9e00; --div-neg: #d03b3b; --div-mid: #efe9dc;
-  --spark-line: #8b8794; --spark-band: rgba(20, 19, 26, .05);
-
-  --ghost: .18;
-  --glow-o: .35;
-  --shine-o: .5;
-  --shadow: 0 1px 1px rgba(20, 19, 26, .04), 0 6px 16px -6px rgba(20, 19, 26, .08), 0 28px 56px -18px rgba(20, 19, 26, .14);
-  --raise: none;
-  --skeleton-shine: rgba(255, 255, 255, .55);
-
-  /* Chapter accents (§3.4). <Chapter accent="night"> sets --ch-accent: var(--ac-night). */
-  --ac-verdict: #5b4bd6;
-  --ac-lights: #0a8fc0;
-  --ac-night: #2f5fe0;
-  --ac-air: #c77d00;
-  --ac-bodies: var(--text);
-  --ac-drivers: #5a9e00;
-  --ac-drivers-neg: #d03b3b;
-  --ac-tonight: #0f9e66;
-  --ch-accent: var(--ac-verdict);
-  --accent: var(--ch-accent);
-
-  /* Sky (§3.5): three layers, only opacity animates. */
-  --sky-dusk: linear-gradient(180deg, #f7e3d3 0%, #efe2ef 50%, var(--bg) 100%);
-  --sky-mid: linear-gradient(180deg, #e6e9f5 0%, var(--bg) 70%);
-  --sky-dawn: linear-gradient(180deg, #e2f0ea 0%, var(--bg) 70%);
-  --star: transparent;
+  --person-a: var(--text);
+  --person-b: #3c6c98;
+  --temp: #5d5a54; /* neutral: room temperature is a quiet series, never a third accent */
+  --co2: #8f6a14;
+  --rh: #5a4fb8;
+  --setpoint: var(--muted);
+  --outdoor: #a6503a;
+  --dew: #8a4f99;
 }
 
 /* ======================= DARK (the main look) ======================= */
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --bg: #000000;
-  --surface: #0b0b0c;
-  --surface-2: #141416;
-  --surface-glass: rgba(10, 10, 12, .82);
-  --text: #f4f4f1;
-  --text-2: #a7a7a2;
-  --muted: #6c6c68;
-  --hairline: rgba(255, 255, 255, .09);
-  --hairline-2: rgba(255, 255, 255, .16);
-  --grid: rgba(255, 255, 255, .07);
-  --axis: rgba(255, 255, 255, .16);
-  --ring-track: rgba(255, 255, 255, .08);
-  --on-accent: #000000;
+  --bg: #0e0e0f;
+  --rail: #0a0a0b;
+  --surface: #151516;
+  --surface-2: #1d1d1f;
+  --hairline: #262628;
+  --hairline-2: #38383b;
+  --grid: #1c1c1e;
+  --axis: #38383b;
+  --text: #f1f0ec;
+  --text-2: #aeada7;
+  --muted: #8a8983;
+  --signal: #ff5f1f;
+  --signal-soft: rgba(255, 95, 31, .16);
+  --on-accent: #120700;
+  --ring-track: #232325;
+  --ghost: .44;
+  --shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
+  --scrim: rgba(0, 0, 0, .55);
+  --ink-rgb: 241, 240, 236;
 
-  --person-a: #4d9bff;
-  --person-b: #ff7a3d;
-  --temp: #3fd0ff;
-  --co2: #ffb020;
-  --rh: #9085e9;
-  --setpoint: #c98500;
-  --dew: #d55181;
-  --outdoor: #e66767;
-  --s3: #3ddc84; --s4: #c98500; --s5: #d55181; --s7: #9085e9; --s8: #e66767;
-
-  --good: #3ddc84; --warn: #ffb020; --serious: #ff8a4c; --critical: #ff5a4e;
-  --good-text: #5be39a; --bad-text: #ff7a70;
-  --band-good: rgba(61, 220, 132, .05);
-  --band-warn: rgba(255, 176, 32, .09);
-  --band-serious: rgba(255, 138, 76, .12);
-  --band-critical: rgba(255, 90, 78, .16);
-
-  --stage-deep: #2f5bff; --stage-light: #6f9bff; --stage-rem: #b7c9ff; --stage-awake: #ffb020;
-
-  --seq: #4d9bff; --seq-2: #ff7a3d;
-  --div-pos: #c8ff3d; --div-neg: #ff5a4e; --div-mid: #141416;
-  --spark-line: #6c6c68; --spark-band: rgba(255, 255, 255, .05);
-
-  --ghost: .14;
-  --glow-o: .22;
-  --shine-o: .35;
-  --shadow: none;
-  --raise: inset 0 1px 0 rgba(255, 255, 255, .06);
-  --skeleton-shine: rgba(255, 255, 255, .06);
-
-  --ac-verdict: #a495ff;
-  --ac-lights: #3fd0ff;
-  --ac-night: #5b8cff;
-  --ac-air: #ffb020;
-  --ac-drivers: #c8ff3d;
-  --ac-drivers-neg: #ff5a4e;
-  --ac-tonight: #3dffa8;
-
-  --sky-dusk: radial-gradient(120% 50% at 50% 100%, rgba(255, 154, 90, .12), transparent 70%), linear-gradient(180deg, #1a1233 0%, #2c1a3f 45%, #000 100%);
-  --sky-mid: linear-gradient(180deg, #05071a 0%, #000 70%);
-  --sky-dawn: radial-gradient(120% 50% at 50% 100%, rgba(40, 200, 190, .10), transparent 70%), linear-gradient(180deg, #071a24 0%, #0e2a33 40%, #000 100%);
-  --star: #ffffff;
+  --person-b: #8fb0cf;
+  --temp: #b4b1aa; /* neutral (one accent per context) */
+  --co2: #d1b47c;
+  --rh: #a8a0e0;
+  --outdoor: #c98f7a;
+  --dew: #b892c4;
 }
 
-/* ======================= NIGHT: red on black, very low luminance =======================
-   Rules: no hue outside red; no pixel brighter than #c42a1e; G and B channels ≤ 0x30. Identity rides on
-   lightness, dash patterns and labels, never hue. No glows, sky, stars, gradients, shine or blur. */
+/* ======================= NIGHT: red on black, very low luminance (§3.5) =======================
+   No hue outside red; no pixel brighter than #c42a1e; G and B ≤ 0x30. No blur, shadow, translucency or ambient
+   motion. Essential text uses --text at ≥17px; --text-2 / --muted only for redundant info. */
 :root[data-theme='night'] {
   color-scheme: dark;
   --bg: #000000;
-  --surface: #070000;
-  --surface-2: #100100;
-  --surface-glass: #050000;
-  --text: #a3241a;
-  --text-2: #7d1a12;
-  --muted: #5c130d;
-  --hairline: rgba(150, 24, 12, .18);
-  --hairline-2: rgba(150, 24, 12, .30);
+  --rail: #000000;
+  --surface: #0c0201;
+  --surface-2: #160403;
+  --hairline: #2a0705;
+  --hairline-2: #3d0a07;
   --grid: #170302;
   --axis: #2a0604;
-  --ring-track: #1c0302;
+  --text: #c42a1e;
+  --text-2: #9a2016;
+  --muted: #7a1a12;
+  --signal: #c42a1e;
+  --signal-soft: rgba(196, 42, 30, .18);
   --on-accent: #000000;
-  --num-color: var(--text-2);
-
-  --person-a: #a3241a;
-  --person-b: #6e170f;
-  --temp: #9c2219;
-  --co2: #7d1a12;
-  --rh: #6e170f;
-  --setpoint: #7d1a12;
-  --dew: #8a1c13;
-  --outdoor: #b0261b;
-  --s1: #b0261b; --s2: #6e170f; --s3: #9c2219; --s4: #7d1a12; --s5: #8a1c13; --s7: #6e170f; --s8: #b0261b;
-
-  --good: #5c130d; --warn: #7d1a12; --serious: #9c2219; --critical: #c42a1e;
-  --good-text: #8f1f16; --bad-text: #c42a1e;
-  --band-good: rgba(120, 20, 10, .04);
-  --band-warn: rgba(140, 25, 15, .10);
-  --band-serious: rgba(160, 30, 20, .16);
-  --band-critical: rgba(190, 35, 25, .24);
-
-  --stage-deep: #560f09; --stage-light: #7a1a11; --stage-rem: #8f1f16; --stage-awake: #b0261b;
-
-  --seq: #b0261b; --seq-2: #b0261b;
-  --div-pos: #7d1a12; --div-neg: #b0261b; --div-mid: #1c0302;
-  --spark-line: #5c130d; --spark-band: #140201;
-
-  --ghost: .25;
-  --glow-o: 0;
-  --shine-o: 0;
+  --ring-track: #1c0302;
+  --ghost: .38;
   --shadow: none;
-  --raise: none;
+  --scrim: rgba(0, 0, 0, .85);
+  --ink-rgb: 196, 42, 30;
+
+  --person-a: #c42a1e;
+  --person-b: #8a1d14;
+  --temp: #c42a1e;
+  --co2: #9a2016;
+  --rh: #7a1a12;
+  --outdoor: #7a1a12;
+  --dew: #7a1a12;
+}
+
+/* ======================= Derived tokens (all themes) ======================= */
+:root,
+:root[data-theme] {
+  --accent: var(--signal);
+  --person: var(--person-a);
+
+  /* Status (§3.3): "fine" is not colourful. */
+  --good: var(--muted);
+  --warn: var(--text-2);
+  --serious: var(--signal);
+  --critical: var(--signal);
+  --good-text: var(--text-2);
+  --bad-text: var(--signal);
+  --band-good: transparent;
+  --band-warn: rgba(var(--ink-rgb), .04);
+  --band-serious: var(--signal-soft);
+  --band-critical: var(--signal-soft);
+
+  /* Sleep stages: the person's colour, opacity rising with depth (override --person in a scope, e.g. .p-erik). */
+  --stage-deep: var(--person);
+  --stage-light: color-mix(in srgb, var(--person) 85%, var(--bg));
+  --stage-rem: color-mix(in srgb, var(--person) 70%, var(--bg));
+  --stage-awake: color-mix(in srgb, var(--person) 40%, var(--bg));
+
+  /* Diverging (driver bars, effect sizes, matrix). */
+  --div-pos: var(--text);
+  --div-neg: var(--signal);
+  --div-mid: var(--surface-2);
+
+  --spark-line: var(--muted);
+  --spark-band: rgba(var(--ink-rgb), .06);
+  --skeleton-shine: rgba(var(--ink-rgb), .05);
+  --num-color: var(--text);
+  --border: var(--hairline);
+
+  /* ---------- RETIRED aliases (§3.4) — keep screens rendering; delete after migration ---------- */
+  --ch-accent: var(--signal);
+  --ac-verdict: var(--signal); --ac-lights: var(--signal); --ac-night: var(--signal); --ac-air: var(--signal);
+  --ac-bodies: var(--signal); --ac-drivers: var(--signal); --ac-drivers-neg: var(--signal); --ac-tonight: var(--signal);
+  --s1: var(--person-a); --s2: var(--person-b); --s3: var(--temp); --s4: var(--co2); --s5: var(--dew); --s6: var(--rh);
+  --s7: var(--rh); --s8: var(--outdoor);
+  --seq: var(--person-a); --seq-2: var(--person-b);
+  --surface-glass: var(--surface);
+  --sky-dusk: none; --sky-mid: none; --sky-dawn: none; --star: transparent;
+  --glow-o: 0; --shine-o: 0; --raise: none;
+}
+:root[data-theme='night'] {
+  --stage-deep: #c42a1e; --stage-light: #9a2016; --stage-rem: #7a1a12; --stage-awake: #4a0f09;
+  --spark-band: #140201;
   --skeleton-shine: transparent;
+}
+.p-erik { --person: var(--person-b); }
+.p-you { --person: var(--person-a); }
+/* Stage tokens are re-derived inside a person scope (custom properties resolve where they are declared). */
+.p-erik, .p-you {
+  --stage-deep: var(--person);
+  --stage-light: color-mix(in srgb, var(--person) 85%, var(--bg));
+  --stage-rem: color-mix(in srgb, var(--person) 70%, var(--bg));
+  --stage-awake: color-mix(in srgb, var(--person) 40%, var(--bg));
+}
+:root[data-theme='night'] .p-erik, :root[data-theme='night'] .p-you {
+  --stage-deep: #c42a1e; --stage-light: #9a2016; --stage-rem: #7a1a12; --stage-awake: #4a0f09;
+}
 
-  --ac-verdict: #a3241a; --ac-lights: #a3241a; --ac-night: #a3241a; --ac-air: #a3241a;
-  --ac-bodies: #a3241a; --ac-drivers: #a3241a; --ac-drivers-neg: #b0261b; --ac-tonight: #a3241a;
-
-  --sky-dusk: none; --sky-mid: none; --sky-dawn: none;
-  --star: transparent;
+/* ======================= Breakpoint steps (§4.2, §5) ======================= */
+@media (min-width: 1024px) {
+  :root {
+    --t-display: 136px; --t-hero: 204px; --t-num: 60px; --t-title: 36px; --t-head: 22px;
+    --t-body: 18px; --t-sec: 16px; --t-cap: 14px;
+    --section: 112px;
+    --pad-x: clamp(40px, 5vw, 96px);
+  }
+}
+@media (min-width: 1920px) {
+  :root {
+    --t-display: 168px; --t-hero: 252px; --t-num: 72px; --t-title: 42px; --t-head: 24px;
+    --t-body: 19px; --t-sec: 17px; --t-cap: 15px;
+    --section: 136px;
+    --sidebar-w: 300px;
+    --content-max: 1400px;
+    --pad-x: 64px;
+  }
+}
+/* Large desktop (a 5K display is ~2560 CSS px): one more step so nothing reads small at arm's length. */
+@media (min-width: 2400px) {
+  :root {
+    --t-title: 46px; --t-head: 26px;
+    --t-body: 20px; --t-sec: 18px; --t-cap: 16px;
+    --sidebar-w: 320px;
+    --content-max: 1480px;
+  }
 }

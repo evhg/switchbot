@@ -1,7 +1,7 @@
 'use client';
 import { useMemo, useState } from 'react';
 import { downsample, targetAt, type Night, type Person, type RoomEvent, type SleepStage, type TemperatureCurve } from '@sleep-lab/core';
-import { CO2_BANDS, fmt, hm, hourTicks, MIN } from '@/lib/format.ts';
+import { fmt, hm, hourTicks, MIN } from '@/lib/format.ts';
 import { useWidth } from '../ui.tsx';
 import { FloatTip, linePath, scale, TipRow } from './common.tsx';
 
@@ -9,7 +9,7 @@ export const STAGE_ORDER: SleepStage[] = ['awake', 'rem', 'light', 'deep'];
 export const STAGE_LABEL: Record<SleepStage, string> = { awake: 'Awake', rem: 'REM', light: 'Light', deep: 'Deep' };
 export const stageColor = (s: SleepStage) => `var(--stage-${s})`;
 
-const L = 44;
+const L = 64;
 const R = 8;
 
 export function EventGlyph({ kind, x, y, s = 1 }: { kind: RoomEvent['kind'] | 'ac'; x: number; y: number; s?: number }) {
@@ -72,7 +72,7 @@ export function NightStrip({ night, people, curve, events }: { night: Night; peo
   }, [curve, night.lightsOut, from, to]);
 
   const persons = night.people.filter((p) => p.sleep.stages.length);
-  const rows = { hyp: 40, gap: 16, temp: 64, rh: 42, co2: 64, ac: 22, ev: 22, axis: 18 };
+  const rows = { hyp: 60, gap: 20, temp: 72, rh: 48, co2: 72, ac: 24, ev: 26, axis: 22 };
   let y = 4;
   const hypY = persons.map(() => {
     const v = y;
@@ -126,12 +126,12 @@ export function NightStrip({ night, people, curve, events }: { night: Night; peo
   const hEv = hover !== null ? events.find((e) => e.kind !== 'room_empty' && Math.abs(e.start - hover) < 8 * MIN) : undefined;
 
   const name = (id: string) => people.find((p) => p.id === id)?.name ?? id;
-  const lvlY = (pi: number, s: SleepStage) => hypY[pi]! + (STAGE_ORDER.indexOf(s) / 3) * (rows.hyp - 8) + 4;
+  const lvlY = (pi: number, s: SleepStage) => hypY[pi]! + 22 + (STAGE_ORDER.indexOf(s) / 3) * (rows.hyp - 28);
 
   return (
     <div ref={ref} className="chart-box" style={{ touchAction: 'pan-y' }}>
       {width > 0 && (
-        <svg width={w} height={H} style={{ fontFamily: 'var(--font-mono)', letterSpacing: '.08em' }} role="img" aria-label="Night strip: sleep stages and room temperature, humidity and CO2 over the night">
+        <svg width={w} height={H} role="img" aria-label="Night strip: sleep stages and room temperature, humidity and CO2 over the night">
           {/* gridlines */}
           {ticks.map((t) => (
             <line key={t} x1={x(t)} x2={x(t)} y1={hypY[0] ?? tempY} y2={axisY - 2} stroke="var(--grid)" />
@@ -145,13 +145,13 @@ export function NightStrip({ night, people, curve, events }: { night: Night; peo
 
           {/* hypnograms */}
           {persons.map((p, pi) => (
-            <g key={p.personId}>
-              <text x={0} y={hypY[pi]! + 12} fill="var(--text-2)" fontSize={9.5} fontWeight={500}>
-                {name(p.personId).toUpperCase()}
+            <g key={p.personId} className={people.findIndex((x) => x.id === p.personId) === 1 ? 'p-erik' : 'p-you'}>
+              <text x={0} y={hypY[pi]! + 14} style={{ fill: 'var(--text-2)', fontWeight: 560 }}>
+                {name(p.personId)}
               </text>
-              {STAGE_ORDER.map((s) => (
-                <text key={s} x={L - 6} y={lvlY(pi, s) + 3} fill="var(--muted)" fontSize={8} textAnchor="end">
-                  {s === 'awake' ? 'W' : s === 'rem' ? 'R' : s === 'light' ? 'L' : 'D'}
+              {(['awake', 'deep'] as const).map((st) => (
+                <text key={st} x={L - 8} y={lvlY(pi, st) + 5} textAnchor="end">
+                  {STAGE_LABEL[st]}
                 </text>
               ))}
               {p.sleep.stages.map((s, i) => {
@@ -169,64 +169,58 @@ export function NightStrip({ night, people, curve, events }: { night: Night; peo
           ))}
 
           {/* temperature */}
-          <text x={0} y={tempY + 10} fill="var(--text-2)" fontSize={9.5} fontWeight={500}>°C</text>
+          <text x={0} y={tempY + 12} style={{ fill: 'var(--text-2)', fontWeight: 560 }}>Room °C</text>
           {[tLo, Math.round((tLo + tHi) / 2), tHi].map((v) => (
-            <text key={v} x={L - 6} y={yT(v) + 3} fill="var(--muted)" fontSize={9} textAnchor="end">{v}</text>
+            <text key={v} x={L - 8} y={yT(v) + 5} textAnchor="end">{v}°</text>
           ))}
-          <path d={linePath(target.map((t) => ({ x: x(t.ts), y: yT(t.t) })))} fill="none" stroke="var(--text-2)" strokeOpacity={0.7} strokeWidth={1.2} strokeDasharray="3 3" />
+          <path d={linePath(target.map((t) => ({ x: x(t.ts), y: yT(t.t) })))} fill="none" stroke="var(--muted)" strokeWidth={1.5} strokeDasharray="4 4" />
           <clipPath id="ns-temp-clip">
             <rect x={L} y={tempY - 2} width={w - L - R} height={rows.temp + 4} />
           </clipPath>
-          <path clipPath="url(#ns-temp-clip)" d={linePath(room.map((r) => ({ x: x(r.ts), y: yT(r.tempC) })), 12)} fill="none" stroke="var(--temp)" strokeWidth={2.2} strokeLinejoin="round" strokeLinecap="round" />
+          <path clipPath="url(#ns-temp-clip)" d={linePath(room.map((r) => ({ x: x(r.ts), y: yT(r.tempC) })), 12)} fill="none" stroke="var(--temp)" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
           {offTop && (
             <g>
               <path d={`M${x(offTop.ts) + 2},${tempY + 6} l4,-6 l4,6`} fill="none" stroke="var(--temp)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
-              <text x={x(offTop.ts) + 13} y={tempY + 7} fill="var(--temp)" fontSize={9}>
-                {fmt(offTop.max, 1)}° pre-cool, off scale
+              <text x={x(offTop.ts) + 13} y={tempY + 9} style={{ fill: 'var(--text-2)' }}>
+                {fmt(offTop.max, 1)}° before the pre-cool
               </text>
             </g>
           )}
 
           {/* RH */}
-          <text x={0} y={rhY + 10} fill="var(--text-2)" fontSize={9.5} fontWeight={500}>RH</text>
-          <rect x={L} y={yR(55)} width={w - L - R} height={Math.max(0, yR(45) - yR(55))} fill="var(--rh)" opacity={0.08} />
+          <text x={0} y={rhY + 12} style={{ fill: 'var(--text-2)', fontWeight: 560 }}>RH %</text>
+          <rect x={L} y={yR(55)} width={w - L - R} height={Math.max(0, yR(45) - yR(55))} fill="var(--rh)" opacity={0.06} />
           {[rLo, rHi].map((v) => (
-            <text key={v} x={L - 6} y={yR(v) + 3} fill="var(--muted)" fontSize={9} textAnchor="end">{v}%</text>
+            <text key={v} x={L - 8} y={yR(v) + 5} textAnchor="end">{v}%</text>
           ))}
-          <path d={linePath(room.map((r) => ({ x: x(r.ts), y: yR(r.rh) })), 12)} fill="none" stroke="var(--rh)" strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" />
+          <path d={linePath(room.map((r) => ({ x: x(r.ts), y: yR(r.rh) })), 12)} fill="none" stroke="var(--rh)" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
 
           {/* CO2 with fixed bands */}
-          <text x={0} y={co2Y + 10} fill="var(--text-2)" fontSize={9.5} fontWeight={500}>CO₂</text>
-          {CO2_BANDS.map((b) => {
-            const y0 = yC(Math.min(b.to, cHi));
-            const y1 = yC(Math.max(b.from, 400));
-            return y1 > y0 ? <rect key={b.key} x={L} y={y0} width={w - L - R} height={y1 - y0} fill={b.fill} /> : null;
-          })}
-          {[800, 1000, 1500].filter((v) => v < cHi).map((v) => (
-            <text key={v} x={L - 6} y={yC(v) + 3} fill="var(--muted)" fontSize={9} textAnchor="end">{v >= 1000 ? `${v / 1000}k` : v}</text>
+          <text x={0} y={co2Y + 12} style={{ fill: 'var(--text-2)', fontWeight: 560 }}>CO₂</text>
+          <path d={`${linePath(room.map((r) => ({ x: x(r.ts), y: yC(Math.max(1000, r.co2)) })))}L${x(room.at(-1)?.ts ?? to)},${yC(1000)}L${x(room[0]?.ts ?? from)},${yC(1000)}Z`} fill="var(--signal-soft)" />
+          {[600, 1000, 1400].filter((v) => v < cHi).map((v) => (
+            <text key={v} x={L - 8} y={yC(v) + 5} textAnchor="end" style={v === 1000 ? { fill: 'var(--signal)' } : undefined}>{fmt(v)}</text>
           ))}
           <defs>
             <linearGradient id="ns-co2" gradientUnits="userSpaceOnUse" x1={0} x2={0} y1={co2Y} y2={co2Y + rows.co2}>
-              <stop offset={0} stopColor="var(--co2)" />
+              <stop offset={Math.max(0, Math.min(1, (yC(1000) - co2Y) / rows.co2))} stopColor="var(--signal)" />
               <stop offset={Math.max(0, Math.min(1, (yC(1000) - co2Y) / rows.co2))} stopColor="var(--co2)" />
-              <stop offset={Math.max(0, Math.min(1, (yC(1000) - co2Y) / rows.co2))} stopColor="var(--text-2)" />
-              <stop offset={1} stopColor="var(--text-2)" />
             </linearGradient>
           </defs>
-          <line x1={L} x2={w - R} y1={yC(1000)} y2={yC(1000)} stroke="var(--text-2)" strokeOpacity={0.6} strokeDasharray="3 4" />
-          <path d={linePath(room.map((r) => ({ x: x(r.ts), y: yC(r.co2) })), 12)} fill="none" stroke="url(#ns-co2)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+          <line x1={L} x2={w - R} y1={yC(1000)} y2={yC(1000)} stroke="var(--signal)" strokeDasharray="2 3" />
+          <path d={linePath(room.map((r) => ({ x: x(r.ts), y: yC(r.co2) })), 12)} fill="none" stroke="url(#ns-co2)" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
 
           {/* AC commands */}
-          <text x={0} y={acY + 14} fill="var(--text-2)" fontSize={9.5} fontWeight={500}>AC</text>
+          <text x={0} y={acY + 16} style={{ fill: 'var(--text-2)', fontWeight: 560 }}>Aircon</text>
           <line x1={L} x2={w - R} y1={acY + 11} y2={acY + 11} stroke="var(--grid)" />
           {night.ac.map((c, i) => (
             <g key={i}>
-              <line x1={x(c.ts)} x2={x(c.ts)} y1={acY + 4} y2={acY + 18} stroke={c.landed === false ? 'var(--critical)' : c.state.power ? 'var(--setpoint)' : 'var(--muted)'} strokeWidth={2.5} strokeLinecap="round" />
+              <line x1={x(c.ts)} x2={x(c.ts)} y1={acY + 4} y2={acY + 18} stroke={c.landed === false ? 'var(--signal)' : c.state.power ? 'var(--text)' : 'var(--muted)'} strokeWidth={2} strokeLinecap="round" />
             </g>
           ))}
 
           {/* events */}
-          <text x={0} y={evY + 14} fill="var(--text-2)" fontSize={9.5} fontWeight={500}>EVENTS</text>
+          <text x={0} y={evY + 16} style={{ fill: 'var(--text-2)', fontWeight: 560 }}>Events</text>
           {events
             .filter((e) => e.kind === 'room_empty' && (e.end ?? e.start) > from && e.start < to)
             .map((e, i) => (
@@ -240,7 +234,7 @@ export function NightStrip({ night, people, curve, events }: { night: Night; peo
 
           {/* axis */}
           {ticks.map((t) => (
-            <text key={t} x={x(t)} y={axisY + 12} fill="var(--muted)" fontSize={9.5} textAnchor="middle">{hm(t)}</text>
+            <text key={t} x={x(t)} y={axisY + 16} textAnchor="middle">{hm(t)}</text>
           ))}
 
           {hover !== null && <line x1={x(hover)} x2={x(hover)} y1={2} y2={axisY} stroke="var(--hairline-2)" strokeWidth={1} />}

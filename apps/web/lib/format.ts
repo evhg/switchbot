@@ -39,7 +39,7 @@ export function dur(min: number): string {
   if (!Number.isFinite(min)) return '–';
   const m = Math.round(min);
   const h = Math.floor(m / 60);
-  return h ? `${h}h ${pad(m % 60)}m` : `${m}m`;
+  return h ? `${h}h\u00a0${pad(m % 60)}m` : `${m}m`;
 }
 
 /**
@@ -55,7 +55,10 @@ export function tidyReport(text: string): string {
     .replace(/(\d) %/g, '$1%')
     .replace(/ > (?=[\d.]+)/g, '\u00a0above\u00a0')
     .replace(/ < (?=[\d.]+)/g, '\u00a0below\u00a0')
-    .replace(/(\d+)-night\b/g, '$1-night');
+    .replace(/(\d+)-night\b/g, '$1-night')
+    // Never split a duration or a number from its unit across lines.
+    .replace(/(\d+h) (\d{1,2}m)\b/g, '$1\u00a0$2')
+    .replace(/(\d) (ppm|bpm|ms|min|°C)(?![\w])/g, '$1\u00a0$2');
 }
 
 export const fmt = (x: number | null | undefined, digits = 0) =>

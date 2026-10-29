@@ -1,232 +1,234 @@
 'use client';
-// 03 · The night — pinned 560svh, the centrepiece (docs/DESIGN.md §10). One cursor scrubs both hypnograms, room
-// °C, CO₂ and the aircon ticks together. The bright chart is revealed over its ghost by the compositor-only wipe;
-// the cursor, its dots and the readouts are moved / rewritten from the chapter's progress (refs only, no renders).
-// Captions come from real moments in the data (model.ts) and crossfade as the cursor passes them.
-import { Fragment, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { targetAt, type TemperatureCurve } from '@sleep-lab/core';
-import { fmt, hm, hourTicks, ictMidnight, MIN } from '@/lib/format.ts';
-import { co2Tolerance, linePath, scale } from '../charts/common.tsx';
-import { STAGE_LABEL } from '../charts/NightStrip.tsx';
-import { Icon } from '../icons.tsx';
-import { Chapter, Cursor, remap, ScrubWipe, setSky, useReducedMotion } from '../motion.tsx';
+// Scene 3 · The night (docs/DESIGN.md §8.3, §9.1). Pinned for about three screens. One signal cursor scrubs both
+// hypnograms, room °C against the plan, CO₂ and the aircon ticks; the clock and four readouts follow it. The
+// cursor holds on each step's exact minute for the first 35 % of that step, so the readout agrees with the sentence
+// being read. Desktop: sticky graphic (steps on the left, instrument on the right). Phone: one step under the chart.
+// Per-frame work writes transforms and textContent only (no React renders).
+import { useMemo, useRef } from 'react';
+import { targetAt } from '@sleep-lab/core';
+import { dur, fmt, hm, hourTicks, MIN } from '@/lib/format.ts';
+import { linePath, scale } from '../charts/common.tsx';
+import { Chapter, useReducedMotion } from '../motion.tsx';
 import { useScrub } from './useScrub.ts';
-import { STAGE_BY_CODE, valueAt, whoLabel, type AcTick, type Moment, type StoryModel } from './model.ts';
+import { Icon } from '../icons.tsx';
+import { HypnoBlocks, personScope, STAGE_NAME, useBox } from './parts.tsx';
+import { STAGE_BY_CODE, valueAt, type NightStep, type StoryModel } from './model.ts';
 import s from './story.module.css';
 
-const KIND_COLOR: Record<Moment['kind'], string> = {
-  start: 'var(--ch-accent)',
-  sleep: 'var(--stage-light)',
-  deep: 'var(--stage-deep)',
-  awake: 'var(--stage-awake)',
-  hr: 'var(--person-a)',
-  co2: 'var(--co2)',
-  rh: 'var(--rh)',
-  ac: 'var(--temp)',
-  alarm: 'var(--text)',
-  up: 'var(--text)',
-};
-export const momentColor = (m: Moment, model: StoryModel) => (m.kind === 'hr' && m.who ? model.people.find((p) => p.id === m.who)?.color ?? KIND_COLOR.hr : KIND_COLOR[m.kind]);
-
-function useBox<T extends HTMLElement>(): [React.RefObject<T | null>, { w: number; h: number }] {
-  const ref = useRef<T>(null);
-  const [box, setBox] = useState({ w: 0, h: 0 });
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const set = (w: number, h: number) => setBox((b) => (Math.abs(b.w - w) < 1 && Math.abs(b.h - h) < 1 ? b : { w: Math.round(w), h: Math.round(h) }));
-    set(el.clientWidth, el.clientHeight);
-    const ro = new ResizeObserver((e) => {
-      const r = e[0]?.contentRect;
-      if (r) set(r.width, r.height);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return [ref, box];
-}
+const HOLD = 0.35;
+const DWELL = 0.04;
 
 interface Geo {
   W: number;
   H: number;
+  desk: boolean;
+  pl: number;
+  pr: number;
+  plotW: number;
   x: (t: number) => number;
-  hyp: { y: number; h: number }[];
-  temp: { y: number; h: number; v: (c: number) => number; lo: number; hi: number };
-  co2: { y: number; h: number; v: (c: number) => number; hi: number };
-  ac: { y: number };
+  hyp: { y: number; row: number; gap: number; h: number }[];
+  temp: { y: number; h: number; v: (c: number) => number; lo: number; hi: number; ticks: number[] };
+  co2: { y: number; h: number; v: (c: number) => number; hi: number; ticks: number[] };
+  ac: { y: number; h: number };
   axisY: number;
+  bottom: number;
 }
 
-const LBL = 15;
 function layout(model: StoryModel, W: number, H: number): Geo {
+  const desk = W >= 640;
+  const pl = desk ? 88 : 0;
+  const pr = desk ? 60 : 44;
+  const plotW = Math.max(40, W - pl - pr);
   const n = model.people.length;
-  const axisH = 16;
-  const acH = 12 + LBL;
-  const gaps = 7 * (n + 2);
-  const avail = Math.max(120, H - axisH - acH - LBL * (n + 2) - gaps);
-  const share = n === 2 ? [0.2, 0.2, 0.27, 0.33] : n === 1 ? [0.3, 0.3, 0.4] : [0.5, 0.5];
-  let y = 0;
-  const hyp: { y: number; h: number }[] = [];
+  const lab = desk ? 0 : 19; // phone: track labels sit above each track
+  const gapT = desk ? 22 : 6;
+  const row = desk ? Math.max(10, Math.min(18, Math.round(H / 46))) : Math.max(5, Math.min(10, Math.round(H / 56)));
+  const rgap = desk ? 4 : 2;
+  const hypH = row * 4 + rgap * 3;
+  const acH = desk ? 16 : 14;
+  const axis = desk ? 30 : 24;
+  const fixed = n * (lab + hypH + gapT) + 2 * (lab + gapT) + acH + 8 + axis;
+  const free = Math.max(90, H - fixed);
+  const tH = Math.round(free / 2);
+  const cH = free - tH;
+  let y = 4;
+  const hyp: Geo['hyp'] = [];
   for (let i = 0; i < n; i++) {
-    y += LBL;
-    const h = Math.round(avail * share[i]!);
-    hyp.push({ y, h });
-    y += h + 7;
+    y += lab;
+    hyp.push({ y, row, gap: rgap, h: hypH });
+    y += hypH + gapT;
   }
-  y += LBL;
-  const tH = Math.round(avail * share[n]!);
+  y += lab;
   const tY = y;
-  y += tH + 7 + LBL;
-  const cH = Math.round(avail * share[n + 1]!);
+  y += tH + gapT + lab;
   const cY = y;
-  y += cH + 7;
-  const acY = y + LBL - 4;
-  const axisY = acY + 12 + 4;
+  y += cH + gapT;
+  const acY = y;
+  y += acH + 8;
+  const axisY = y;
 
-  const x = scale(model.lo, model.end, 0, W);
-  const temps: number[] = [];
-  for (let t = model.lo; t <= model.end; t += 5 * MIN) {
-    const v = valueAt(model.series, 'temp', t);
-    if (Number.isFinite(v)) temps.push(v);
-  }
-  const lo = Math.floor(Math.min(...temps, 19) - 0.3);
-  const hi = Math.max(lo + 3, Math.ceil(Math.max(...temps) + 0.3));
-  let cMax = 1200;
-  for (let t = model.lo; t <= model.end; t += 5 * MIN) cMax = Math.max(cMax, valueAt(model.series, 'co2', t) || 0);
-  const cHi = Math.ceil((cMax + 100) / 100) * 100;
+  // Night tracks: room °C on a clamped 18–23 scale (out-of-range values are told in words, §7.1).
+  const tLo = 18;
+  const tHi = 23;
+  let cMax = 1400;
+  for (let t = model.lo; t <= model.wake; t += 5 * MIN) cMax = Math.max(cMax, valueAt(model.series, 'co2', t) || 0);
+  const cHi = Math.ceil(cMax / 200) * 200;
   return {
     W,
     H,
-    x,
+    desk,
+    pl,
+    pr,
+    plotW,
+    x: scale(model.lo, model.end, 0, plotW),
     hyp,
-    temp: { y: tY, h: tH, v: scale(lo, hi, tY + tH, tY), lo, hi },
-    co2: { y: cY, h: cH, v: scale(400, cHi, cY + cH, cY), hi: cHi },
-    ac: { y: acY },
+    temp: { y: tY, h: tH, v: scale(tLo, tHi, tY + tH, tY), lo: tLo, hi: tHi, ticks: [19, 21, 23] },
+    co2: { y: cY, h: cH, v: scale(400, cHi, cY + cH, cY), hi: cHi, ticks: [600, 1000, cHi >= 1400 ? 1400 : cHi] },
+    ac: { y: acY, h: acH },
     axisY,
+    bottom: axisY + axis,
   };
 }
 
-/** The data layer (rendered twice: ghost + bright). */
-function NightLayer({ model, g, curve, copy }: { model: StoryModel; g: Geo; curve: TemperatureCurve; copy: string }) {
+/** The data, in plot coordinates (x from 0). Rendered twice: the ghost (thin, --ghost) and the revealed copy. */
+function DataLayer({ model, g, ghost }: { model: StoryModel; g: Geo; ghost: boolean }) {
   const paths = useMemo(() => {
-    const step = Math.max(MIN, ((model.end - model.lo) / g.W) * 2);
+    const step = Math.max(MIN, ((model.end - model.lo) / g.plotW) * 2);
     const temp: { x: number; y: number }[] = [];
-    const tgt: { x: number; y: number }[] = [];
+    const plan: { x: number; y: number }[] = [];
     const co2: { x: number; y: number }[] = [];
-    const rib: { x: number; hi: number; lo: number }[] = [];
+    const over: { x: number; y: number }[] = [];
+    const clampT = (v: number) => Math.max(g.temp.lo, Math.min(g.temp.hi, v));
     for (let t = model.lo; t <= model.end + 1; t += step) {
       const x = g.x(t);
       const v = valueAt(model.series, 'temp', t);
-      temp.push({ x, y: Number.isFinite(v) ? g.temp.v(v) : NaN });
-      const tg = targetAt(curve, model.lo, t);
-      if (tg !== null) tgt.push({ x, y: g.temp.v(tg) });
-      const c = valueAt(model.series, 'co2', t);
-      co2.push({ x, y: Number.isFinite(c) ? g.co2.v(Math.min(c, g.co2.hi)) : NaN });
-      if (Number.isFinite(c)) rib.push({ x, hi: g.co2.v(Math.min(g.co2.hi, c + co2Tolerance(c))), lo: g.co2.v(Math.max(400, c - co2Tolerance(c))) });
+      temp.push({ x, y: Number.isFinite(v) ? g.temp.v(clampT(v)) : NaN });
+      const tg = targetAt(model.curve, model.lo, t);
+      if (tg !== null) plan.push({ x, y: g.temp.v(clampT(tg)) });
+      if (t <= model.wake + 1) {
+        const c = valueAt(model.series, 'co2', t);
+        co2.push({ x, y: Number.isFinite(c) ? g.co2.v(Math.min(c, g.co2.hi)) : NaN });
+        if (Number.isFinite(c)) over.push({ x, y: g.co2.v(Math.min(g.co2.hi, Math.max(1000, c))) });
+      }
     }
-    const base = g.co2.y + g.co2.h;
-    const fin = co2.filter((p) => Number.isFinite(p.y));
-    const area = fin.length > 1 ? `M${fin[0]!.x.toFixed(1)},${base}${fin.map((p) => `L${p.x.toFixed(1)},${p.y.toFixed(1)}`).join('')}L${fin.at(-1)!.x.toFixed(1)},${base}Z` : '';
-    const ribbon = rib.length > 1 ? `M${rib.map((p) => `${p.x.toFixed(1)},${p.hi.toFixed(1)}`).join('L')}L${[...rib].reverse().map((p) => `${p.x.toFixed(1)},${p.lo.toFixed(1)}`).join('L')}Z` : '';
-    return { temp: linePath(temp, 12), tgt: linePath(tgt), co2: linePath(co2, 12), area, ribbon };
-  }, [model, g, curve]);
+    const y1000 = g.co2.v(1000);
+    const area = over.length > 1 ? `M${over[0]!.x.toFixed(1)},${y1000}${over.map((p) => `L${p.x.toFixed(1)},${p.y.toFixed(1)}`).join('')}L${over.at(-1)!.x.toFixed(1)},${y1000}Z` : '';
+    return { temp: linePath(temp, 12), plan: linePath(plan), co2: linePath(co2, 12), area };
+  }, [model, g]);
   const y1000 = g.co2.v(1000);
-  const gid = `nl-${copy}`;
+  const gid = `nc-${ghost ? 'g' : 'b'}`;
   return (
-    <svg width={g.W} height={g.H} aria-hidden style={{ display: 'block', overflow: 'visible' }}>
+    <svg width={g.plotW} height={g.H} aria-hidden style={{ display: 'block', overflow: 'visible' }}>
       <defs>
-        <linearGradient id={`${gid}-c`} gradientUnits="userSpaceOnUse" x1={0} x2={0} y1={g.co2.y} y2={g.co2.y + g.co2.h}>
-          <stop offset={0} stopColor="var(--co2)" />
-          <stop offset={Math.max(0, Math.min(1, (y1000 - g.co2.y) / g.co2.h))} stopColor="var(--co2)" />
-          <stop offset={Math.max(0, Math.min(1, (y1000 - g.co2.y) / g.co2.h))} stopColor="var(--text-2)" />
-          <stop offset={1} stopColor="var(--text-2)" />
-        </linearGradient>
-        <linearGradient id={`${gid}-a`} x1={0} x2={0} y1={0} y2={1}>
-          <stop offset={0} stopColor="var(--co2)" stopOpacity={0.3} />
-          <stop offset={1} stopColor="var(--co2)" stopOpacity={0} />
+        <linearGradient id={gid} gradientUnits="userSpaceOnUse" x1={0} x2={0} y1={g.co2.y} y2={g.co2.y + g.co2.h}>
+          <stop offset={Math.max(0, Math.min(1, (y1000 - g.co2.y) / g.co2.h))} stopColor="var(--signal)" />
+          <stop offset={Math.max(0, Math.min(1, (y1000 - g.co2.y) / g.co2.h))} stopColor="var(--text)" />
         </linearGradient>
       </defs>
       {model.people.map((p, i) => {
         const lane = g.hyp[i]!;
-        const lh = lane.h / 4;
-        const ly = (code: number) => lane.y + [0, 1, 2, 3][code]! * lh;
-        const st = p.night.sleep.stages;
         return (
-          <g key={p.id}>
-            {st.map((seg, k) => {
-              const prev = st[k - 1];
-              const code = ['awake', 'rem', 'light', 'deep'].indexOf(seg.stage);
-              const x0 = g.x(Math.max(seg.start, model.lo));
-              const x1 = g.x(Math.min(seg.end, model.end));
-              if (x1 <= x0) return null;
-              const pc = prev ? ['awake', 'rem', 'light', 'deep'].indexOf(prev.stage) : -1;
-              return (
-                <Fragment key={k}>
-                  {prev && <line x1={x0} x2={x0} y1={ly(pc) + lh / 2} y2={ly(code) + lh / 2} stroke="var(--hairline-2)" strokeWidth={1} />}
-                  <rect x={x0} y={ly(code) + 1.5} width={Math.max(1.6, x1 - x0 - 0.6)} height={Math.max(2, lh - 3)} rx={2.5} fill={`var(--stage-${seg.stage})`} />
-                </Fragment>
-              );
-            })}
+          <g key={p.id} className={personScope(i)}>
+            <HypnoBlocks stages={p.night.sleep.stages} x={g.x} from={model.lo} to={model.end} y={lane.y} row={lane.row} gap={lane.gap} />
           </g>
         );
       })}
-      <path d={paths.tgt} fill="none" stroke="var(--text-2)" strokeOpacity={0.7} strokeWidth={1.2} strokeDasharray="3 3" />
-      <path d={paths.temp} fill="none" stroke="var(--temp)" strokeWidth={2.2} strokeLinejoin="round" strokeLinecap="round" />
-      <path d={paths.ribbon} fill="var(--co2)" opacity={0.12} />
-      <path d={paths.area} fill={`url(#${gid}-a)`} />
-      <path d={paths.co2} fill="none" stroke={`url(#${gid}-c)`} strokeWidth={2.2} strokeLinejoin="round" strokeLinecap="round" />
+      {!ghost && <path d={paths.area} fill="var(--signal-soft)" />}
+      <path d={paths.temp} fill="none" stroke="var(--text)" strokeWidth={ghost ? 1 : 2} strokeLinejoin="round" strokeLinecap="round" />
+      <path d={paths.co2} fill="none" stroke={ghost ? 'var(--text)' : `url(#${gid})`} strokeWidth={ghost ? 1 : 2} strokeLinejoin="round" strokeLinecap="round" />
+      {model.acs.map((a, i) => (
+        <rect key={i} x={g.x(a.ts) - 1} y={g.ac.y} width={2} height={g.ac.h} rx={1} fill={a.missed ? 'var(--signal)' : 'var(--text)'} />
+      ))}
     </svg>
   );
 }
 
-/** Static frame: lane labels, hour grid, CO₂ bands, the 1,000 line and aircon ticks (always visible). */
-function Frame({ model, g, acs }: { model: StoryModel; g: Geo; acs: AcTick[] }) {
-  const ticks = hourTicks(model.lo, model.end, g.W < 520 ? 2 : 1);
-  const bands = [
-    { a: 400, b: 800, f: 'var(--band-good)' },
-    { a: 800, b: 1000, f: 'var(--band-warn)' },
-    { a: 1000, b: 1500, f: 'var(--band-serious)' },
-    { a: 1500, b: 99999, f: 'var(--band-critical)' },
-  ];
-  const lbl = (y: number, text: string, right?: string, color?: string) => (
-    <>
-      <text x={0} y={y - 5} className={s.svgLabel}>
+/** Static frame: track labels, gridlines on the hour, the plan (dashed), the 1,000 ppm threshold and the axes. */
+function Frame({ model, g, people }: { model: StoryModel; g: Geo; people: string[] }) {
+  const ticks = hourTicks(model.lo, model.end, g.plotW < 520 ? 2 : 1);
+  const X = (t: number) => g.pl + g.x(t);
+  const right = g.pl + g.plotW;
+  const label = (y: number, text: string) =>
+    g.desk ? (
+      <text x={0} y={y + 14} className={s.trackLabel}>
         {text}
       </text>
-      {right && (
-        <text x={g.W} y={y - 5} textAnchor="end" className={s.svgLabel} style={color ? { fill: color } : undefined}>
-          {right}
+    ) : (
+      <text x={0} y={y - 6} className={s.trackLabel}>
+        {text}
+      </text>
+    );
+  const planD = useMemo(() => {
+    const pts: { x: number; y: number }[] = [];
+    for (let t = model.lo; t <= model.end; t += 4 * MIN) {
+      const tg = targetAt(model.curve, model.lo, t);
+      if (tg !== null) pts.push({ x: X(t), y: g.temp.v(Math.max(g.temp.lo, Math.min(g.temp.hi, tg))) });
+    }
+    return linePath(pts);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, g]);
+  const top = (g.hyp[0]?.y ?? g.temp.y) - 2;
+  return (
+    <svg width={g.W} height={g.bottom} className={s.svgAbs} aria-hidden>
+      {ticks.map((t) => (
+        <line key={t} x1={X(t)} x2={X(t)} y1={top} y2={g.ac.y + g.ac.h} stroke="var(--grid)" />
+      ))}
+      {g.hyp.map((h, i) => (
+        <g key={i}>
+          {label(h.y, people[i] ?? '')}
+          {g.desk &&
+            (h.row >= 13 ? ['Awake', 'REM', 'Light', 'Deep'] : ['Awake', '', '', 'Deep']).map((name, k) =>
+              name ? (
+                <text key={name} x={right + 10} y={h.y + k * (h.row + h.gap) + h.row - 1} className={s.tickSm}>
+                  {name}
+                </text>
+              ) : null,
+            )}
+        </g>
+      ))}
+      {label(g.temp.y, 'Room °C')}
+      {g.temp.ticks.map((v) => (
+        <g key={v}>
+          <line x1={g.pl} x2={right} y1={g.temp.v(v)} y2={g.temp.v(v)} stroke="var(--grid)" />
+          <text x={right + 10} y={g.temp.v(v) + 5} className={s.tick}>
+            {v}°
+          </text>
+        </g>
+      ))}
+      <path d={planD} fill="none" stroke="var(--muted)" strokeWidth={1.5} strokeDasharray="4 4" />
+      {g.desk && (
+        <text x={g.pl + 6} y={g.temp.y + 16} className={s.tickSm}>
+          Dashed: the plan
         </text>
       )}
-    </>
-  );
-  return (
-    <svg width={g.W} height={g.H} className={s.svgAbs} aria-hidden>
-      {ticks.map((t) => (
-        <line key={t} x1={g.x(t)} x2={g.x(t)} y1={(g.hyp[0]?.y ?? g.temp.y) - 2} y2={g.axisY - 2} stroke="var(--grid)" />
-      ))}
-      {model.people.map((p, i) => (
-        <g key={p.id}>{lbl(g.hyp[i]!.y, p.name.toUpperCase(), i === 0 ? 'AWAKE · REM · LIGHT · DEEP' : undefined)}</g>
-      ))}
-      {lbl(g.temp.y, 'ROOM °C', `${g.temp.lo}–${g.temp.hi}° · TARGET ┄`)}
-      {lbl(g.co2.y, 'CO₂ PPM', '┄ 1,000', 'var(--co2)')}
-      {bands.map((b) => {
-        const y0 = g.co2.v(Math.min(b.b, g.co2.hi));
-        const y1 = g.co2.v(Math.max(b.a, 400));
-        return y1 > y0 ? <rect key={b.a} x={0} y={y0} width={g.W} height={y1 - y0} fill={b.f} /> : null;
-      })}
-      <line x1={0} x2={g.W} y1={g.co2.v(1000)} y2={g.co2.v(1000)} stroke="var(--co2)" strokeOpacity={0.7} strokeDasharray="2 3" />
-      {lbl(g.ac.y, 'AIRCON')}
-      <line x1={0} x2={g.W} y1={g.ac.y + 6} y2={g.ac.y + 6} stroke="var(--grid)" />
-      {acs.map((a, i) => (
-        <rect key={i} x={g.x(a.ts) - 1.5} y={g.ac.y} width={3} height={12} rx={1.5} fill={a.missed ? 'var(--critical)' : a.power ? 'var(--setpoint)' : 'var(--muted)'} />
-      ))}
+      {label(g.co2.y, 'CO₂ ppm')}
+      {g.co2.ticks.map((v) =>
+        v === 1000 ? null : (
+          <g key={v}>
+            <line x1={g.pl} x2={right} y1={g.co2.v(v)} y2={g.co2.v(v)} stroke="var(--grid)" />
+            <text x={right + 10} y={g.co2.v(v) + 5} className={s.tick}>
+              {fmt(v)}
+            </text>
+          </g>
+        ),
+      )}
+      <line x1={g.pl} x2={right} y1={g.co2.v(1000)} y2={g.co2.v(1000)} stroke="var(--signal)" strokeDasharray="2 3" />
+      <text x={right + 10} y={g.co2.v(1000) + 5} className={s.tickSig}>
+        1,000
+      </text>
+      {label(g.ac.y - (g.desk ? 2 : 0), 'Aircon')}
+      {g.desk && (
+        <text x={0} y={g.ac.y + 30} className={s.tickSm}>
+          commands
+        </text>
+      )}
+      <line x1={g.pl} x2={right} y1={g.axisY - 2} y2={g.axisY - 2} stroke="var(--axis)" />
       {ticks.map((t) => {
-        const x = g.x(t);
-        if (x < 10 || x > g.W - 10) return null;
+        const x = X(t);
+        if (x < g.pl + 14 && !g.desk) return null;
         return (
-          <text key={t} x={x} y={g.axisY + 12} textAnchor="middle" className={s.svgLabel}>
-            {hm(t).slice(0, 2)}
+          <text key={t} x={x} y={g.axisY + 16} textAnchor="middle" className={s.tick}>
+            {hm(t)}
           </text>
         );
       })}
@@ -234,48 +236,56 @@ function Frame({ model, g, acs }: { model: StoryModel; g: Geo; acs: AcTick[] }) 
   );
 }
 
-function Readouts({ model, readRefs }: { model: StoryModel; readRefs: React.MutableRefObject<(HTMLElement | null)[]> }) {
+/** Scroll progress → night time, holding on each step's minute for the first 35 % of its share. */
+function timeAt(p: number, steps: readonly NightStep[], model: StoryModel): number {
+  const n = steps.length;
+  if (!n) return model.lo + p * (model.end - model.lo);
+  const pos = [...steps.map((x) => x.t), model.end];
+  const f = Math.max(0, Math.min(0.99999, p)) * n;
+  const i = Math.floor(f);
+  const u = f - i;
+  if (p >= 1) return model.end;
+  if (u < HOLD) return pos[i]!;
+  const k = (u - HOLD) / (1 - HOLD);
+  const e = k * k * (3 - 2 * k);
+  return pos[i]! + (pos[i + 1]! - pos[i]!) * e;
+}
+
+export function TheNight({ model, steps, onOpenStrip }: { model: StoryModel; steps: NightStep[]; onOpenStrip: () => void }) {
+  const reduced = useReducedMotion();
+  const darkMin = Math.round((model.wake - model.lo) / MIN);
   return (
-    <dl className={s.reads}>
-      {model.people.map((p, i) => (
-        <Fragment key={p.id}>
-          <dt>
-            <i style={{ background: p.color }} />
-            {p.name}
-          </dt>
-          <dd ref={(el) => void (readRefs.current[i] = el)}>–</dd>
-        </Fragment>
-      ))}
-      <dt>Room</dt>
-      <dd ref={(el) => void (readRefs.current[model.people.length] = el)}>–</dd>
-      <dt>CO₂</dt>
-      <dd ref={(el) => void (readRefs.current[model.people.length + 1] = el)}>–</dd>
-    </dl>
+    <Chapter id="night" title="The night" pinned={2.4} dwell={DWELL} className={s.night} innerClassName={s.nightInner}>
+      <Stage model={model} steps={steps} darkMin={darkMin} reduced={reduced} onOpenStrip={onOpenStrip} />
+    </Chapter>
   );
 }
 
-function Stage({ model, curve, acs }: { model: StoryModel; curve: TemperatureCurve; acs: AcTick[] }) {
+function Stage({ model, steps, darkMin, reduced, onOpenStrip }: { model: StoryModel; steps: NightStep[]; darkMin: number; reduced: boolean; onOpenStrip: () => void }) {
   const [box, { w, h }] = useBox<HTMLDivElement>();
   const g = useMemo(() => (w > 0 && h > 0 ? layout(model, w, h) : null), [model, w, h]);
   const clock = useRef<HTMLDivElement>(null);
   const reads = useRef<(HTMLElement | null)[]>([]);
-  const caps = useRef<(HTMLDivElement | null)[]>([]);
-  const prev = useRef<HTMLDivElement>(null);
+  const items = useRef<(HTMLLIElement | null)[]>([]);
+  const outer = useRef<HTMLDivElement>(null);
+  const inner = useRef<HTMLDivElement>(null);
+  const cursor = useRef<HTMLDivElement>(null);
   const dotT = useRef<HTMLDivElement>(null);
   const dotC = useRef<HTMLDivElement>(null);
-  const last = useRef<{ txt: string[]; cap: number; co2hot: boolean | null; model: StoryModel | null }>({ txt: [], cap: -2, co2hot: null, model: null });
-  const moments = model.moments;
+  const last = useRef<{ txt: string[]; on: number; hot: boolean | null; key: unknown }>({ txt: [], on: -2, hot: null, key: null });
+  const n = model.people.length;
+
   useScrub((p) => {
-    const t = model.lo + p * (model.end - model.lo);
+    const t = timeAt(p, steps, model);
     const L = last.current;
-    if (L.model !== model) {
-      L.model = model;
+    if (L.key !== g) {
+      L.key = g;
       L.txt = [];
-      L.cap = -2;
-      L.co2hot = null;
+      L.on = -2;
+      L.hot = null;
     }
     const set = (i: number, el: HTMLElement | null | undefined, v: string) => {
-      if (L.txt[i] === v || !el) return;
+      if (!el || L.txt[i] === v) return;
       L.txt[i] = v;
       el.textContent = v;
     };
@@ -283,122 +293,134 @@ function Stage({ model, curve, acs }: { model: StoryModel; curve: TemperatureCur
     const idx = Math.max(0, Math.min(model.series.n - 1, Math.round((t - model.series.t0) / MIN)));
     model.people.forEach((pp, i) => {
       const c = model.stages[i]![idx]!;
-      const label = c < 0 ? (t < pp.night.sleep.start ? 'NOT IN BED' : 'UP') : STAGE_LABEL[STAGE_BY_CODE[c]!].toUpperCase();
-      set(1 + i, reads.current[i], label);
+      set(1 + i, reads.current[i], c < 0 ? (t < pp.night.sleep.start ? 'Not in bed' : 'Up') : STAGE_NAME[STAGE_BY_CODE[c]!]);
     });
     const temp = valueAt(model.series, 'temp', t);
     const co2 = valueAt(model.series, 'co2', Math.min(t, model.wake));
-    set(10, reads.current[model.people.length], `${fmt(temp, 1)}°`);
-    set(11, reads.current[model.people.length + 1], fmt(Math.round(co2 / 5) * 5));
+    set(10, reads.current[n], Number.isFinite(temp) ? `${fmt(temp, 1)}°` : '–');
+    set(11, reads.current[n + 1], Number.isFinite(co2) ? fmt(Math.round(co2 / 5) * 5) : '–');
     const hot = co2 >= 1000;
-    if (hot !== L.co2hot) {
-      L.co2hot = hot;
-      reads.current[model.people.length + 1]?.classList.toggle(s.hot!, hot);
+    if (hot !== L.hot) {
+      L.hot = hot;
+      reads.current[n + 1]?.parentElement?.classList.toggle(s.hot!, hot);
+    }
+    let on = 0;
+    for (let i = 0; i < steps.length; i++) if (steps[i]!.t <= t + 20_000) on = i;
+    if (on !== L.on) {
+      L.on = on;
+      items.current.forEach((el, i) => {
+        if (!el) return;
+        el.classList.toggle(s.on!, i === on);
+        el.classList.toggle(s.past!, i < on);
+      });
     }
     if (g) {
-      if (dotT.current) dotT.current.style.transform = `translate3d(0,${(Number.isFinite(temp) ? g.temp.v(Math.max(g.temp.lo, Math.min(g.temp.hi, temp))) : -40).toFixed(1)}px,0)`;
+      const f = Math.max(0, Math.min(1, (t - model.lo) / (model.end - model.lo)));
+      if (outer.current) outer.current.style.transform = `translate3d(${((f - 1) * 100).toFixed(3)}%,0,0)`;
+      if (inner.current) inner.current.style.transform = `translate3d(${((1 - f) * 100).toFixed(3)}%,0,0)`;
+      if (cursor.current) cursor.current.style.transform = `translate3d(${(f * g.plotW).toFixed(1)}px,0,0)`;
+      const ty = Number.isFinite(temp) ? g.temp.v(Math.max(g.temp.lo, Math.min(g.temp.hi, temp))) : -99;
       const cAt = valueAt(model.series, 'co2', t);
-      if (dotC.current) dotC.current.style.transform = `translate3d(0,${(Number.isFinite(cAt) ? g.co2.v(Math.min(g.co2.hi, cAt)) : -40).toFixed(1)}px,0)`;
+      const cy = Number.isFinite(cAt) && t <= model.wake ? g.co2.v(Math.min(g.co2.hi, cAt)) : -99;
+      if (dotT.current) {
+        dotT.current.style.transform = `translate3d(0,${ty.toFixed(1)}px,0)`;
+        dotT.current.style.opacity = ty < 0 ? '0' : '1';
+      }
+      if (dotC.current) {
+        dotC.current.style.transform = `translate3d(0,${cy.toFixed(1)}px,0)`;
+        dotC.current.style.opacity = cy < 0 ? '0' : '1';
+      }
     }
-    let k = 0;
-    for (let i = 0; i < moments.length; i++) if (moments[i]!.t <= t + 20_000) k = i;
-    if (k !== L.cap) {
-      L.cap = k;
-      caps.current.forEach((el, i) => {
-        if (!el) return;
-        el.classList.toggle(s.cur!, i === k);
-        el.classList.toggle(s.past!, i < k);
-      });
-      const pm = moments[k - 1];
-      if (prev.current) prev.current.textContent = pm ? `Before · ${hm(pm.t)} ${pm.text}` : '';
-    }
-  }, [0, 1], [model, g]);
-  return (
-    <>
-      <div className={s.nowRow}>
-        <div ref={clock} className={`t-clock sm num ${s.now}`}>
-          {hm(model.lo)}
-        </div>
-        <Readouts model={model} readRefs={reads} />
-      </div>
-      <div ref={box} className={s.nightChart}>
-        {g && (
-          <>
-            <Frame model={model} g={g} acs={acs} />
-            <ScrubWipe style={{ position: 'absolute', inset: 0 }}>{(copy) => <NightLayer model={model} g={g} curve={curve} copy={copy} />}</ScrubWipe>
-            <div className={s.cursorArea} style={{ height: g.axisY - 2 }}>
-              <Cursor className={`accent ${s.cursor}`}>
-                {/* The line is drawn only inside the lanes, so it never crosses the lane labels in the gutters. */}
-                {[...g.hyp, g.temp, g.co2].map((l, i) => (
-                  <i key={i} className={s.cursorSeg} style={{ top: l.y, height: l.h }} />
-                ))}
-                <div className={s.cursorHead} style={{ top: (g.hyp[0]?.y ?? g.temp.y) - 4 }} />
-                <div ref={dotT} className={s.cursorDot} style={{ ['--dc' as string]: 'var(--temp)' }} />
-                <div ref={dotC} className={s.cursorDot} style={{ ['--dc' as string]: 'var(--co2)' }} />
-              </Cursor>
-            </div>
-          </>
-        )}
-      </div>
-      <div className={s.caps} aria-live="polite">
-        {moments.map((m, i) => (
-          <div key={i} ref={(el) => void (caps.current[i] = el)} className={s.cap} style={{ ['--mc' as string]: momentColor(m, model) }}>
-            <span className="t-label">
-              {hm(m.t)}
-              {m.who ? ` · ${whoLabel(m, model.people)}` : ''}
-            </span>
-            <div className="t-h2">{m.text}</div>
-          </div>
-        ))}
-      </div>
-      <div ref={prev} className={`t-micro ${s.prevCap}`} />
-    </>
-  );
-}
+  }, [0, 1], [g, model, steps]);
 
-export function TheNight({ model, curve, onOpenStrip }: { model: StoryModel; curve: TemperatureCurve; onOpenStrip: () => void }) {
-  const reduced = useReducedMotion();
-  const dawn0 = ictMidnight(model.date) + 4.5 * 3_600_000;
+  /** Click a step (desktop): scroll to where the cursor holds on it. */
+  const goTo = (i: number) => {
+    const sec = document.getElementById('night');
+    if (!sec) return;
+    const top = sec.getBoundingClientRect().top + window.scrollY;
+    const range = sec.offsetHeight - window.innerHeight;
+    const p = (i + HOLD / 2) / Math.max(1, steps.length);
+    window.scrollTo({ top: top + range * (DWELL + p * (1 - 2 * DWELL)), behavior: reduced ? 'auto' : 'smooth' });
+  };
+
+  const summary = `${dur(darkMin)} from lights out at ${hm(model.lo)} to the alarm at ${hm(model.wake)}. ${steps.map((x) => `${hm(x.t)}: ${x.title}`).join(' ')}`;
+
   return (
-    <Chapter
-      id="night"
-      n={3}
-      title="The night"
-      accent="night"
-      pinned={5.6}
-      className="bleed"
-      innerClassName={s.nightInner}
-      onProgress={(p) => {
-        const t = model.lo + p * (model.end - model.lo);
-        const d = remap(t, dawn0, model.wake);
-        setSky({ dusk: 0, mid: 1 - d, dawn: d, dim: 0 });
-      }}
-    >
-      <div className={s.nightHead}>
-        <div className="sh-kicker t-label">
-          <span>03</span>
-          <span>The night</span>
+    <div className={s.nightGrid}>
+      <div className={s.nightText}>
+        <div className={s.nightHead}>
+          <div className={s.nightHeadRow}>
+            <p className="label">The night</p>
+            <button type="button" className={`${s.textBtn} ${s.phoneOnly}`} onClick={onOpenStrip}>
+              Whole night <Icon name="chevron-right" size={16} />
+            </button>
+          </div>
+          <h2 className={`title ${s.nightTitle}`}>{dur(darkMin)} in the dark.</h2>
         </div>
-        <button type="button" className={`${s.stripLink} t-label press`} onClick={onOpenStrip}>
-          Full night strip <Icon name="arrow-up-right" size={13} />
-        </button>
-      </div>
-      <Stage model={model} curve={curve} acs={model.acs} />
-      {reduced && (
-        <ol className={s.timeline} aria-label="The night, moment by moment">
-          {model.moments.map((m, i) => (
-            <li key={i}>
-              <span className="mono" style={{ color: momentColor(m, model) }}>
-                {hm(m.t)}
-              </span>
-              <span>
-                {m.who ? <i className={s.tlDot} style={{ background: model.people.find((p) => p.id === m.who)?.color }} aria-hidden /> : null}
-                {m.text}
-              </span>
+        <ol className={s.steps} aria-label="The night, step by step">
+          {steps.map((x, i) => (
+            <li key={i} ref={(el) => void (items.current[i] = el)} className={i === 0 ? s.on : undefined}>
+              <button type="button" onClick={() => goTo(i)} tabIndex={-1}>
+                <time className="num">{hm(x.t)}</time>
+                <b>{x.title}</b>
+                <span>{x.detail}</span>
+              </button>
             </li>
           ))}
         </ol>
-      )}
-    </Chapter>
+        <button type="button" className={`${s.textBtn} ${s.deskOnly}`} onClick={onOpenStrip}>
+          The whole night, minute by minute <Icon name="chevron-right" size={16} />
+        </button>
+      </div>
+      <div className={s.nightVis}>
+        <div className={s.readout}>
+          <div ref={clock} className={`num ${s.clock}`} aria-hidden>
+            {hm(model.lo)}
+          </div>
+          <dl className={s.cells} aria-hidden>
+            {model.people.map((p, i) => (
+              <div key={p.id}>
+                <dt>{p.name}</dt>
+                <dd ref={(el) => void (reads.current[i] = el)}>–</dd>
+              </div>
+            ))}
+            <div>
+              <dt>Room</dt>
+              <dd ref={(el) => void (reads.current[n] = el)} className="num">
+                –
+              </dd>
+            </div>
+            <div>
+              <dt>CO₂</dt>
+              <dd ref={(el) => void (reads.current[n + 1] = el)} className="num">
+                –
+              </dd>
+            </div>
+          </dl>
+        </div>
+        <div ref={box} className={s.nightFig} role="img" aria-label={summary}>
+          {g && (
+            <>
+              <Frame model={model} g={g} people={model.people.map((p) => p.name)} />
+              <div className={`wipe ${s.plot}`} style={{ left: g.pl, width: g.plotW, height: g.bottom }}>
+                <div className="wipe-ghost" aria-hidden>
+                  <DataLayer model={model} g={g} ghost />
+                </div>
+                <div ref={outer} className="wipe-outer">
+                  <div ref={inner} className="wipe-inner">
+                    <DataLayer model={model} g={g} ghost={false} />
+                  </div>
+                </div>
+                <div ref={cursor} className={s.cursor} aria-hidden>
+                  <i style={{ top: (g.hyp[0]?.y ?? g.temp.y) - 6, height: g.ac.y + g.ac.h - (g.hyp[0]?.y ?? g.temp.y) + 6 }} />
+                  <div ref={dotT} className={s.dot} />
+                  <div ref={dotC} className={s.dot} />
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

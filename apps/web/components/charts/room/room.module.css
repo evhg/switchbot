@@ -1,154 +1,92 @@
-/* Room tab: scoped styles for components/screens/RoomScreen.tsx and components/charts/room/*.
-   Motion follows docs/DESIGN.md §9: transform / opacity only, calm in night mode, final states under reduced motion. */
+/* Room tab, v2 "Instrument" (docs/DESIGN.md §9.2). Scoped styles for components/screens/RoomScreen.tsx and
+   components/charts/room/*. Type comes from the role tokens only; colour only means something; motion is
+   transform / opacity, once, and off at night and under reduced motion. */
 
-/* ───────────── Page + sections ───────────── */
-.page { display: grid; gap: 0; min-width: 0; }
-.section { display: grid; gap: 16px; margin-top: 40px; min-width: 0; }
-.section:first-of-type { margin-top: 8px; }
-.sectionHead { display: grid; gap: 10px; padding: 0 2px; }
-.sectionHead :global(.sh-title) { max-width: 22ch; }
-.sectionLede { color: var(--text-2); font-size: 14px; line-height: 1.45; max-width: 52ch; margin-top: -2px; }
+/* ───────────── Hero: right now ───────────── */
+.hero { display: grid; gap: var(--sp-8); }
+.heroTop { display: grid; gap: var(--sp-8); align-items: end; }
+.now { display: grid; gap: var(--sp-4); min-width: 0; }
+.nowLabel { display: inline-flex; align-items: center; gap: 10px; }
+.nowLabel i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+.nowLabel i.alert { background: var(--signal); }
+.co2 { white-space: nowrap; }
+.co2.alert { color: var(--signal); }
+.status { display: grid; gap: var(--sp-2); max-width: var(--measure-text); }
+.advice { color: var(--text); font-size: var(--t-body); line-height: 1.5; max-width: var(--measure-text); padding-left: var(--sp-4); border-left: 2px solid var(--hairline-2); }
+.advice.alert { border-left-color: var(--signal); }
+.side { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-6); border-top: 1px solid var(--hairline); padding-top: var(--sp-6); }
+.trace { margin-top: var(--sp-2); }
+.traceEmpty { height: 132px; }
 
-/* ───────────── Live strip ───────────── */
-.live { display: grid; gap: 12px; margin-bottom: 18px; }
-.liveHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 2px; color: var(--text-2); }
-.liveTag { display: inline-flex; align-items: center; gap: 8px; color: var(--text); }
-.liveDot { position: relative; width: 7px; height: 7px; border-radius: 50%; background: var(--good); flex: none; }
-.liveDot::after {
-  content: ''; position: absolute; inset: -5px; border-radius: 50%; border: 1px solid var(--good);
-  opacity: 0; animation: breathe 2.8s var(--ease-out) infinite;
+@media (min-width: 1024px) {
+  .heroTop { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); column-gap: var(--col-gap, 32px); }
+  .side { grid-template-columns: minmax(0, 1fr); gap: 0; border-top: 0; padding-top: 0; }
+  .side > * { padding: var(--sp-5) 0; border-top: 1px solid var(--hairline); }
+  .side > *:last-child { border-bottom: 1px solid var(--hairline); }
 }
-@keyframes breathe { 0% { opacity: .7; transform: scale(.4); } 70%, 100% { opacity: 0; transform: scale(1.25); } }
-.liveMeta { white-space: nowrap; }
 
-.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-@media (min-width: 700px) { .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-
-.tile {
-  position: relative; isolation: isolate; overflow: hidden; min-width: 0;
-  background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--r-lg);
-  padding: 14px 14px 0; box-shadow: var(--shadow), var(--raise);
-  display: grid; grid-template-rows: auto auto auto 1fr;
+/* ───────────── Sections: chart + facts ───────────── */
+.body { display: grid; gap: var(--sp-8); align-items: start; min-width: 0; }
+.main { min-width: 0; display: grid; gap: var(--sp-6); }
+@media (min-width: 1440px) {
+  .body { grid-template-columns: minmax(0, 1fr) clamp(280px, 24%, 360px); column-gap: var(--sp-16); }
 }
-/* Corner wash in the tile's series colour (dark / light only). */
-.tile::before {
-  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
-  background: radial-gradient(120% 80% at 100% 0%, color-mix(in oklab, var(--tile-c) 14%, transparent), transparent 62%);
-}
-:global(:root[data-theme='light']) .tile::before { background: radial-gradient(120% 80% at 100% 0%, color-mix(in oklab, var(--tile-c) 10%, transparent), transparent 62%); }
-/* CO₂ tile: border glows in its band colour. */
-.tile.banded { border-color: color-mix(in oklab, var(--band-c) 45%, transparent); box-shadow: var(--shadow), var(--raise), 0 0 0 3px color-mix(in oklab, var(--band-c) 9%, transparent), 0 8px 28px -12px color-mix(in oklab, var(--band-c) 50%, transparent); }
-.tile.banded::before { background: radial-gradient(120% 80% at 100% 0%, color-mix(in oklab, var(--band-c) 16%, transparent), transparent 62%); }
+.facts { margin: 0; display: grid; }
+.facts > div { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-4); padding: var(--sp-3) 0; border-top: 1px solid var(--hairline); }
+.facts > div:last-child { border-bottom: 1px solid var(--hairline); }
+.facts dt { font-size: var(--t-sec); color: var(--text-2); min-width: 0; text-wrap: balance; }
+.facts dd { margin: 0; font-size: var(--t-body); color: var(--text); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.facts dd.alert { color: var(--signal); }
+.facts dd small { display: block; font-size: var(--t-cap); color: var(--muted); }
+.aside { display: grid; gap: var(--sp-4); min-width: 0; }
+.note { font-size: var(--t-cap); line-height: 1.5; color: var(--muted); max-width: var(--measure-text); margin: 0; }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-6); }
+@media (max-width: 599px) { .stats { grid-template-columns: minmax(0, 1fr); gap: 0; } .stats > * { padding: var(--sp-4) 0; border-top: 1px solid var(--hairline); } }
 
-.tileLabel { display: flex; align-items: center; gap: 6px; color: var(--text-2); }
-.tileLabel svg { color: var(--tile-c); }
-.tileValue {
-  margin-top: 12px; display: flex; align-items: baseline; gap: 0; white-space: nowrap;
-  font-family: var(--font-num); font-size: clamp(34px, 10.4vw, 42px); line-height: .95; font-weight: 750; letter-spacing: -0.05em;
-  color: var(--num-color); font-variant-numeric: tabular-nums lining-nums;
-}
-.tileValue :global(.t-unit) { font-size: 10.5px; letter-spacing: .1em; margin-left: 5px; }
-.tileDelta { margin-top: 8px; min-height: 18px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
-.tileSpark { margin: 10px -14px 0; align-self: end; position: relative; }
+.more { max-width: var(--measure-plan); margin-top: var(--section); }
 
-/* One-shot ping when a fresh reading lands (remounted per reading). */
-.ping {
-  position: absolute; inset: -1px; border-radius: inherit; pointer-events: none; z-index: 2;
-  border: 1px solid var(--tile-c); opacity: 0; animation: ping 1.4s var(--ease-out) 1 both;
-}
-@keyframes ping { 0% { opacity: .9; } 100% { opacity: 0; } }
-.pingVal { animation: pingVal 900ms var(--ease-out) 1 both; }
-@keyframes pingVal { 0% { opacity: .55; transform: translate3d(0, 4px, 0); } 100% { opacity: 1; transform: none; } }
+/* ───────────── Drill-in sheet bodies ───────────── */
+.sheetBody { display: grid; gap: var(--sp-6); padding-bottom: var(--sp-6); min-width: 0; }
+.sheetLede { font-size: var(--t-body); line-height: 1.5; color: var(--text); margin: 0; max-width: var(--measure-text); }
+.sheetLede b { font-weight: 600; }
+.pair { display: grid; gap: var(--sp-8); }
+.duty { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); flex-wrap: wrap; }
+.empty { min-height: 140px; display: grid; place-items: center; text-align: center; color: var(--text-2); font-size: var(--t-sec); border: 1px dashed var(--hairline-2); border-radius: var(--r-m); padding: var(--sp-4); }
 
-.sparkWrap { position: relative; width: 100%; }
-.sparkWrap svg { display: block; overflow: visible; }
-.sparkTip { position: absolute; top: -26px; transform: translateX(-50%); pointer-events: none; white-space: nowrap; }
-.sparkTip > div { padding: 3px 7px; min-width: 0; }
-.endHalo { transform-box: fill-box; transform-origin: center; animation: halo 2.8s var(--ease-out) infinite; }
-@keyframes halo { 0% { opacity: .6; transform: scale(.6); } 70%, 100% { opacity: 0; transform: scale(2.4); } }
+/* ───────────── Charts ───────────── */
+.chart { position: relative; width: 100%; min-width: 0; }
+.chart svg { display: block; overflow: visible; }
+.tick, .tickInk, .tickSig, .laneLabel, .clockNum { font-family: var(--font); font-size: var(--t-cap); font-variant-numeric: tabular-nums; fill: var(--muted); }
+.tickInk { fill: var(--text); }
+.tickSig { fill: var(--signal); }
+.laneLabel { fill: var(--text-2); }
+.clockNum { font-size: var(--t-title); font-weight: 300; letter-spacing: -0.03em; fill: var(--text); }
+.knock { stroke: var(--bg); stroke-width: 5px; stroke-linejoin: round; paint-order: stroke; }
+:global(.sheet) .knock { stroke: var(--surface); }
 
-/* ───────────── Card internals ───────────── */
-.cardTools { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 10px; }
-.cardTools :global(.legend) { margin: 0; }
-.chartFrame { position: relative; }
-.note { font-size: 12.5px; color: var(--muted); margin-top: 12px; line-height: 1.5; }
-.note b { color: var(--text-2); font-weight: 600; }
+.heatFoot { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2) var(--sp-4); margin-top: var(--sp-3); min-height: 24px; flex-wrap: wrap; }
+.heatScale { display: inline-flex; align-items: center; gap: 4px; }
+.heatScale i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
 
-.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin-top: 14px; border-top: 1px solid var(--hairline); }
-.stats.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.stat { padding: 12px 10px 2px 0; min-width: 0; display: grid; gap: 6px; align-content: start; }
-.stat + .stat { padding-left: 12px; border-left: 1px solid var(--hairline); }
-.statLabel { color: var(--muted); }
-.statValue { font-family: var(--font-num); font-size: 22px; line-height: 1; font-weight: 700; letter-spacing: -0.03em; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.statValue :global(.t-unit) { font-size: 10px; }
-.statSub { font-size: 11.5px; color: var(--muted); line-height: 1.35; }
-
-.duty { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.dutyTile { background: var(--surface-2); border-radius: var(--r-md); padding: 14px; display: grid; gap: 8px; min-width: 0; }
-.dutyValue { font-family: var(--font-num); font-size: 30px; line-height: 1; font-weight: 750; letter-spacing: -0.045em; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.dutyValue :global(.t-unit) { font-size: 10px; }
-.dutyRow { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; }
-
-.showerGrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
-.miniLabel { color: var(--text-2); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
-.subLabel { color: var(--text-2); margin: 4px 0 2px; }
-
-/* ───────────── Ventilation gauge ───────────── */
-.gauge { display: grid; justify-items: center; position: relative; }
-.gaugeNeedle { transition: transform 1100ms var(--ease-out) 150ms; }
-.gaugeReadout { margin-top: 6px; display: grid; justify-items: center; gap: 6px; text-align: center; }
-.gaugeValue { font-family: var(--font-num); font-size: 48px; line-height: .9; font-weight: 750; letter-spacing: -0.05em; color: var(--num-color); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.gaugeValue :global(.t-unit) { font-size: 11px; }
-.verdictPill {
-  display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: var(--r-pill);
-  font-size: 13px; font-weight: 600; color: var(--text);
-  background: color-mix(in oklab, var(--band-c) 12%, transparent); border: 1px solid color-mix(in oklab, var(--band-c) 35%, transparent);
-}
-:global(:root[data-theme='night']) .verdictPill { background: none; }
-
-/* ───────────── Calendar heatmap ───────────── */
-.cell { opacity: 0; transition: opacity 500ms var(--ease-out); }
+/* Reveals: once, transform / opacity only. */
+.cell { opacity: 0; transition: opacity 500ms var(--ease); }
 .heatIn .cell { opacity: 1; }
-.heatFoot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; min-height: 18px; flex-wrap: wrap; }
-.heatScale { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
-.heatScale i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
-
-/* ───────────── Radial clock ───────────── */
-.wedges { opacity: 0; transition: opacity 900ms var(--ease-out); }
+.wedges { opacity: 0; transition: opacity 900ms var(--ease); }
 .clockIn .wedges { opacity: 1; }
-
-/* ───────────── Event lanes ───────────── */
-.bar { transform-box: fill-box; transform-origin: left center; transform: scaleX(0); opacity: 0; transition: transform 700ms var(--ease-out), opacity 400ms var(--ease-out); }
+.bar { transform-box: fill-box; transform-origin: left center; transform: scaleX(0); opacity: 0; transition: transform 700ms var(--ease), opacity 400ms var(--ease); }
 .lanesIn .bar { transform: none; opacity: 1; }
+.col { transform-box: fill-box; transform-origin: center bottom; animation: rise 700ms var(--ease) both; }
+@keyframes rise { from { transform: scaleY(0); } to { transform: none; } }
+.meterFill { transform-box: fill-box; transform-origin: left center; animation: grow 900ms var(--ease) both; }
+@keyframes grow { from { transform: scaleX(0); } to { transform: none; } }
 
-/* ───────────── Setpoint: missed command ring pulses twice, then rests ───────────── */
-.pulseRing { transform-box: fill-box; transform-origin: center; animation: ring 1.3s var(--ease-out) 400ms 2 both; }
-@keyframes ring { 0% { opacity: .9; transform: scale(.6); } 100% { opacity: 0; transform: scale(2.6); } }
+:global(:root[data-theme='night']) .cell,
+:global(:root[data-theme='night']) .wedges { transition-duration: 300ms; transition-delay: 0ms !important; }
+:global(:root[data-theme='night']) .bar { transform: none; transition-delay: 0ms !important; transition-duration: 300ms; }
+:global(:root[data-theme='night']) .col,
+:global(:root[data-theme='night']) .meterFill { animation: none; }
 
-/* ───────────── Night mode: calm (no ambient loops, no glows, short fades) ───────────── */
-:global(:root[data-theme='night']) .tile::before,
-:global(:root[data-theme='night']) .tile.banded::before { display: none; }
-:global(:root[data-theme='night']) .tile.banded { box-shadow: none; }
-:global(:root[data-theme='night']) .liveDot::after,
-:global(:root[data-theme='night']) .endHalo,
-:global(:root[data-theme='night']) .pulseRing,
-:global(:root[data-theme='night']) .ping { animation: none; display: none; }
-:global(:root[data-theme='night']) .pingVal { animation: none; }
-:global(:root[data-theme='night']) .gaugeNeedle { transition-duration: 500ms; transition-delay: 0ms; }
-:global(:root[data-theme='night']) .cell { transition-delay: 0ms !important; transition-duration: 350ms; }
-:global(:root[data-theme='night']) .bar { transform: none; transition-delay: 0ms !important; transition-duration: 350ms; }
-:global(:root[data-theme='night']) .tile { box-shadow: none; }
-
-/* ───────────── Reduced motion: final states ───────────── */
 @media (prefers-reduced-motion: reduce) {
-  .liveDot::after, .endHalo, .pulseRing, .ping, .pingVal { animation: none !important; }
-  .ping, .pulseRing, .endHalo { display: none; }
-  .gaugeNeedle, .cell, .wedges, .bar { transition: none !important; }
-  .cell, .wedges { opacity: 1 !important; }
-  .bar { opacity: 1 !important; transform: none !important; }
+  .cell, .wedges, .bar { transition: none !important; opacity: 1 !important; transform: none !important; }
+  .col, .meterFill { animation: none !important; }
 }
-
-/* Quiet empty state (not a skeleton: nothing is loading). */
-.empty { min-height: 120px; display: grid; place-items: center; align-content: center; gap: 10px; text-align: center; color: var(--muted); font-size: 13px; border: 1px dashed var(--hairline-2); border-radius: var(--r-md); padding: 16px; }
-.empty svg { color: var(--text-2); }
-.dutyRow :global(.btn) { white-space: nowrap; flex: none; }

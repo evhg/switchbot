@@ -1,18 +1,46 @@
 'use client';
-// 06 · What drove it — normal scroll (docs/DESIGN.md §10.06). Net points as a mega figure, then one diverging list
-// that merges room and body drivers (sorted by |points|): bars grow from the centre axis with an 80 ms stagger.
-// Then "In a sentence": the rule report's insights. The full waterfalls stay one tap away in a sheet.
+// Scene 6 · What drove it (docs/DESIGN.md §7.2, §9.1). The room's net points against a typical night as the
+// reading, one sentence naming what carried the night and what cost the most, then every driver as a signed row
+// with a bar centred on zero (positive in ink, negative in signal). The waterfalls and the rule report's sentences
+// stay one tap away.
 import type { ScoreDriver } from '@sleep-lab/core';
 import { fmt, signed } from '@/lib/format.ts';
-import { Icon } from '../icons.tsx';
-import { Chapter, CountUp, Reveal, scrollToChapter } from '../motion.tsx';
-import { Placeholder, SectionHeader } from '../ui.tsx';
+import { Reveal } from '../motion.tsx';
+import { Button, Disclosure, Placeholder } from '../ui.tsx';
+import { Scene, SceneCols, SceneText } from './parts.tsx';
+import { TYPICAL } from './Verdict.tsx';
 import s from './story.module.css';
 
 export interface DriverRow extends ScoreDriver {
   /** 'Room' or the person's name. */
   source: string;
   text: string;
+}
+
+/** A short noun for a driver, for the finding sentence. */
+function noun(d: DriverRow): string {
+  const t = d.text.toLowerCase();
+  const who = d.source === 'Room' ? '' : d.source === 'You' ? 'Your ' : `${d.source}’s `;
+  if (/humid|rh\b/.test(t)) return 'Humidity';
+  if (/co₂|co2|fresh air|ventilat/.test(t)) return 'The air';
+  if (/curve|target|on plan/.test(t)) return 'The curve';
+  if (/steady|stabil|swing/.test(t)) return 'A steady room';
+  if (/warm|hot|cold|cool|temperature|°/.test(t)) return 'Temperature';
+  if (/hrv|variab/.test(t)) return `${who}HRV`.replace(/^HRV/, 'HRV');
+  if (/heart|bpm|hr\b/.test(t)) return `${who}heart rate`.replace(/^heart/, 'Heart');
+  if (/breath/.test(t)) return `${who}breathing`.replace(/^breath/, 'Breath');
+  if (/deep/.test(t)) return `${who}deep sleep`.replace(/^deep/, 'Deep');
+  return d.source === 'Room' ? 'The room' : d.source;
+}
+
+export function driversTitle(rows: DriverRow[]): string {
+  if (!rows.length) return 'Nothing stood out.';
+  const pos = [...rows].filter((d) => d.points > 0).sort((a, b) => b.points - a.points)[0];
+  const neg = [...rows].filter((d) => d.points < 0).sort((a, b) => a.points - b.points)[0];
+  const cap = (x: string) => x[0]!.toUpperCase() + x.slice(1);
+  if (pos && neg) return `${cap(noun(pos))} carried the night. ${cap(noun(neg))} cost the most.`;
+  if (pos) return `${cap(noun(pos))} carried the night.`;
+  return `${cap(noun(neg!))} cost the most.`;
 }
 
 export function Drivers({
@@ -30,98 +58,100 @@ export function Drivers({
   loading: boolean;
   onWaterfall: () => void;
 }) {
-  // The mega figure is the room's net, so it adds up with the footer (typical 70 → Sleep Air). Body drivers are
-  // relative to each person's own baseline and get their own sub-total.
+  // The reading is the room's net, so it adds up with "typical 70 → room score". Body drivers are relative to each
+  // person's own baseline and get their own sub-total in the sentence.
   const roomRows = rows.filter((d) => d.source === 'Room');
   const net = roomRows.reduce((a, d) => a + d.points, 0);
   const bodyNet = rows.filter((d) => d.source !== 'Room').reduce((a, d) => a + d.points, 0);
   const hasBody = rows.length > roomRows.length;
   const maxP = Math.max(1, ...rows.map((d) => Math.abs(d.points)));
-  const accent = net >= 0 ? 'drivers' : 'var(--ac-drivers-neg)';
+  const sorted = [...rows].sort((a, b) => Math.abs(b.points) - Math.abs(a.points));
+  const lede = loading
+    ? 'Weighing the drivers…'
+    : `The room scored ${fmt(sleepAir)} against a typical ${TYPICAL}.${
+        hasBody ? ` Your bodies came in ${fmt(Math.abs(bodyNet))} point${Math.abs(bodyNet) === 1 ? '' : 's'} ${bodyNet >= 0 ? 'above' : 'below'} their own baselines${meanRecovery !== null ? `, with mean recovery ${fmt(meanRecovery)}` : ''}.` : ''
+      }`;
   return (
-    <Chapter id="drivers" n={6} title="What drove it" accent={accent} className="bleed">
-      <Reveal className="sh-kicker t-label" y={10}>
-        <span>06</span>
-        <span>What drove it</span>
-      </Reveal>
-      {loading ? (
-        <div style={{ marginTop: 24 }}>
-          <Placeholder height={360} text="Weighing the drivers…" />
-        </div>
-      ) : (
-        <>
-          <Reveal className={s.net}>
-            <CountUp value={net} format={(v) => signed(Math.round(v))} className="t-mega accent" />
-            <span className="t-label t2">
-              room points
-              <br />
-              typical 70 → <b className={s.netTo}>{fmt(sleepAir)}</b>
-            </span>
-          </Reveal>
-          {hasBody && (
-            <Reveal className={`t-micro t2 ${s.netSub}`}>
-              Bodies <b className="mono">{signed(bodyNet)}</b> vs their own baselines
-              {meanRecovery !== null && (
+    <Scene id="drivers" title="What drove it">
+      <SceneCols
+        text={
+          <SceneText
+            label="What drove it"
+            reading={
+              loading ? (
+                '…'
+              ) : (
                 <>
-                  {' '}
-                  · mean recovery <b className="mono">{fmt(meanRecovery)}</b>
+                  {signed(Math.round(net))}
+                  <span className="unit">points</span>
                 </>
-              )}
-            </Reveal>
-          )}
-          {rows.length ? (
-            <Reveal className={s.drv} y={12}>
-              {rows.map((d, i) => (
-                <div key={i} className={`${s.dr} ${d.points >= 0 ? s.pos : s.neg}`} style={{ ['--w' as string]: Math.abs(d.points) / maxP, ['--i' as string]: i }}>
-                  <div className={s.drLab}>
-                    <b className="mono">{signed(d.points)}</b>
-                    <span className={s.drWho}>{d.source}</span>
-                    <span>{d.text}</span>
-                  </div>
-                  <div className={s.track}>
-                    <i />
-                  </div>
-                </div>
-              ))}
-            </Reveal>
-          ) : (
-            <p className="t-small muted" style={{ marginTop: 18 }}>
-              No drivers for this night (needs room coverage and 7+ nights of history).
-            </p>
-          )}
-          <Reveal className={s.drFoot}>
-            <span className="t-micro t2">
-              Points vs a typical night · room and bodies scored separately
-            </span>
-            <button type="button" className="btn quiet" onClick={onWaterfall}>
-              As waterfalls <Icon name="arrow-up-right" size={13} />
-            </button>
-          </Reveal>
-        </>
-      )}
-
-      <div className={s.sentence}>
-        <SectionHeader kicker="In a sentence" lines={['What the night', 'was telling you.']} size="h2" />
+              )
+            }
+            title={loading ? 'Reading the night…' : driversTitle(roomRows.length ? roomRows : rows)}
+            lede={lede}
+          />
+        }
+      >
         {loading ? (
-          <div style={{ marginTop: 16 }}>
-            <Placeholder height={140} />
-          </div>
+          <Placeholder height={420} text="Weighing the drivers…" />
+        ) : rows.length ? (
+          <Reveal>
+            {[
+              { key: 'room', title: 'The room', sub: `${signed(Math.round(net))} against a typical ${TYPICAL} → ${fmt(sleepAir)}`, items: sorted.filter((d) => d.source === 'Room') },
+              { key: 'body', title: 'Your bodies', sub: `${signed(Math.round(bodyNet))} against each person’s own baseline`, items: sorted.filter((d) => d.source !== 'Room') },
+            ]
+              .filter((g) => g.items.length)
+              .map((g) => (
+                <section key={g.key} className={s.drGroup} aria-label={g.title}>
+                  <h3 className={s.drGroupH}>
+                    {g.title}
+                    <span className="sec num">{g.sub}</span>
+                  </h3>
+                  <ul className={s.drivers}>
+                    {g.items.map((d, i) => {
+                      const w = (Math.abs(d.points) / maxP) * 50;
+                      const neg = d.points < 0;
+                      return (
+                        <li key={i}>
+                          <span className={`num ${s.pts} ${neg ? s.neg : ''}`}>{signed(d.points)}</span>
+                          <span className={s.drText}>
+                            {d.text}
+                            {d.source !== 'Room' && <small>{d.source}</small>}
+                          </span>
+                          <span className={s.drBar} aria-hidden>
+                            <i className={neg ? s.neg : ''} style={neg ? { right: '50%', width: `${w}%` } : { left: '50%', width: `${w}%` }} />
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              ))}
+            <div className={s.drFoot}>
+              <p className="cap">Room points add up to the room score; body points add up against each person’s own last 30 nights.</p>
+              <Button variant="text" onClick={onWaterfall}>
+                As waterfalls
+              </Button>
+            </div>
+          </Reveal>
         ) : (
-          <Reveal stagger as="ul" className={s.insights}>
-            {insights.map((t, i) => (
-              <li key={i} className="t-body">
-                {t}
-              </li>
-            ))}
+          <p className="sec">No drivers for this night. They need room coverage and 7 or more nights of history.</p>
+        )}
+        {!loading && insights.length > 0 && (
+          <Reveal delay={100}>
+            <Disclosure title="The night in sentences" count={`${insights.length}`} className={s.report}>
+              <ul className={s.insights}>
+                {insights.map((t, i) => (
+                  <li key={i} className="body">
+                    {t}
+                  </li>
+                ))}
+              </ul>
+              <p className="cap">Rule-based report. The written summary arrives with the nightly job.</p>
+            </Disclosure>
           </Reveal>
         )}
-        <div className={s.sentenceFoot}>
-          <span className="t-micro muted">Rule-based report · Claude summary arrives with the nightly job</span>
-          <button type="button" className="btn quiet" onClick={() => scrollToChapter('night')}>
-            See it in the night <Icon name="chevron-up" size={13} />
-          </button>
-        </div>
-      </div>
-    </Chapter>
+      </SceneCols>
+    </Scene>
   );
 }

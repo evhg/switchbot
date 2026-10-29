@@ -1,100 +1,71 @@
-/* CurveEditor (docs/DESIGN.md §11 System): mint step line, glass knobs, tactile steppers. */
-.editor { --ch-accent: var(--ac-tonight); --accent: var(--ac-tonight); display: grid; gap: 14px; min-width: 0; }
+/* Tonight's plan instrument (docs/DESIGN.md §6, §7, §9.5). Plan in --signal, last night in --muted, flat nodes. */
+.editor { display: grid; gap: var(--sp-10); min-width: 0; }
 
-/* Live readout of the active / selected phase */
-.readout { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; min-height: 64px; }
-.readMain { display: grid; gap: 8px; min-width: 0; }
-.readTemp {
-  font-family: var(--font-num); font-size: 48px; line-height: .86; font-weight: 750; letter-spacing: -0.05em;
-  color: var(--num-color); font-variant-numeric: tabular-nums lining-nums; white-space: nowrap;
-}
-.readTemp :global(.t-unit) { font-size: 11px; letter-spacing: .1em; margin-left: 4px; }
-.readSide { display: grid; gap: 5px; justify-items: end; text-align: right; padding-bottom: 2px; }
-.readSide > :first-child { font-size: 14px; color: var(--text); white-space: nowrap; }
+/* One card: chart + joined phase keys flush with the card's bottom edge. */
+.instrument { padding: var(--sp-5) var(--sp-5) 0; overflow: hidden; }
+@media (min-width: 1024px) { .instrument { padding: var(--sp-6) var(--sp-6) 0; } }
+.head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-4); margin-bottom: var(--sp-4); }
+.title { font-size: var(--t-body); font-weight: 600; line-height: 1.3; letter-spacing: -0.01em; }
 
-/* Chart + knobs */
-.chart { margin: 0 -4px; touch-action: pan-y; -webkit-user-select: none; user-select: none; }
+.chart { touch-action: pan-y; -webkit-user-select: none; user-select: none; }
 .chart[data-dragging] { cursor: grabbing; }
-.handle { transition: transform 110ms var(--ease-out); }
+.chart text { fill: var(--muted); }
+.chart .tickOn { fill: var(--text); }
+.band { fill: var(--signal-soft); opacity: .4; transition: x var(--d-base) var(--ease), width var(--d-base) var(--ease); }
+:global(:root[data-theme='night']) .band { fill: #0f0201; opacity: 1; }
+
+:global(:root[data-theme='night']) .actual { stroke-dasharray: 3 3; } /* night: identity by dash, not hue */
+.handle { transition: transform 110ms var(--ease); }
+.node { fill: var(--surface); stroke: var(--signal); stroke-width: 2; transition: r var(--d-fast) var(--ease); }
+.handle[data-sel] .node { fill: var(--signal); }
+.halo { fill: var(--signal); opacity: 0; pointer-events: none; transform-box: fill-box; transform-origin: center; transform: scale(.6); transition: opacity var(--d-fast) var(--ease), transform var(--d-base) var(--ease); }
+.handle[data-sel] .halo { opacity: .14; transform: none; }
+.handle[data-active] .halo { opacity: .22; transform: scale(1.2); }
+.handle:has(.hit:focus-visible) .halo { opacity: .3; transform: scale(1.1); }
+:global(:root[data-theme='night']) .halo { opacity: 0 !important; }
+.chart .nodeLabel { fill: var(--text); font-weight: 560; pointer-events: none; paint-order: stroke; stroke: var(--surface); stroke-width: 6px; stroke-linejoin: round; }
 .hit { cursor: grab; touch-action: none; outline: none; }
 .chart[data-dragging] .hit { cursor: grabbing; }
-.knob { transition: transform 220ms var(--ease-pop); }
-.knobBody { fill: var(--surface); stroke: var(--ch-accent); stroke-width: 2; }
-:global(:root[data-theme='dark']) .knobBody { fill: #121214; }
-.halo { fill: var(--ch-accent); opacity: 0; transform: scale(.6); transform-box: fill-box; transform-origin: center; transition: opacity 220ms var(--ease-out), transform 260ms var(--ease-out); pointer-events: none; }
-.handle[data-sel] .halo { opacity: .14; transform: none; }
-.handle[data-active] .halo { opacity: .24; transform: scale(1.15); }
-.handle[data-active] .knob { transform: scale(1.22); }
-.handle:has(.hit:focus-visible) .halo { opacity: .3; transform: scale(1.1); }
-.knobLabel { fill: var(--text-2); font-family: var(--font-mono); font-size: 10px; font-weight: 500; pointer-events: none; }
-.handle[data-sel] .knobLabel { fill: var(--text); }
-.guides { opacity: 1; }
 
-/* Floating chip that follows the dragged knob */
+/* Readout that follows the dragged node. */
 .chip {
   position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none;
-  margin-left: -56px; width: 112px; height: 34px; border-radius: var(--r-pill);
+  margin-left: -56px; width: 112px; height: 40px; border-radius: var(--r-pill);
   display: flex; align-items: center; justify-content: center; gap: 8px;
-  background: var(--surface-glass); border: 1px solid var(--hairline-2);
-  -webkit-backdrop-filter: blur(16px) saturate(1.4); backdrop-filter: blur(16px) saturate(1.4);
-  box-shadow: 0 8px 24px -10px rgba(0, 0, 0, .45);
-  transition: transform 110ms var(--ease-out);
-  animation: chip-in 180ms var(--ease-out) both;
+  background: var(--surface); border: 1px solid var(--hairline-2);
+  box-shadow: 0 8px 24px -12px rgba(0, 0, 0, .35);
+  transition: transform 110ms var(--ease);
 }
-.chip b { font-family: var(--font-num); font-size: 16px; font-weight: 700; letter-spacing: -0.02em; color: var(--text); }
-.chip span { font-size: 11px; color: var(--text-2); }
-@keyframes chip-in { from { opacity: 0; } }
+:global(:root[data-theme='night']) .chip { box-shadow: none; }
+.chip b { font-size: var(--t-body); font-weight: 560; color: var(--text); }
+.chip span { font-size: var(--t-cap); color: var(--text-2); }
 
-/* Phase picker: a scrolling row of two-line pills */
-.phases { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 0 -18px; padding: 2px 18px; scroll-padding: 18px; }
-.phases::-webkit-scrollbar { display: none; }
-.phase {
-  flex: none; display: grid; gap: 3px; text-align: left; padding: 8px 12px; border-radius: var(--r-md);
-  background: var(--surface-2); border: 1px solid transparent; color: var(--text-2); min-width: 104px;
+/* Phase keys sit flush in the card: the card's edge is their border. */
+.keys { margin: var(--sp-4) calc(-1 * var(--sp-5)) 0; }
+@media (min-width: 1024px) { .keys { margin: var(--sp-5) calc(-1 * var(--sp-6)) 0; } }
+.keys { container-type: inline-size; }
+.keys :global(.keys) { border: 0; border-top: 1px solid var(--hairline); border-radius: 0; }
+/* The strip follows the card's width, not the viewport: 6 across once the card is wide enough, names at .sec size. */
+@container (min-width: 760px) {
+  .keys :global(.keys) { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .keys :global(.key) { padding: 14px 12px 12px; }
+  .keys :global(.key b) { font-size: var(--t-sec); white-space: nowrap; }
 }
-.phase[aria-pressed='true'] { background: color-mix(in oklab, var(--ch-accent) 12%, var(--surface)); border-color: color-mix(in oklab, var(--ch-accent) 55%, transparent); color: var(--text); }
-.phaseName { font-size: 13px; font-weight: 600; white-space: nowrap; }
-.phaseMeta { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
-.phase[aria-pressed='true'] .phaseMeta { color: var(--text-2); }
+@container (max-width: 759px) { .keys :global(.keys) { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@container (max-width: 359px) { .keys :global(.keys) { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
-/* Selected-phase editor: two steppers + ramp toggle as grouped rows */
-.edit { border: 1px solid var(--hairline); border-radius: var(--r-md); overflow: hidden; }
-.stepper, .rampRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 8px 8px 14px; min-height: 56px; }
-.stepper + .stepper, .stepper + .rampRow { border-top: 1px solid var(--hairline); }
-.stepper[aria-disabled] .stepLabel { opacity: .55; }
-.stepLabel { display: grid; gap: 4px; min-width: 0; }
-.stepLabel :global(.t-micro) { color: var(--muted); }
-.stepDisplay { font-size: 13px; color: var(--text); white-space: nowrap; }
-.stepCtl { display: flex; align-items: center; gap: 4px; flex: none; }
-.stepBtn {
-  width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--hairline); background: var(--surface-2); color: var(--text);
-  display: inline-flex; align-items: center; justify-content: center;
-}
-.stepBtn:disabled { opacity: .3; }
-.stepVal { display: inline-flex; align-items: baseline; justify-content: center; gap: 3px; width: 82px; }
-.stepVal input {
-  width: 52px; border: 0; background: transparent; text-align: right; padding: 4px 0;
-  font-family: var(--font-num); font-size: 20px; font-weight: 700; letter-spacing: -0.02em; color: var(--text);
-  -moz-appearance: textfield; appearance: textfield;
-}
-.stepVal input::-webkit-outer-spin-button, .stepVal input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.stepVal input:disabled { color: var(--muted); }
-.stepVal input:focus-visible { outline: none; text-decoration: underline 2px var(--ch-accent); text-underline-offset: 4px; }
-.stepVal :global(.t-micro) { color: var(--muted); width: 22px; }
-.rampTitle { font-size: 14px; font-weight: 550; }
-.rampRow :global(.toggle) { min-height: 0; }
+/* Selected phase: head + one line, two dials, the glide switch, footer. */
+.phase { display: grid; gap: var(--sp-5); }
+.phase :global(.head) + :global(.sec) { margin-top: var(--sp-1); }
+.dials { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); }
+@media (min-width: 600px) { .dials { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.dials :global(.dial-v) { min-width: 0; white-space: nowrap; }
+.glide { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); padding-top: var(--sp-4); padding-bottom: var(--sp-4); }
+.glideT { display: grid; gap: 2px; min-width: 0; }
+.glideT b { font-weight: 400; font-size: var(--t-body); line-height: 1.35; }
+.glideT span { font-size: var(--t-sec); color: var(--text-2); line-height: 1.45; }
+.foot { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); }
 
-.foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.foot > :first-child { min-width: 0; line-height: 1.5; }
-.foot :global(.btn) { flex: none; }
-
-:global(:root[data-theme='night']) .chip { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--surface-2); box-shadow: none; animation: none; }
-:global(:root[data-theme='night']) .halo { display: none; }
-:global(:root[data-theme='night']) .handle[data-sel] .knobBody { stroke-width: 3; }
-:global(:root[data-theme='night']) .knob { transition: none; }
-:global(:root[data-theme='night']) .handle[data-active] .knob { transform: none; }
-:global(:root[data-theme='night']) .knobBody { fill: var(--bg); }
-:global(:root[data-theme='night']) .stepVal input { background: transparent; }
 @media (prefers-reduced-motion: reduce) {
-  .handle, .knob, .halo, .chip { transition: none !important; animation: none !important; }
+  .handle, .band, .node, .halo, .chip { transition: none; }
 }

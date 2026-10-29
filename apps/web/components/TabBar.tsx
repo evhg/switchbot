@@ -1,26 +1,20 @@
 'use client';
+/**
+ * Phone bottom tab bar (docs/DESIGN.md §5.3): a solid --rail strip with a top hairline, five tabs (24 px icon over a
+ * 13 px sentence-case label). Active: label --text, icon --signal. Hidden at ≥1024 px (the Sidebar takes over).
+ */
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, type MouseEvent } from 'react';
-import { Icon, type IconName } from './icons.tsx';
+import { Icon } from './icons.tsx';
 import { useNavigate } from './motion.tsx';
+import { TABS, activeTab } from './nav.tsx';
 
-const TABS: { href: string; label: string; icon: IconName }[] = [
-  { href: '/', label: 'Today', icon: 'moon' },
-  { href: '/room', label: 'Room', icon: 'house' },
-  { href: '/body', label: 'Body', icon: 'pulse' },
-  { href: '/lab', label: 'Lab', icon: 'flask' },
-  { href: '/settings', label: 'System', icon: 'gear' },
-];
-
-/** Floating glass pill; the active tab sits on a capsule that slides between items (transform only). */
 export function TabBar() {
   const path = usePathname();
   const navigate = useNavigate();
   const router = useRouter();
-  // Warm every tab's route chunks once the first screen has settled (and the browser is idle), so a cold switch never
-  // waits on a download behind a frozen view-transition snapshot. Links don't prefetch on sight: on Today that would
-  // parse the Recharts chunk during the first scroll.
+  // Warm every tab's route chunks once the first screen has settled and the browser is idle.
   useEffect(() => {
     const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number };
     const run = () => {
@@ -30,10 +24,7 @@ export function TabBar() {
     return () => window.clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
-  const activeIndex = Math.max(
-    0,
-    TABS.findIndex((t) => (t.href === '/' ? path === '/' : path.startsWith(t.href))),
-  );
+  const ai = activeTab(path);
   const onClick = (href: string) => (e: MouseEvent<HTMLAnchorElement>) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
     e.preventDefault();
@@ -45,14 +36,13 @@ export function TabBar() {
   };
   return (
     <nav className="tabbar" aria-label="Main">
-      <ul style={{ ['--i' as string]: activeIndex }}>
-        <li className="tabbar-capsule" aria-hidden />
+      <ul>
         {TABS.map((t, i) => {
-          const active = i === activeIndex;
+          const active = i === ai;
           return (
             <li key={t.href}>
               <Link href={t.href} prefetch={false} aria-current={active ? 'page' : undefined} onClick={onClick(t.href)}>
-                <Icon name={t.icon} size={22} filled={active && t.icon === 'moon'} />
+                <Icon name={t.icon} size={24} />
                 <span>{t.label}</span>
               </Link>
             </li>

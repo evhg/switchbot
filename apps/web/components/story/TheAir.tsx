@@ -1,293 +1,276 @@
 'use client';
-// 04 · The air — pinned 300svh (docs/DESIGN.md §10). p 0 → .7 drives the CO₂ number from the lights-out reading to
-// the night mean and wipes the area in; the peak marker pops at .7; the two meters fill from .75. After the pin,
-// the last 30 nights of CO₂ means rise in as bars, with the one-sentence comparison.
-import { useMemo, useRef } from 'react';
+// Scene 4 · The air (docs/DESIGN.md §7.2, §9.1). How long CO₂ sat above 1,000 ppm (the reading), one sentence,
+// then the full-night CO₂ chart with the crossing and the peak labelled on the line, the fresh-air meter and the
+// 30-night bars. Lines draw in once on reveal; nothing is scrubbed here.
+import { useMemo } from 'react';
 import type { RoomNightMetrics } from '@sleep-lab/core';
-import { dur, fmt, hm, MIN, shortDate } from '@/lib/format.ts';
+import { dur, fmt, hm, hourTicks, MIN, shortDate } from '@/lib/format.ts';
 import { linePath, scale } from '../charts/common.tsx';
-import { Chapter, easeOut, remap, Reveal, ScrubWipe, setSky, useChapterProgress } from '../motion.tsx';
-import { useScrub } from './useScrub.ts';
+import { DrawPath, Reveal } from '../motion.tsx';
 import { Placeholder, useWidth } from '../ui.tsx';
+import { Scene, SceneCols, SceneText, VisHead } from './parts.tsx';
 import { valueAt, type StoryModel } from './model.ts';
 import s from './story.module.css';
 
-const DRAW = [0, 0.7] as const;
+export function airHeadline(room: RoomNightMetrics): string {
+  if (room.co2Mean >= 1000) return 'Two people, one sealed room.';
+  if (room.co2Max >= 1000) return 'Fresh at first, stale by morning.';
+  if (room.co2Mean >= 800) return 'The air just held up.';
+  return 'Plenty of fresh air all night.';
+}
 
-function AirChart({ model, room }: { model: StoryModel; room: RoomNightMetrics }) {
+function Co2Chart({ model, room, peakAt, crossAt }: { model: StoryModel; room: RoomNightMetrics; peakAt: number; crossAt: number | null }) {
   const [ref, width] = useWidth<HTMLDivElement>();
-  const peak = useRef<SVGGElement>(null);
-  const H = 168;
+  const W = Math.max(width, 240);
+  const H = Math.round(Math.max(220, Math.min(320, W * 0.4)));
+  const pr = 52;
+  const pt = 34;
+  const pb = 30;
   const geo = useMemo(() => {
-    const W = Math.max(200, width);
-    const x = scale(model.lo, model.wake, 0, W);
-    const hi = Math.max(1400, Math.ceil((room.co2Max + 100) / 100) * 100);
-    const y = scale(400, hi, H, 4);
-    const pts: { x: number; y: number }[] = [];
+    const hi = Math.max(1400, Math.ceil((room.co2Max + 100) / 200) * 200);
+    const x = scale(model.lo, model.wake, 0, W - pr);
+    const y = scale(400, hi, H - pb, pt);
     const step = Math.max(MIN, ((model.wake - model.lo) / W) * 2);
+    const pts: { x: number; y: number }[] = [];
+    const over: { x: number; y: number }[] = [];
     for (let t = model.lo; t <= model.wake + 1; t += step) {
       const v = valueAt(model.series, 'co2', t);
       pts.push({ x: x(t), y: Number.isFinite(v) ? y(Math.min(v, hi)) : NaN });
+      if (Number.isFinite(v)) over.push({ x: x(t), y: y(Math.min(hi, Math.max(1000, v))) });
     }
-    const f = pts.filter((p) => Number.isFinite(p.y));
-    const area = f.length > 1 ? `M${f[0]!.x},${H}${f.map((p) => `L${p.x.toFixed(1)},${p.y.toFixed(1)}`).join('')}L${f.at(-1)!.x},${H}Z` : '';
-    // Peak time: the minute closest to the metrics' max (so the label agrees with the headline numbers).
-    let pk = { ts: model.lo, d: Infinity };
-    for (let t = model.lo; t <= model.wake; t += MIN) {
-      const d = Math.abs(valueAt(model.series, 'co2', t) - room.co2Max);
-      if (d < pk.d) pk = { ts: t, d };
-    }
-    return { W, x, y, hi, line: linePath(pts, 12), area, peakTs: pk.ts };
-  }, [model, room.co2Max, width]);
-  useChapterProgress((p) => {
-    peak.current?.classList.toggle('hit', p >= 0.7);
-  });
-  const px = geo.x(geo.peakTs);
+    const y1000 = y(1000);
+    const area = over.length > 1 ? `M${over[0]!.x},${y1000}${over.map((p) => `L${p.x.toFixed(1)},${p.y.toFixed(1)}`).join('')}L${over.at(-1)!.x},${y1000}Z` : '';
+    return { x, y, hi, line: linePath(pts, 12), area, ticks: [600, 1000, 1400].filter((v) => v <= hi) };
+  }, [model, room.co2Max, W, H]);
+  const y1000 = geo.y(1000);
+  const frac = Math.max(0, Math.min(1, (y1000 - pt) / (H - pb - pt)));
+  const px = geo.x(peakAt);
   const py = geo.y(Math.min(room.co2Max, geo.hi));
-  const bands = [
-    { a: 400, b: 800, f: 'var(--band-good)' },
-    { a: 800, b: 1000, f: 'var(--band-warn)' },
-    { a: 1000, b: 1500, f: 'var(--band-serious)' },
-    { a: 1500, b: geo.hi, f: 'var(--band-critical)' },
-  ];
-  const labelLeft = px > geo.W * 0.55;
+  const peakLeft = px > (W - pr) * 0.6;
+  const ticks = hourTicks(model.lo, model.wake, W < 520 ? 2 : 1);
   return (
-    <div ref={ref} className={s.airChart} style={{ height: H }} role="img" aria-label={`CO₂ through the night, peak ${fmt(room.co2Max)} ppm at ${hm(geo.peakTs)}`}>
+    <div
+      ref={ref}
+      className={s.chart}
+      style={{ height: H }}
+      role="img"
+      aria-label={`CO₂ through the night${crossAt ? `, crossed 1,000 ppm at ${hm(crossAt)}` : ''}, peak ${fmt(room.co2Max)} ppm at ${hm(peakAt)}`}
+    >
       {width > 0 && (
-        <>
-          <svg width={geo.W} height={H} className={s.svgAbs} aria-hidden>
-            {bands.map((b) => (b.b > b.a ? <rect key={b.a} x={0} y={geo.y(Math.min(b.b, geo.hi))} width={geo.W} height={geo.y(b.a) - geo.y(Math.min(b.b, geo.hi))} fill={b.f} /> : null))}
-            <line x1={0} x2={geo.W} y1={geo.y(1000)} y2={geo.y(1000)} stroke="var(--text-2)" strokeOpacity={0.6} strokeDasharray="3 4" />
-            <text x={4} y={geo.y(1000) - 6} className={s.svgLabel}>
-              1,000
-            </text>
-            <text x={4} y={geo.y(800) - 6} className={s.svgLabel}>
-              800
-            </text>
-            <text x={4} y={H - 6} className={s.svgLabel}>
-              {hm(model.lo)}
-            </text>
-            <text x={geo.W - 4} y={H - 6} textAnchor="end" className={s.svgLabel}>
-              {hm(model.wake)}
-            </text>
-          </svg>
-          <ScrubWipe range={DRAW} style={{ position: 'absolute', inset: 0 }}>
-            {(copy) => (
-              <svg width={geo.W} height={H} aria-hidden>
-                <defs>
-                  <linearGradient id={`air-${copy}`} x1={0} x2={0} y1={0} y2={1}>
-                    <stop offset={0} stopColor="var(--co2)" stopOpacity={0.45} />
-                    <stop offset={1} stopColor="var(--co2)" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <path d={geo.area} fill={`url(#air-${copy})`} />
-                <path d={geo.line} fill="none" stroke="var(--co2)" strokeWidth={2.4} strokeLinejoin="round" strokeLinecap="round" />
-              </svg>
-            )}
-          </ScrubWipe>
-          <svg width={geo.W} height={H} className={s.svgAbs} aria-hidden style={{ overflow: 'visible' }}>
-            <g ref={peak} className="hit-mark">
-              <circle cx={px} cy={py} r={5} fill="var(--co2)" stroke="var(--bg)" strokeWidth={2} />
-              <text x={labelLeft ? px - 10 : px + 10} y={Math.max(14, py - 10)} textAnchor={labelLeft ? 'end' : 'start'} className={s.svgLabelStrong}>
-                PEAK {fmt(room.co2Max)} · {hm(geo.peakTs)}
+        <svg width={W} height={H} aria-hidden style={{ overflow: 'visible' }}>
+          <defs>
+            <linearGradient id="air-line" gradientUnits="userSpaceOnUse" x1={0} x2={0} y1={pt} y2={H - pb}>
+              <stop offset={frac} stopColor="var(--signal)" />
+              <stop offset={frac} stopColor="var(--text)" />
+            </linearGradient>
+          </defs>
+          {geo.ticks.map((v) =>
+            v === 1000 ? null : (
+              <g key={v}>
+                <line x1={0} x2={W - pr} y1={geo.y(v)} y2={geo.y(v)} stroke="var(--grid)" />
+                <text x={W - pr + 10} y={geo.y(v) + 5} className={s.tick}>
+                  {fmt(v)}
+                </text>
+              </g>
+            ),
+          )}
+          <path d={geo.area} fill="var(--signal-soft)" className="fade-late" />
+          <line x1={0} x2={W - pr} y1={y1000} y2={y1000} stroke="var(--signal)" strokeDasharray="2 3" />
+          <text x={W - pr + 10} y={y1000 + 5} className={s.tickSig}>
+            1,000
+          </text>
+          <DrawPath d={geo.line} fill="none" stroke="url(#air-line)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+          {crossAt !== null && (
+            <g className="fade-late">
+              <circle cx={geo.x(crossAt)} cy={y1000} r={4.5} fill="var(--bg)" stroke="var(--signal)" strokeWidth={2} />
+              <text x={geo.x(crossAt) + 10} y={y1000 + 22} textAnchor="start" className={s.tickInk}>
+                {hm(crossAt)}
               </text>
             </g>
-          </svg>
-        </>
+          )}
+          {Number.isFinite(room.co2Max) && (
+            <g className="fade-late">
+              <circle cx={px} cy={py} r={4.5} fill="var(--bg)" stroke={room.co2Max >= 1000 ? 'var(--signal)' : 'var(--text)'} strokeWidth={2} />
+              <text x={peakLeft ? px - 10 : px + 10} y={Math.max(14, py - 12)} textAnchor={peakLeft ? 'end' : 'start'} className={s.tickInk}>
+                Peak {fmt(room.co2Max)} · {hm(peakAt)}
+              </text>
+            </g>
+          )}
+          <line x1={0} x2={W - pr} y1={H - pb} y2={H - pb} stroke="var(--axis)" />
+          {ticks.map((t) => {
+            const x = geo.x(t);
+            if (x < 16 || x > W - pr - 16) return null;
+            return (
+              <text key={t} x={x} y={H - 8} textAnchor="middle" className={s.tick}>
+                {hm(t)}
+              </text>
+            );
+          })}
+        </svg>
       )}
     </div>
   );
 }
 
-function Meters({ room, model }: { room: RoomNightMetrics; model: StoryModel }) {
-  const bars = useRef<(HTMLElement | null)[]>([]);
-  const overFrac = Math.min(1, room.minutesCo2Over1000 / model.air.nightMin);
-  const ach = room.achMorning;
-  const need = model.air.achNeeded;
-  const span = Math.max(need, ach ?? 0) * 1.25;
-  const achFrac = ach !== null ? Math.min(1, ach / span) : 0;
-  const fr = [overFrac, achFrac];
-  useChapterProgress((p) => {
-    const q = remap(p, 0.72, 1);
-    fr.forEach((f, i) => {
-      const el = bars.current[i];
-      if (el) el.style.transform = `scaleX(${(f * easeOut(Math.max(0, Math.min(1, q * 1.4 - i * 0.4)))).toFixed(4)})`;
-    });
-  });
+/** Linear 0–0.5 air changes per hour: last night in ink, what two sleepers need as a signal tick. */
+function FreshAir({ ach, need }: { ach: number | null; need: number }) {
+  const [ref, width] = useWidth<HTMLDivElement>();
+  const W = Math.max(width, 200);
+  const max = Math.max(0.5, Math.ceil(Math.max(need, ach ?? 0) * 12) / 10);
+  const x = scale(0, max, 0, W - 2);
+  const y = 44;
+  const ticks: number[] = [];
+  for (let v = 0; v <= max + 1e-6; v += 0.05) ticks.push(Math.round(v * 100) / 100);
+  const close = ach !== null && Math.abs(x(ach) - x(need)) < 110;
   return (
-    <div className={s.meters}>
-      <div className={s.meter}>
-        <div className={s.meterTop}>
-          <b className="num">{room.minutesCo2Over1000 > 0 ? dur(room.minutesCo2Over1000) : '0m'}</b>
-          <span className="t-label">above 1,000 ppm</span>
-        </div>
-        <div className={s.bar}>
-          <i ref={(el) => void (bars.current[0] = el)} />
-        </div>
-      </div>
-      <div className={s.meter}>
-        <div className={s.meterTop}>
-          <b className="num">{ach !== null ? `${fmt(ach, 2)} ACH` : '– ACH'}</b>
-          <span className="t-label">{ach !== null ? `fresh air · needs ${fmt(need, 2)}` : 'no clean decay this morning'}</span>
-        </div>
-        <div className={s.bar}>
-          <i ref={(el) => void (bars.current[1] = el)} />
-          {ach !== null && <s style={{ left: `${(need / span) * 100}%` }} aria-hidden />}
-        </div>
-      </div>
+    <div ref={ref} className={s.chart} style={{ height: 96 }} role="img" aria-label={ach !== null ? `Fresh air ${fmt(ach, 2)} air changes per hour; about ${fmt(need, 2)} needed` : 'Fresh air not measured this morning'}>
+      {width > 0 && (
+        <svg width={W} height={96} aria-hidden style={{ overflow: 'visible' }}>
+          {ticks.map((v) => {
+            const major = Math.abs(v * 10 - Math.round(v * 10)) < 1e-6;
+            return (
+              <g key={v}>
+                <line x1={x(v)} x2={x(v)} y1={y - (major ? 9 : 5)} y2={y} stroke="var(--hairline-2)" />
+                {major && (
+                  <text x={x(v)} y={y + 24} textAnchor={v === 0 ? 'start' : v >= max - 1e-6 ? 'end' : 'middle'} className={s.tick}>
+                    {fmt(v, 1)}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+          <line x1={0} x2={W - 2} y1={y} y2={y} stroke="var(--hairline-2)" />
+          {ach !== null && (
+            <>
+              <rect x={0} y={y - 3} width={x(ach)} height={3} fill="var(--text)" />
+              <rect x={x(ach) - 1.5} y={y - 18} width={3} height={22} fill="var(--text)" />
+              <text x={x(ach)} y={y - 26} textAnchor={close && ach < need ? 'end' : 'middle'} className={s.tickInk}>
+                {fmt(ach, 2)} last night
+              </text>
+            </>
+          )}
+          <rect x={x(need) - 1.5} y={y - 18} width={3} height={22} fill="var(--signal)" />
+          <text x={x(need)} y={y - 26} textAnchor={close && ach !== null && ach < need ? 'start' : 'middle'} className={s.tickSig}>
+            {fmt(need, 2)} needed
+          </text>
+          <text x={W - 2} y={y + 48} textAnchor="end" className={s.tick}>
+            air changes per hour
+          </text>
+        </svg>
+      )}
     </div>
   );
 }
 
-function Mega({ model, room }: { model: StoryModel; room: RoomNightMetrics }) {
-  const ref = useRef<HTMLSpanElement>(null);
-  const lbl = useRef<HTMLSpanElement>(null);
-  const last = useRef({ v: '', l: '' });
-  // While scrubbing, the figure is the live reading under the chart's wipe ("at 01:30"); it becomes the night
-  // mean only once the wipe has reached the morning, so a paused scroll never shows a false "mean".
-  useScrub((p) => {
-    let v: string;
-    let l: string;
-    if (p >= 0.999) {
-      v = fmt(room.co2Mean);
-      l = 'night mean';
-    } else {
-      const t = model.lo + p * (model.wake - model.lo);
-      const c = valueAt(model.series, 'co2', t);
-      v = Number.isFinite(c) ? fmt(Math.round(c / 5) * 5) : '–';
-      l = p <= 0.001 ? `at lights out` : `at ${hm(t)}`;
-    }
-    if (v !== last.current.v && ref.current) {
-      last.current.v = v;
-      ref.current.textContent = v;
-    }
-    if (l !== last.current.l && lbl.current) {
-      last.current.l = l;
-      lbl.current.textContent = l;
-    }
-  }, DRAW, [model, room.co2Mean]);
+/** Last 30 nights' CO₂ means: muted bars, nights over 1,000 in signal, last night in ink, dotted 1,000. */
+function NightBars({ history }: { history: RoomNightMetrics[] }) {
+  const [ref, width] = useWidth<HTMLDivElement>();
+  const W = Math.max(width, 200);
+  const H = 200;
+  const pr = 52;
+  const pt = 10;
+  const pb = 30;
+  const vals = history.map((r) => r.co2Mean);
+  // Bars start at 0 so their lengths are honest; the one labelled line is the 1,000 threshold.
+  const lo = 0;
+  const hi = Math.max(1200, ...vals.filter(Number.isFinite)) + 40;
+  const y = scale(lo, hi, H - pb, pt);
+  const bw = (W - pr) / history.length;
+  const lastV = vals.at(-1)!;
   return (
-    <div className={s.mega}>
-      <span className="t-mega num accent" aria-label={`${fmt(room.co2Mean)} ppm night mean`}>
-        <span ref={ref} aria-hidden>
-          {fmt(room.co2Mean)}
-        </span>
-      </span>
-      <span className={`t-label t2 ${s.megaUnit}`} aria-hidden>
-        ppm CO₂
-        <br />
-        <span ref={lbl}>night mean</span>
-      </span>
+    <div ref={ref} className={s.chart} style={{ height: H }} role="img" aria-label={`Nightly CO₂ average for ${history.length} nights; last night ${fmt(lastV)} ppm`}>
+      {width > 0 && (
+        <svg width={W} height={H} aria-hidden>
+          <line x1={0} x2={W - pr} y1={y(500)} y2={y(500)} stroke="var(--grid)" />
+          <text x={W - pr + 10} y={y(500) + 5} className={s.tick}>
+            500
+          </text>
+          <line x1={0} x2={W - pr} y1={y(0)} y2={y(0)} stroke="var(--axis)" />
+          {history.map((r, i) => {
+            const v = r.co2Mean;
+            if (!Number.isFinite(v)) return null;
+            const last = i === history.length - 1;
+            const fill = v > 1000 ? 'var(--signal)' : last ? 'var(--text)' : 'var(--hairline-2)';
+            return (
+              <rect key={r.date} x={i * bw + bw * 0.18} y={y(v)} width={Math.max(1, bw * 0.64)} height={Math.max(1, y(lo) - y(v))} rx={1.5} fill={fill}>
+                <title>{`${shortDate(r.date)} · ${fmt(v)} ppm`}</title>
+              </rect>
+            );
+          })}
+          <line x1={0} x2={W - pr} y1={y(1000)} y2={y(1000)} stroke="var(--signal)" strokeDasharray="2 3" />
+          <text x={W - pr + 10} y={y(1000) + 5} className={s.tickSig}>
+            1,000
+          </text>
+          <text x={0} y={H - 8} className={s.tick}>
+            {shortDate(history[0]!.date)}
+          </text>
+          <text x={W - pr} y={H - 8} textAnchor="end" className={s.tickInk}>
+            Last night {fmt(lastV)}
+          </text>
+        </svg>
+      )}
     </div>
   );
 }
 
-export function airHeadline(room: RoomNightMetrics): [string, string] {
-  if (room.co2Mean >= 1000) return ['Two people.', 'One sealed room.'];
-  if (room.co2Max >= 1000) return ['Fresh at first.', 'Stale by morning.'];
-  if (room.co2Mean >= 800) return ['Two people.', 'Air just held up.'];
-  return ['Two people.', 'Plenty of air.'];
-}
-
-export function TheAir({ model, room, history, baseline, index }: { model: StoryModel; room: RoomNightMetrics; history: RoomNightMetrics[] | null; baseline: RoomNightMetrics[] | null; index: number }) {
-  const [l1, l2] = airHeadline(room);
-  return (
-    <>
-      <Chapter
-        id="air"
-        n={4}
-        title="The air"
-        accent="air"
-        pinned={3}
-        className="bleed"
-        onProgress={(p) => {
-          const q = remap(p, 0, 0.2);
-          setSky({ dusk: 0, mid: 0, dawn: 1 - q, dim: 0 });
-        }}
-      >
-        <div className="sh-kicker t-label">
-          <span>04</span>
-          <span>The air</span>
-        </div>
-        <h2 className={`t-h1 ${s.h1}`}>
-          {l1}
-          <br />
-          <em className="tone">{l2}</em>
-        </h2>
-        <Mega model={model} room={room} />
-        <AirChart model={model} room={room} />
-        <div style={{ flex: 1, minHeight: 12 }} />
-        <Meters room={room} model={model} />
-      </Chapter>
-      <AirHistory history={history} baseline={baseline} index={index} room={room} achNeeded={model.air.achNeeded} />
-    </>
-  );
-}
-
-function AirHistory({ history, baseline, room, achNeeded }: { history: RoomNightMetrics[] | null; baseline: RoomNightMetrics[] | null; index: number; room: RoomNightMetrics; achNeeded: number }) {
-  if (!history)
-    return (
-      <div className={s.flow} style={{ ['--ch-accent' as string]: 'var(--ac-air)' }}>
-        <div className="t-label t2">Last 30 nights · CO₂ mean</div>
-        <div style={{ marginTop: 16 }}>
-          <Placeholder height={150} text="Reading the last 30 nights…" />
-        </div>
-      </div>
-    );
+export function TheAir({
+  model,
+  room,
+  history,
+  baseline,
+  peakAt,
+  crossAt,
+}: {
+  model: StoryModel;
+  room: RoomNightMetrics;
+  history: RoomNightMetrics[] | null;
+  baseline: RoomNightMetrics[] | null;
+  peakAt: number;
+  crossAt: number | null;
+}) {
+  const over = room.minutesCo2Over1000;
   // Same window as the rule report's insight (the 30 nights before this one), so both sentences agree.
-  const past = (baseline ?? history.slice(0, -1)).filter((r) => Number.isFinite(r.co2Mean));
+  const past = (baseline ?? []).filter((r) => Number.isFinite(r.co2Mean));
   const avg = past.length ? past.reduce((a, r) => a + r.co2Mean, 0) / past.length : NaN;
   const d = room.co2Mean - avg;
-  const lo = 400;
-  const hi = Math.max(1200, ...history.map((r) => (Number.isFinite(r.co2Mean) ? r.co2Mean : 0))) + 50;
-  const pct = (v: number) => ((Math.max(lo, v) - lo) / (hi - lo)) * 100;
   const ach = room.achMorning;
+  const need = model.air.achNeeded;
+  const lede = [
+    `Last night averaged ${fmt(room.co2Mean)} ppm`,
+    Number.isFinite(d) && past.length >= 3 ? (Math.abs(d) < 25 ? `, in line with your ${past.length}-night mean.` : `, ${fmt(Math.abs(d))} ${d >= 0 ? 'above' : 'below'} your ${past.length}-night mean.`) : '.',
+    ach !== null && ach < need ? ` Two sleepers need about ${fmt(need / Math.max(0.01, ach), 1)}× the fresh air this room got.` : ach !== null ? ' The room got enough fresh air for two sleepers.' : '',
+  ].join('');
+  const nOver = history ? history.filter((r) => r.co2Mean > 1000).length : 0;
   return (
-    <div className={s.flow} style={{ ['--ch-accent' as string]: 'var(--ac-air)' }}>
-      <Reveal className="t-label t2">Last {history.length} nights · CO₂ mean</Reveal>
-      <Reveal className={s.hist} y={0}>
-        {history.map((r, i) => {
-          const me = i === history.length - 1;
-          return (
-            <i
-              key={r.date}
-              className={me ? s.me : r.co2Mean >= 1000 ? s.hot : undefined}
-              style={{ height: `${pct(r.co2Mean)}%`, ['--i' as string]: i }}
-              title={`${shortDate(r.date)} · ${fmt(r.co2Mean)} ppm`}
-            />
-          );
-        })}
-        <s className={s.histLine} style={{ bottom: `${pct(1000)}%` }} aria-hidden />
-      </Reveal>
-      <div className={`${s.histAx} t-micro`}>
-        <span>{shortDate(history[0]!.date)}</span>
-        <span className={s.histKey}>
-          <i /> over 1,000
-        </span>
-        <span>Last night</span>
-      </div>
-      <Reveal as="p" className={`t-body t2 ${s.lede}`}>
-        {Number.isFinite(d) && past.length >= 3 ? (
-          Math.abs(d) < 25 ? (
-            <>
-              Last night was <b>in line with</b> your {past.length}-night average.{' '}
-            </>
-          ) : (
-            <>
-              Last night ran <b>{fmt(Math.abs(d))} ppm {d >= 0 ? 'above' : 'below'}</b> your {past.length}-night average.{' '}
-            </>
-          )
-        ) : null}
-        {ach !== null && ach < achNeeded ? (
-          <>
-            The room needs about <b>{fmt(achNeeded / Math.max(0.01, ach), 1)}× the fresh air</b> to keep two sleepers under 1,000.
-          </>
-        ) : ach !== null ? (
-          <>
-            Fresh air measured at <b>{fmt(ach, 2)} ACH</b>, enough for two sleepers.
-          </>
-        ) : null}
-      </Reveal>
-    </div>
+    <Scene id="air" title="The air">
+      <SceneCols text={<SceneText label="The air" reading={over > 0 ? dur(over) : '0m'} readingCap="above 1,000 ppm CO₂" title={airHeadline(room)} lede={lede} />}>
+        <Reveal>
+          <VisHead
+            title={crossAt ? `CO₂ crossed 1,000 at ${hm(crossAt)}` : `CO₂ stayed under 1,000 all night`}
+            cap={`ppm, ${hm(model.lo)} to ${hm(model.wake)} · peak ${fmt(room.co2Max)} at ${hm(peakAt)}`}
+          />
+          <Co2Chart model={model} room={room} peakAt={peakAt} crossAt={crossAt} />
+        </Reveal>
+        <div className={s.pair}>
+          <Reveal delay={80}>
+            <VisHead title={ach !== null ? `Fresh air last night: ${fmt(ach, 2)}\u00a0air changes an\u00a0hour` : 'Fresh air: not measured this morning'} cap={`Two sleepers need about ${fmt(need, 2)} to stay under 1,000 ppm`} />
+            <FreshAir ach={ach} need={need} />
+          </Reveal>
+          <Reveal delay={140}>
+            {history ? (
+              <>
+                <VisHead title={`${nOver} of the last ${history.length} nights averaged over 1,000\u00a0ppm`} cap="Nightly CO₂ average, nights over 1,000 marked" />
+                <NightBars history={history} />
+              </>
+            ) : (
+              <>
+                <VisHead title="Last 30 nights" cap="Nightly CO₂ average" />
+                <Placeholder height={200} text="Reading the last 30 nights…" />
+              </>
+            )}
+          </Reveal>
+        </div>
+      </SceneCols>
+    </Scene>
   );
 }

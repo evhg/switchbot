@@ -1,21 +1,23 @@
 'use client';
-/** Room tab, Aircon section: setpoint vs actual, room response scatter, outdoor vs bedroom. */
+/**
+ * Room › Aircon charts (docs/DESIGN.md §7.2): setpoint vs actual, room response, outdoor vs bedroom.
+ * Room °C is the ink hero line; the plan is dashed --muted; the aircon setpoint is a thin --temp step; a command that
+ * did not land is a signal ring.
+ */
 import { useMemo } from 'react';
-import { Area, CartesianGrid, ComposedChart, Line, LineChart, ReferenceDot, ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from 'recharts';
+import { CartesianGrid, ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from 'recharts';
 import { dewPointC, downsample, targetAt, type Night, type TemperatureCurve } from '@sleep-lab/core';
 import { fmt, hm, MIN, niceTicks, shortDate, shortDay } from '@/lib/format.ts';
 import { median } from '@/lib/stats.ts';
-import { Legend } from '../../ui.tsx';
-import { AreaGradient, AXIS, CURSOR, GRID, MARGIN, REF_LINE, refLabel, REF_FRONT, STROKE, Tip, TipRow, useChartAnim, useSvgId, Y_WIDTH } from '../common.tsx';
-import { timeAxis } from './shared.ts';
-import s from './room.module.css';
+import { DrawPath } from '../../motion.tsx';
+import { AXIS, GRID, MARGIN, PLAN_LINE, refLabel, REF_FRONT, TipRow, useChartAnim, Y_WIDTH } from '../common.tsx';
+import { EndLabels, Marker, seriesPath, stepPath, stepTicks, TimeChart } from './frame.tsx';
 
-const ACTIVE = { r: 3.5, stroke: 'var(--surface)', strokeWidth: 2 };
+/** Clamped scale for the setpoint chart (§7.1: 17–25 °C). Exported so the screen can state an out-of-range start. */
+export const SETPOINT_DOMAIN = [17, 25] as const;
 
 // ───────────── Setpoint vs actual ─────────────
 export function SetpointChart({ night, curve }: { night: Night; curve: TemperatureCurve }) {
-  const anim = useChartAnim();
-  const gid = useSvgId('spt');
   const from = night.lightsOut - 100 * MIN;
   const to = night.wake + 40 * MIN;
   const data = useMemo(() => {
@@ -25,68 +27,66 @@ export function SetpointChart({ night, curve }: { night: Night; curve: Temperatu
       return { ts: r.ts, temp: r.tempC, set: c?.state.power ? c.state.setpointC : null, target: targetAt(curve, night.lightsOut, r.ts) };
     });
   }, [night, curve, from, to]);
+  const steps = useMemo(() => {
+    const cmds = [...night.ac].sort((a, b) => a.ts - b.ts).filter((c) => c.ts <= to);
+    return cmds.map((c) => ({ ts: Math.max(from, c.ts), v: c.state.power ? c.state.setpointC : null }));
+  }, [night, from, to]);
   const missed = night.ac.filter((c) => c.landed === false);
-  // All plotted temps (incl. the warm room before the pre-cool), so the line never leaves the plot.
-  const temps = data.map((d) => d.temp).filter(Number.isFinite);
-  const lo = Math.floor(Math.min(16.5, ...temps));
-  const hi = Math.ceil(Math.max(23, ...temps));
+  const [lo, hi] = SETPOINT_DOMAIN;
+  const near = (t: number) => data.reduce((b, d) => (Math.abs(d.ts - t) < Math.abs(b.ts - t) ? d : b), data[0]!);
+  if (!data.length) return null;
+  const last = data.at(-1)!;
+  const lastSet = steps.filter((s) => s.v !== null).at(-1);
   return (
-    <>
-      <Legend
-        items={[
-          { label: 'Setpoint', color: 'var(--setpoint)' },
-          { label: 'Bed-height °C', color: 'var(--temp)' },
-          { label: 'Curve target', color: 'var(--text-2)', shape: 'dash' },
-          ...(missed.length ? [{ label: 'Missed?', color: 'var(--critical)', shape: 'dot' as const }] : []),
-        ]}
-      />
-      <ResponsiveContainer width="100%" height={210}>
-        <ComposedChart data={data} margin={{ ...MARGIN, top: 12 }}>
-          <defs>
-            <AreaGradient id={gid} color="var(--temp)" from={0.22} />
-          </defs>
-          <CartesianGrid {...GRID} />
-          <XAxis {...timeAxis(from, to)} />
-          <YAxis width={Y_WIDTH} domain={[lo, hi]} ticks={niceTicks(lo, hi, 4).filter((t) => t >= lo && t <= hi)} allowDataOverflow tickFormatter={(v: number) => `${v}°`} {...AXIS} />
-          <ReferenceLine x={night.lightsOut} stroke="var(--hairline-2)" label={{ value: 'LIGHTS OUT', position: 'insideTopLeft', fill: 'var(--muted)', fontSize: 9.5, fontFamily: 'var(--font-mono)', dx: 2 }} />
-          <Tooltip
-            cursor={CURSOR}
-            content={(p) => (
-              <Tip
-                {...p}
-                title={(l) => hm(Number(l))}
-                rows={(pl) => pl.filter((x) => typeof x.value === 'number' && x.name !== 'area').map((x) => ({ label: String(x.name), value: `${fmt(Number(x.value), 1)} °C`, color: x.stroke ?? x.color, dash: x.dataKey === 'target' }))}
-              />
-            )}
-          />
-          <Area dataKey="temp" name="area" stroke="none" fill={`url(#${gid})`} baseValue={lo} {...anim} activeDot={false} />
-          <Line dataKey="target" name="target" stroke="var(--text-2)" strokeOpacity={0.7} strokeDasharray="3 4" strokeWidth={STROKE.secondary} dot={false} {...anim} activeDot={false} />
-          <Line dataKey="set" name="setpoint" type="stepAfter" stroke="var(--setpoint)" strokeWidth={STROKE.secondary + 0.3} dot={false} {...anim} activeDot={{ ...ACTIVE, fill: 'var(--setpoint)' }} />
-          <Line dataKey="temp" name="room" stroke="var(--temp)" strokeWidth={STROKE.primary} strokeLinecap="round" dot={false} {...anim} activeDot={{ ...ACTIVE, fill: 'var(--temp)' }} />
+    <TimeChart
+      from={from}
+      to={to}
+      domain={[lo, hi]}
+      ticks={stepTicks(18, 24, 2)}
+      fmtY={(v) => `${v}°`}
+      label={`Room temperature against the plan and the aircon setpoint, ${night.ac.length} commands`}
+      endPad={66}
+      hover={(t) => {
+        const d = near(t);
+        return {
+          title: hm(d.ts),
+          rows: [
+            { label: 'room', value: `${fmt(d.temp, 1)}°`, color: 'var(--text)' },
+            ...(d.target !== null ? [{ label: 'plan', value: `${fmt(d.target, 1)}°`, color: 'var(--muted)', dash: true }] : []),
+            ...(d.set !== null ? [{ label: 'aircon set', value: `${fmt(d.set, 0)}°`, color: 'var(--temp)' }] : [{ label: 'aircon', value: 'off' }]),
+          ],
+          dots: [{ v: d.temp, color: 'var(--text)' }],
+        };
+      }}
+      overlay={(g) => (
+        <EndLabels
+          g={g}
+          items={[
+            { text: 'Room', v: last.temp },
+            ...(last.target !== null ? [{ text: 'Plan', v: last.target, tone: 'muted' as const }] : []),
+            ...(lastSet?.v != null ? [{ text: 'Aircon set', v: lastSet.v, tone: 'muted' as const }] : []),
+          ]}
+          gutter
+        />
+      )}
+    >
+      {(g) => (
+        <>
+          <Marker g={g} t={night.lightsOut} text="Lights out" />
+          <path d={stepPath(g, steps, to)} fill="none" stroke="var(--text-2)" strokeOpacity={0.55} strokeWidth={1.5} strokeLinejoin="round" />
+          <path d={seriesPath(g, data.map((d) => ({ ts: d.ts, v: d.target })))} fill="none" stroke={PLAN_LINE.stroke} strokeDasharray={PLAN_LINE.strokeDasharray} strokeWidth={1.5} />
+          <DrawPath d={seriesPath(g, data.map((d) => ({ ts: d.ts, v: d.temp })), 20 * 60_000, true)} fill="none" stroke="var(--text)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           {missed.map((m) => (
-            <ReferenceDot
-              key={m.ts}
-              x={Math.round(m.ts / (5 * MIN)) * 5 * MIN}
-              y={m.state.setpointC}
-              r={5}
-              ifOverflow="extendDomain"
-              shape={(p: { cx?: number; cy?: number }) => (
-                <g>
-                  <circle className={s.pulseRing} cx={p.cx} cy={p.cy} r={6} fill="none" stroke="var(--critical)" strokeWidth={1.5} />
-                  <circle cx={p.cx} cy={p.cy} r={4.5} fill="var(--critical)" stroke="var(--surface)" strokeWidth={2} />
-                </g>
-              )}
-            />
+            <circle key={m.ts} cx={g.x(m.ts)} cy={g.yc(m.state.setpointC)} r={5} fill="var(--bg)" stroke="var(--signal)" strokeWidth={2} />
           ))}
-        </ComposedChart>
-      </ResponsiveContainer>
-    </>
+        </>
+      )}
+    </TimeChart>
   );
 }
 
 // ───────────── Outdoor vs indoor ─────────────
 export function OutdoorIndoor({ night }: { night: Night }) {
-  const anim = useChartAnim();
   const from = night.room[0]?.ts ?? night.lightsOut;
   const to = night.room.at(-1)?.ts ?? night.wake;
   const data = useMemo(() => {
@@ -94,41 +94,71 @@ export function OutdoorIndoor({ night }: { night: Night }) {
     return room.map((r) => {
       const o = night.outdoor.reduce((best, x) => (Math.abs(x.ts - r.ts) < Math.abs(best.ts - r.ts) ? x : best), night.outdoor[0] ?? { ts: 0, tempC: NaN, rh: NaN });
       const near = Math.abs(o.ts - r.ts) <= 45 * MIN;
-      return {
-        ts: r.ts,
-        inT: r.tempC,
-        outT: near ? o.tempC : null,
-        inDew: dewPointC(r.tempC, r.rh),
-        outDew: near ? dewPointC(o.tempC, o.rh) : null,
-      };
+      return { ts: r.ts, inT: r.tempC, outT: near ? o.tempC : null, inDew: dewPointC(r.tempC, r.rh), outDew: near ? dewPointC(o.tempC, o.rh) : null };
     });
   }, [night]);
-  const chart = (keys: ['outT' | 'outDew', 'inT' | 'inDew'], label: string) => {
-    const vs = data.flatMap((d) => [d[keys[0]], d[keys[1]]]).filter((v): v is number => typeof v === 'number');
+  const chart = (keys: ['outT' | 'outDew', 'inT' | 'inDew'], what: string) => {
+    const vs = data.flatMap((d) => [d[keys[0]], d[keys[1]]]).filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+    if (!vs.length) return null;
     const ticks = niceTicks(Math.min(...vs), Math.max(...vs), 3);
+    const near = (t: number) => data.reduce((b, d) => (Math.abs(d.ts - t) < Math.abs(b.ts - t) ? d : b), data[0]!);
+    const lastOut = data.filter((d) => d[keys[0]] !== null).at(-1);
+    const lastIn = data.at(-1);
     return (
-      <ResponsiveContainer width="100%" height={140}>
-        <LineChart data={data} margin={{ ...MARGIN, top: 6 }} syncId="outdoor">
-          <CartesianGrid {...GRID} />
-          <XAxis {...timeAxis(from, to, 3)} />
-          <YAxis width={Y_WIDTH} domain={[ticks[0]!, ticks.at(-1)!]} ticks={ticks} tickFormatter={(v: number) => `${Math.round(v)}°`} {...AXIS} />
-          <Tooltip cursor={CURSOR} content={(p) => <Tip {...p} title={(l) => `${hm(Number(l))} · ${label}`} rows={(pl) => pl.filter((x) => typeof x.value === 'number').map((x) => ({ label: String(x.name), value: `${fmt(Number(x.value), 1)} °C`, color: x.stroke }))} />} />
-          <Line dataKey={keys[0]} name="outdoor" stroke="var(--outdoor)" strokeWidth={STROKE.secondary + 0.3} dot={false} connectNulls {...anim} activeDot={{ ...ACTIVE, fill: 'var(--outdoor)' }} />
-          <Line dataKey={keys[1]} name="bedroom" stroke="var(--temp)" strokeWidth={STROKE.primary} dot={false} {...anim} activeDot={{ ...ACTIVE, fill: 'var(--temp)' }} />
-        </LineChart>
-      </ResponsiveContainer>
+      <TimeChart
+        from={from}
+        to={to}
+        domain={[ticks[0]!, ticks.at(-1)!]}
+        ticks={ticks}
+        fmtY={(v) => `${Math.round(v)}°`}
+        height={200}
+        label={`Outdoor and bedroom ${what}`}
+        endPad={76}
+        hover={(t) => {
+          const d = near(t);
+          return {
+            title: `${hm(d.ts)} · ${what}`,
+            rows: [
+              { label: 'outdoor', value: d[keys[0]] !== null ? `${fmt(d[keys[0]], 1)}°` : '–', color: 'var(--outdoor)' },
+              { label: 'bedroom', value: `${fmt(d[keys[1]], 1)}°`, color: 'var(--text)' },
+            ],
+            dots: [
+              { v: d[keys[0]] ?? NaN, color: 'var(--outdoor)' },
+              { v: d[keys[1]] ?? NaN, color: 'var(--text)' },
+            ],
+          };
+        }}
+        overlay={(g) => (
+          <EndLabels
+            g={g}
+            items={[
+              ...(lastOut ? [{ text: 'Outdoor', v: lastOut[keys[0]] as number, tone: 'muted' as const }] : []),
+              ...(lastIn ? [{ text: 'Bedroom', v: lastIn[keys[1]] as number }] : []),
+            ]}
+            gutter
+          />
+        )}
+      >
+        {(g) => (
+          <>
+            <path d={seriesPath(g, data.map((d) => ({ ts: d.ts, v: d[keys[0]] })), 2 * 3_600_000)} fill="none" stroke="var(--outdoor)" strokeWidth={1.5} strokeLinejoin="round" />
+            <DrawPath d={seriesPath(g, data.map((d) => ({ ts: d.ts, v: d[keys[1]] })), 2 * 3_600_000)} fill="none" stroke="var(--text)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+          </>
+        )}
+      </TimeChart>
     );
   };
   return (
-    <>
-      <Legend items={[{ label: 'Outdoor (Phuket)', color: 'var(--outdoor)' }, { label: 'Bedroom', color: 'var(--temp)' }]} />
-      <div className={`t-micro ${s.subLabel}`}>Air temperature</div>
-      {chart(['outT', 'inT'], 'temperature')}
-      <div className={`t-micro ${s.subLabel}`} style={{ marginTop: 12 }}>
-        Dew point · moisture the aircon removes
+    <div className="vstack" style={{ ['--gap' as string]: 'var(--sp-8)' }}>
+      <div>
+        <h3 className="label">Air temperature</h3>
+        {chart(['outT', 'inT'], 'temperature')}
       </div>
-      {chart(['outDew', 'inDew'], 'dew point')}
-    </>
+      <div>
+        <h3 className="label">Dew point, the moisture the aircon removes</h3>
+        {chart(['outDew', 'inDew'], 'dew point')}
+      </div>
+    </div>
   );
 }
 
@@ -138,7 +168,6 @@ export function ResponseScatter({ points }: { points: { outdoor: number; minutes
   const closed = points.filter((p) => !p.ajar);
   const ajar = points.filter((p) => p.ajar);
   const med = median(points.map((p) => p.minutes));
-  // Even 1/2/5 steps for the outdoor axis (no "30° 31°" end tick).
   const outs = points.map((p) => p.outdoor).filter(Number.isFinite);
   const xTicks = outs.length ? niceTicks(Math.min(...outs) - 0.3, Math.max(...outs) + 0.3, 4) : [];
   const tip = (p: { active?: boolean; payload?: readonly { payload?: unknown }[] }) => {
@@ -149,33 +178,23 @@ export function ResponseScatter({ points }: { points: { outdoor: number; minutes
         <div className="tip-title">
           {shortDay(d.date)} {shortDate(d.date)}
         </div>
-        <TipRow value={`${Math.round(d.minutes)} min`} label="to cool 1 °C" />
-        <TipRow value={`${fmt(d.outdoor, 1)} °C`} label={`outdoor · ${d.ajar ? 'door ajar' : 'closed'}`} />
+        <TipRow value={`${Math.round(d.minutes)} min`} label="to cool 1°" />
+        <TipRow value={`${fmt(d.outdoor, 1)}°`} label={`outdoor · ${d.ajar ? 'door ajar' : 'door closed'}`} />
       </div>
     );
   };
-  const dot = (fill: string, r: number) => (sh: { cx?: number; cy?: number }) => <circle cx={sh.cx} cy={sh.cy} r={r} fill={fill} fillOpacity={0.85} stroke="var(--surface)" strokeWidth={1.5} />;
   return (
-    <>
-      <Legend
-        items={[
-          { label: 'Door closed', color: 'var(--text-2)', shape: 'dot' },
-          { label: 'Door ajar', color: 'var(--s4)', shape: 'dot' },
-          { label: 'Median', color: 'var(--text-2)', shape: 'dash' },
-        ]}
-      />
-      <ResponsiveContainer width="100%" height={190}>
-        <ScatterChart margin={{ ...MARGIN, top: 12, bottom: 4 }}>
-          <CartesianGrid {...GRID} />
-          <XAxis dataKey="outdoor" type="number" domain={xTicks.length ? [xTicks[0]!, xTicks.at(-1)!] : ['dataMin - 0.5', 'dataMax + 0.5']} ticks={xTicks.length ? xTicks : undefined} tickFormatter={(v: number) => `${fmt(v, 0)}°`} {...AXIS} />
-          <YAxis dataKey="minutes" type="number" width={Y_WIDTH} tickFormatter={(v: number) => `${v}m`} {...AXIS} />
-          <ZAxis range={[40, 40]} />
-          {Number.isFinite(med) && <ReferenceLine {...REF_FRONT} y={med} {...REF_LINE} label={refLabel(`MEDIAN ${Math.round(med)}M`)} />}
-          <Tooltip cursor={false} content={tip} />
-          <Scatter data={closed} fill="var(--text-2)" {...anim} shape={dot('var(--text-2)', 3.5)} />
-          <Scatter data={ajar} fill="var(--s4)" {...anim} shape={dot('var(--s4)', 4.5)} />
-        </ScatterChart>
-      </ResponsiveContainer>
-    </>
+    <ResponsiveContainer width="100%" height={280}>
+      <ScatterChart margin={{ ...MARGIN, top: 24, bottom: 4 }}>
+        <CartesianGrid {...GRID} />
+        <XAxis dataKey="outdoor" type="number" domain={xTicks.length ? [xTicks[0]!, xTicks.at(-1)!] : ['dataMin - 0.5', 'dataMax + 0.5']} ticks={xTicks.length ? xTicks : undefined} tickFormatter={(v: number) => `${fmt(v, 0)}° out`} {...AXIS} />
+        <YAxis dataKey="minutes" type="number" orientation="right" width={Y_WIDTH + 12} tickFormatter={(v: number) => `${v} min`} {...AXIS} />
+        <ZAxis range={[40, 40]} />
+        {Number.isFinite(med) && <ReferenceLine {...REF_FRONT} y={med} {...PLAN_LINE} label={refLabel(`Median ${Math.round(med)} min`)} />}
+        <Tooltip cursor={false} content={tip} />
+        <Scatter data={closed} fill="var(--muted)" {...anim} shape={(sh: { cx?: number; cy?: number }) => <circle cx={sh.cx} cy={sh.cy} r={3.5} fill="var(--muted)" />} />
+        <Scatter data={ajar} fill="var(--text)" {...anim} shape={(sh: { cx?: number; cy?: number }) => <circle cx={sh.cx} cy={sh.cy} r={4.5} fill="var(--bg)" stroke="var(--text)" strokeWidth={1.5} />} />
+      </ScatterChart>
+    </ResponsiveContainer>
   );
 }

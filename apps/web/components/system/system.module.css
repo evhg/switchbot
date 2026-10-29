@@ -1,0 +1,124 @@
+/* System pages (docs/DESIGN.md §9.5): one reading column, grouped lists, space instead of boxes. */
+
+/* ── columns ── */
+.sub { min-width: 0; }
+.col { max-width: var(--measure); margin-inline: auto; }
+.planCol { max-width: var(--measure-plan); margin-inline: auto; }
+@media (min-width: 1760px) { .planCol { max-width: calc(var(--measure-plan) + 300px + var(--sp-16)); } }
+/* Desktop: every System page starts on the same left edge as the other tabs (only the right edge changes). */
+@media (min-width: 1024px) { .col, .planCol { margin-inline: 0; } }
+.header { margin-bottom: var(--sp-8); }
+@media (min-width: 1024px) { .header { margin-bottom: var(--sp-10); } }
+.header :global(.lede) { font-size: var(--t-body); }
+
+/* Phone drill-in: fade + 24 px slide (fade only with reduced motion; none at night). */
+@media (max-width: 1023px) {
+  .drill { animation: drill-in 300ms var(--ease) both; }
+}
+@keyframes drill-in { from { opacity: 0; transform: translate3d(24px, 0, 0); } }
+@media (prefers-reduced-motion: reduce) { .drill { animation-name: drill-fade; } }
+:global(:root[data-theme='night']) .drill { animation-name: drill-fade; }
+@keyframes drill-fade { from { opacity: 0; } }
+
+/* Space between blocks on a page (groups already carry their own top margin). */
+.block { margin-top: var(--sp-8); }
+.block:first-child { margin-top: 0; }
+.after { margin-top: var(--sp-6); }
+.status { margin: calc(-1 * var(--sp-4)) 0 var(--sp-8); }
+.alert { color: var(--signal); margin-top: var(--sp-3); }
+.bare { list-style: none; }
+.bare :global(.card) { border: 0; box-shadow: none; border-radius: 0; }
+.personLi { list-style: none; position: relative; }
+.personLi + .personLi::before { content: ''; position: absolute; top: 0; left: var(--sp-5); right: 0; height: 1px; background: var(--hairline); }
+.themes { padding: var(--sp-5); }
+
+/* Inline forms */
+.inline { margin-top: var(--sp-5); }
+.inlineRow { display: flex; gap: var(--sp-3); }
+.inlineRow :global(.input) { flex: 1; min-width: 0; }
+.calForm { display: grid; gap: var(--sp-4); grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 600px) {
+  .calForm { grid-template-columns: 180px minmax(0, 1fr) auto; align-items: start; }
+  .calBtn { padding-top: calc(var(--t-sec) * 1.5 + var(--sp-2)); }
+}
+
+/* ── Tonight's plan ── */
+.planGrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-16) var(--sp-16); }
+@media (min-width: 1760px) { .planGrid { grid-template-columns: minmax(0, var(--measure-plan)) 300px; align-items: start; } }
+.planMain { min-width: 0; display: grid; gap: var(--sp-8); }
+.summary { border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); padding: var(--sp-4) 0; }
+.summary :global(.readouts) { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; }
+.summary :global(.readout) { padding: 0 var(--sp-4); border-left: 1px solid var(--hairline); }
+.summary :global(.readout:first-child) { padding-left: 0; border-left: 0; }
+.summary :global(.readout-v) { font-size: var(--t-title); font-weight: 300; letter-spacing: -0.02em; }
+
+.planAside { display: grid; gap: var(--sp-12); align-content: start; min-width: 0; }
+@media (min-width: 600px) and (max-width: 1759px) { .planAside { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-10); } }
+@media (min-width: 1760px) { .planAside { position: sticky; top: var(--sp-16); } }
+.asideBlock { display: grid; gap: var(--sp-3); align-content: start; min-width: 0; }
+.asideH { font-size: var(--t-body); font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; padding-bottom: var(--sp-3); border-bottom: 1px solid var(--hairline); }
+.sched { list-style: none; margin: 0; padding: 0; }
+.sched li { display: grid; grid-template-columns: 3.4em 2.6em minmax(0, 1fr); gap: var(--sp-3); align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--hairline); font-size: var(--t-sec); }
+.sched b { font-weight: 560; color: var(--text); }
+.sched li > span:last-child { color: var(--text-2); }
+.kv { margin: 0; display: grid; }
+.kv > div { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-4); padding: 10px 0; border-bottom: 1px solid var(--hairline); font-size: var(--t-sec); }
+.kv dt { color: var(--text-2); }
+.kv dd { margin: 0; font-weight: 560; color: var(--text); text-align: right; }
+.kv dd span { font-weight: 400; }
+
+/* ── Setup guide ── */
+.progress { display: grid; gap: var(--sp-2); margin-bottom: var(--sp-8); }
+.meter { height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--text); transform-origin: left; transition: transform var(--d-reveal) var(--ease); }
+.checklist { counter-reset: none; }
+.check { position: relative; display: flex; align-items: flex-start; gap: var(--sp-2); padding: 0 var(--sp-3) 0 var(--sp-2); }
+.check + .check::before { content: ''; position: absolute; top: 0; left: 60px; right: 0; height: 1px; background: var(--hairline); }
+.box { flex: none; width: 48px; height: 60px; display: grid; place-items: center; cursor: pointer; border-radius: var(--r-s); }
+.box:has(input:focus-visible) { outline: 2px solid var(--text); outline-offset: -4px; }
+.ring { fill: none; stroke: var(--hairline-2); stroke-width: 1.5; transition: fill var(--d-fast), stroke var(--d-fast); }
+.tick { fill: none; stroke: var(--bg); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; opacity: 0; transition: opacity var(--d-fast); }
+.check[data-done] .ring { fill: var(--text); stroke: var(--text); }
+.check[data-done] .tick { opacity: 1; }
+:global(:root[data-theme='night']) .check[data-done] .ring { fill: none; }
+:global(:root[data-theme='night']) .check[data-done] .tick { stroke: var(--text); }
+.details { flex: 1; min-width: 0; }
+.details summary { display: flex; align-items: center; gap: var(--sp-3); min-height: 60px; padding: var(--sp-2) var(--sp-2) var(--sp-2) 0; }
+.checkT { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.checkT b { font-weight: 400; font-size: var(--t-body); line-height: 1.35; }
+.checkT > span { font-size: var(--t-sec); color: var(--text-2); }
+.check[data-done] .checkT b { color: var(--text-2); }
+.chev { color: var(--muted); flex: none; transition: transform var(--d-base) var(--ease); }
+.details[open] .chev { transform: rotate(180deg); }
+.steps { margin: 0 0 var(--sp-4); padding: 0 0 0 1.2em; display: grid; gap: var(--sp-2); font-size: var(--t-sec); color: var(--text-2); line-height: 1.5; }
+.steps li::marker { color: var(--muted); }
+
+/* ── Phone root ── */
+.root { max-width: 640px; margin-inline: auto; }
+.mini { margin: var(--sp-2) 0 var(--sp-4); }
+.mini svg { display: block; }
+.strip { display: flex; justify-content: space-between; gap: var(--sp-3); margin: 0; flex-wrap: wrap; }
+.strip > div { display: flex; gap: 6px; align-items: baseline; font-size: var(--t-sec); }
+.strip dt { color: var(--text-2); }
+.strip dd { margin: 0; color: var(--text); font-weight: 560; }
+.groups { margin-top: var(--sp-10); }
+.rootFoot { margin: var(--sp-6) 4px 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .meter i, .chev, .ring, .tick { transition: none; }
+}
+
+/* Night mode: the shared thumbnails' filter lets the Light preview exceed the red-only ceiling (§3.5: G, B ≤ 0x30,
+   R ≤ 0xC4). Here they are redrawn in night reds, told apart by lightness only. */
+:global(:root[data-theme='night']) .themes :global(.theme-win:not(.night)) { filter: none; }
+:global(:root[data-theme='night']) .themes :global(.theme-win.light) { background: #7a1a12; }
+:global(:root[data-theme='night']) .themes :global(.theme-win.light i) { background: #160403; }
+:global(:root[data-theme='night']) .themes :global(.theme-win.dark) { background: #0c0201; }
+:global(:root[data-theme='night']) .themes :global(.theme-win.dark i) { background: #9a2016; }
+:global(:root[data-theme='night']) .themes :global(.theme-win.auto) { background: linear-gradient(135deg, #7a1a12 50%, #0c0201 50%); }
+:global(:root[data-theme='night']) .themes :global(.theme-win.auto i) { background: #4a0f09; }
+
+/* Data & devices: the one-line answer at the top. */
+.dataSummary { display: grid; gap: var(--sp-2); padding: var(--sp-5) var(--sp-6); margin: 0 0 var(--sp-8); }
+.dataSummary :global(.status) { font-size: var(--t-body); color: var(--text); }
+.dataSummary b { font-weight: 600; }

@@ -1,12 +1,14 @@
 'use client';
-// 01 · The verdict — pinned 150svh hero (docs/DESIGN.md §10). The score number, verdict and person cards drift up
-// and fade as you scroll (transform / opacity on refs, no React renders per frame); the sky dims.
-import { useRef } from 'react';
-import { fmt } from '@/lib/format.ts';
-import { ScoreRing } from '../charts/ScoreRing.tsx';
-import { Chapter, CountUp, Reveal, setSky, useMotionPrefs } from '../motion.tsx';
-import { Skeleton } from '../ui.tsx';
+// Scene 1 · Last night (docs/DESIGN.md §9.1). The one reading of the screen: the room score at hero size, its
+// 0–100 scale with "typical 70", the two-tone verdict, then You and Erik. Desktop adds the "at a glance" row and
+// the whole night as a hypnogram strip that opens "The night" below.
 import type { ReactNode } from 'react';
+import { dur, fmt, hm } from '@/lib/format.ts';
+import { scale } from '../charts/common.tsx';
+import { Chapter, CountUp, Reveal } from '../motion.tsx';
+import { Readout, Readouts, Skeleton, useWidth } from '../ui.tsx';
+import { HypnoBlocks, personScope } from './parts.tsx';
+import type { StoryModel } from './model.ts';
 import s from './story.module.css';
 
 export interface HeroPerson {
@@ -15,8 +17,18 @@ export interface HeroPerson {
   color: string;
   sleep: number;
   recovery: number | null;
+  /** Minutes asleep. */
+  asleep?: number;
   away?: boolean;
+  /** HRV (RMSSD, ms) last night and that person's typical (mean of the 30 nights before). */
+  hrv?: number;
+  hrvTypical?: number | null;
+  /** Lowest heart rate, bpm. */
+  low?: number;
 }
+
+/** A typical night scores 70 (the waterfall's start, §7.2 score scale). */
+export const TYPICAL = 70;
 
 /** Splits a verdict at its first full stop or colon: the first part in --text, the rest in --text-2. */
 export function twoTone(text: string): [string, string] {
@@ -27,153 +39,211 @@ export function twoTone(text: string): [string, string] {
   return [head, rest ? rest[0]!.toUpperCase() + rest.slice(1) + (/[.!?]$/.test(rest) ? '' : '.') : ''];
 }
 
-export function Verdict({ score, verdict, people, onFocus, kicker = 'The story of last night', revealKey }: { score: number; verdict: string | null; people: HeroPerson[]; onFocus: (f: string) => void; kicker?: string; /** Count-ups play once per key per session (the night's date). */ revealKey?: string }) {
-  const num = useRef<HTMLDivElement>(null);
-  const text = useRef<HTMLDivElement>(null);
-  const cards = useRef<HTMLDivElement>(null);
-  const cue = useRef<HTMLDivElement>(null);
-  const kick = useRef<HTMLDivElement>(null);
-  const { level } = useMotionPrefs();
+/** 0–100 ticks, the filled part in ink, "typical 70" and the score as a 2 px signal tick. */
+function ScoreScale({ score }: { score: number }) {
+  const v = Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 0;
+  const ticks = Array.from({ length: 21 }, (_, i) => i * 5);
+  return (
+    <div className={s.scale} role="img" aria-label={`${fmt(score)} out of 100, typical ${TYPICAL}`}>
+      <svg viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden>
+        {ticks.map((t) => (
+          <line key={t} x1={t} x2={t} y1={t % 10 ? 12 : 7} y2={18} stroke="var(--hairline-2)" vectorEffect="non-scaling-stroke" />
+        ))}
+        <line x1={0} x2={v} y1={18} y2={18} stroke="var(--text)" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+        <line x1={TYPICAL} x2={TYPICAL} y1={3} y2={22} stroke="var(--muted)" vectorEffect="non-scaling-stroke" />
+        <line x1={v} x2={v} y1={0} y2={22} stroke="var(--signal)" strokeWidth={2.5} vectorEffect="non-scaling-stroke" />
+      </svg>
+      <div className={`cap ${s.scaleAx}`}>
+        <span>0</span>
+        <span style={{ left: `${TYPICAL}%` }}>typical {TYPICAL}</span>
+        <span>100</span>
+      </div>
+    </div>
+  );
+}
+
+/** The whole night, both hypnograms on one time axis (the hero's bridge into "The night"). */
+function NightStripMini({ model }: { model: StoryModel }) {
+  const [ref, w] = useWidth<HTMLDivElement>();
+  const n = model.people.length;
+  const row = w >= 1200 ? 8 : w >= 900 ? 6 : 4;
+  const gap = w >= 900 ? 3 : 2;
+  const hyp = row * 4 + gap * 3;
+  const between = w >= 900 ? 24 : 12;
+  const H = n * hyp + Math.max(0, n - 1) * between;
+  const gut = w >= 900 ? 72 : 52;
+  const x = scale(model.lo, model.end, gut, Math.max(gut + 1, w));
+  return (
+    <div ref={ref} className={s.strip} style={{ height: H }}>
+      {w > 0 && (
+        <svg width={w} height={H} aria-hidden>
+          {model.people.map((p, i) => (
+            <g key={p.id} className={personScope(i)}>
+              <text x={0} y={i * (hyp + between) + hyp / 2 + 5} className={s.stripName}>
+                {p.name}
+              </text>
+              <HypnoBlocks stages={p.night.sleep.stages} x={x} from={model.lo} to={model.end} y={i * (hyp + between)} row={row} gap={gap} rx={1} />
+            </g>
+          ))}
+        </svg>
+      )}
+    </div>
+  );
+}
+
+export function Verdict({
+  label,
+  score,
+  verdict,
+  people,
+  glance,
+  model,
+  onFocus,
+  revealKey,
+}: {
+  label: string;
+  score: number;
+  verdict: string | null;
+  people: HeroPerson[];
+  glance: { label: string; value: ReactNode }[];
+  model: StoryModel;
+  onFocus: (f: string) => void;
+  /** Count-up plays once per key per session (the night's date). */
+  revealKey?: string;
+}) {
   const [a, b] = verdict ? twoTone(verdict) : ['', ''];
   return (
-    <Chapter
-      id="verdict"
-      n={1}
-      title="The verdict"
-      accent="verdict"
-      pinned={1.5}
-      outline={false}
-      reducedProgress={0}
-      className="bleed first"
-      onProgress={(p) => {
-        if (cue.current) cue.current.style.opacity = String(Math.max(0, 1 - p * 4));
-        if (level !== 'full') return;
-        if (num.current) {
-          num.current.style.transform = `translate3d(0,${(-90 * p).toFixed(1)}px,0) scale(${(1 - 0.16 * p).toFixed(4)})`;
-          num.current.style.opacity = (1 - 0.55 * p).toFixed(3);
-        }
-        if (text.current) {
-          text.current.style.transform = `translate3d(0,${(-60 * p).toFixed(1)}px,0)`;
-          text.current.style.opacity = (1 - 0.6 * p).toFixed(3);
-        }
-        if (kick.current) kick.current.style.opacity = String(Math.max(0, 1 - p * 2.5));
-        if (cards.current) {
-          cards.current.style.transform = `translate3d(0,${(-40 * p).toFixed(1)}px,0)`;
-          cards.current.style.opacity = (1 - 0.5 * p).toFixed(3);
-        }
-        setSky({ dusk: 1, mid: 0, dawn: 0, dim: 0.55 * p });
-      }}
-    >
-      <div ref={kick}>
-        <Reveal className="sh-kicker t-label" y={10}>
-          <span>01</span>
-          <span>{kicker}</span>
-        </Reveal>
-      </div>
-      <div ref={num} className={`will ${s.heroNum}`}>
-        <button type="button" className="tap" onClick={() => onFocus('room')} aria-label={`Sleep Air ${fmt(score)}: see what drove it`}>
-          <CountUp value={score} className="t-hero" textClassName="grad-num" style={{ paddingRight: '0.08em' }} onceKey={revealKey && Number.isFinite(score) ? `hero:${revealKey}:${score}` : undefined} />
-        </button>
-        <div className="t-label t2" style={{ marginTop: 14 }}>
-          Sleep Air · room score / 100
-        </div>
-      </div>
-      <div ref={text} className="will" style={{ marginTop: 22, minHeight: 70 }}>
-        {verdict ? (
-          <Reveal as="p" className={s.verdict} delay={250}>
-            {a} {b && <span className="tone-2">{b}</span>}
+    <Chapter id="verdict" title="Last night" className={s.hero} innerClassName={s.heroInner}>
+      <div className={s.heroGrid}>
+        <div className={s.heroMain}>
+          <Reveal as="p" className={`label ${s.heroLabel}`} y={10}>
+            {label}
           </Reveal>
-        ) : (
-          <div style={{ display: 'grid', gap: 10 }} role="status" aria-label="Reading the night">
-            <Skeleton h={22} w="92%" r="text" />
-            <Skeleton h={22} w="64%" r="text" />
-          </div>
-        )}
-      </div>
-      <div ref={cards} className="will" style={{ marginTop: 22 }}>
-        <Reveal stagger className={s.duo} style={{ gridTemplateColumns: `repeat(${Math.max(1, people.length)}, minmax(0, 1fr))` }} delay={200}>
-          {people.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              className={`${s.who} tap`}
-              style={{ ['--pc' as string]: p.color }}
-              onClick={() => !p.away && onFocus(p.id)}
-              disabled={p.away}
-              aria-label={p.away ? `${p.name}: away` : `${p.name}: sleep ${fmt(p.sleep)}${p.recovery !== null ? `, recovery ${fmt(p.recovery)}` : ''}. Open drivers`}
-            >
-              <div style={{ width: 52, flex: 'none' }}>
-                {p.away ? (
-                  <div className="sk-ring" style={{ width: 52, height: 52, borderWidth: 5 }} />
-                ) : (
-                  <ScoreRing value={p.sleep} inner={p.recovery ?? undefined} color={p.color} label={`${p.name} sleep`} size={52} showValue={false} glow={false} />
-                )}
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <div className={s.whoName}>
-                  <i style={{ background: p.color }} />
-                  {p.name}
-                </div>
-                {p.away ? (
-                  <div className={s.whoAway}>Away</div>
-                ) : (
-                  <CountUp value={p.sleep} className={s.whoScore} onceKey={revealKey && Number.isFinite(p.sleep) ? `who:${revealKey}:${p.id}:${p.sleep}` : undefined} />
-                )}
-                <div className="t-micro t2" style={{ marginTop: 5 }}>
-                  {p.away ? 'no data' : p.recovery !== null ? `Recovery ${fmt(p.recovery)}` : 'Recovery …'}
-                </div>
-              </div>
-            </button>
-          ))}
+          {/* The people lead: one sleep score each at display size, with recovery and HRV underneath. */}
+          <Reveal className={s.duo} delay={60}>
+            {people.map((p, i) => {
+              const dHrv = p.hrv !== undefined && p.hrvTypical != null && Number.isFinite(p.hrv) ? Math.round(p.hrv - p.hrvTypical) : null;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`${s.person} ${personScope(i)}`}
+                  onClick={() => !p.away && onFocus(p.id)}
+                  disabled={p.away}
+                  aria-label={p.away ? `${p.name}: away` : `${p.name}: sleep score ${fmt(p.sleep)}${p.recovery !== null ? `, recovery ${fmt(p.recovery)}` : ''}. See what drove it`}
+                >
+                  <span className={s.who}>
+                    <i aria-hidden />
+                    {p.name}
+                  </span>
+                  <span className={s.personScore}>
+                    {p.away || !Number.isFinite(p.sleep) ? '–' : <CountUp value={p.sleep} onceKey={revealKey ? `hero:${revealKey}:${p.id}:${p.sleep}` : undefined} />}
+                  </span>
+                  <span className={s.personMeta}>
+                    {p.away ? (
+                      'Away last night'
+                    ) : (
+                      <>
+                        <span>Sleep score</span>
+                        <span>
+                          Recovery <b className="num">{p.recovery !== null ? fmt(p.recovery) : '…'}</b>
+                        </span>
+                        {p.hrv !== undefined && Number.isFinite(p.hrv) && (
+                          <span>
+                            HRV <b className="num">{fmt(p.hrv)} ms</b>
+                            {dHrv !== null && dHrv !== 0 && <span className="num"> {dHrv > 0 ? '↑' : '↓'} {Math.abs(dHrv)}</span>}
+                          </span>
+                        )}
+                        {p.asleep !== undefined && Number.isFinite(p.asleep) && (
+                          <span>
+                            Asleep <b className="num">{dur(p.asleep)}</b>
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
+          </Reveal>
+          {verdict ? (
+            <Reveal as="p" className={s.verdict} delay={140}>
+              {a} {b && <span>{b}</span>}
+            </Reveal>
+          ) : (
+            <div className={s.verdictSk} role="status" aria-label="Reading the night">
+              <Skeleton h={28} w="92%" r="text" />
+              <Skeleton h={28} w="64%" r="text" />
+            </div>
+          )}
+        </div>
+        {/* The room is secondary: its own score, against a typical night. */}
+        <Reveal className={s.roomSide} delay={200}>
+          <button type="button" className={s.roomBtn} onClick={() => onFocus('room')} aria-label={`Room score ${fmt(score)} out of 100, typical ${TYPICAL}. See what drove it`}>
+            <span className={s.roomHead}>
+              <span className="label">Room score</span>
+              <span className={s.roomVal}>
+                <b className="num">{fmt(score)}</b>
+                <span className="sec"> / 100</span>
+              </span>
+            </span>
+            <ScoreScale score={score} />
+          </button>
         </Reveal>
       </div>
-      <div ref={cue} className={`${s.cue} t-label`} style={{ marginTop: 'auto', paddingTop: 20 }}>
-        <i aria-hidden />
-        <span>Scroll through the night</span>
-      </div>
+      <Reveal className={s.glance} delay={260}>
+        <Readouts n={glance.length}>
+          {glance.map((g) => (
+            <Readout key={g.label} label={g.label} value={g.value} />
+          ))}
+        </Readouts>
+      </Reveal>
+      <Reveal className={s.stripWrap} delay={300}>
+        <NightStripMini model={model} />
+        <div className={s.cue}>
+          <span className="cap num">{hm(model.lo)}</span>
+          <span className={s.cueText}>
+            Scroll through the night
+            <svg viewBox="0 0 24 24" width={18} height={18} fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 5v14M6 13l6 6 6-6" />
+            </svg>
+          </span>
+          <span className="cap num">{hm(model.end)}</span>
+        </div>
+      </Reveal>
     </Chapter>
   );
 }
 
-/**
- * First-paint skeleton with the Verdict's exact geometry (same chapter frame, hero line box, verdict block and
- * card row), so nothing jumps when the real hero replaces it.
- */
+/** First-paint skeleton with the hero's geometry, so nothing jumps when the data arrives. */
 export function VerdictSkeleton({ status, people = 2 }: { status: ReactNode; people?: number }) {
   return (
-    <section className="chapter bleed first" data-pinned="" style={{ height: '100svh' }} role="status" aria-live="polite">
+    <section className={`chapter ${s.hero}`} role="status" aria-live="polite">
       <div className="pin">
-        <div className="chapter-inner">
-          <div className="sh-kicker t-label">
-            <span>01</span>
-            <span>The story of last night</span>
-          </div>
-          <div className={s.heroNum}>
-            <div className="t-hero" aria-hidden>
-              <Skeleton w="1.2em" h=".7em" r="lg" style={{ marginTop: '.06em' }} />
-            </div>
-            <div className="t-label t2" style={{ marginTop: 14 }}>
-              Sleep Air · room score / 100
-            </div>
-          </div>
-          <div style={{ marginTop: 22, minHeight: 70, display: 'grid', gap: 10, alignContent: 'start' }}>
-            <Skeleton h={22} w="92%" r="text" />
-            <Skeleton h={22} w="64%" r="text" />
-          </div>
-          <div className={s.duo} style={{ marginTop: 22, gridTemplateColumns: `repeat(${people}, minmax(0, 1fr))` }}>
-            {Array.from({ length: people }, (_, i) => (
-              <div key={i} className={s.who}>
-                <div className="sk-ring" style={{ width: 52, height: 52, borderWidth: 5, flex: 'none' }} />
-                <div style={{ display: 'grid', gap: 8, flex: 1 }}>
-                  <Skeleton w="60%" h={12} r="text" />
-                  <Skeleton w="45%" h={26} r="text" />
-                </div>
+        <div className={`chapter-inner ${s.heroInner}`}>
+          <div className={s.heroGrid}>
+            <div className={s.heroMain}>
+              <p className={`label ${s.heroLabel}`}>Last night</p>
+              <div className={s.duo} aria-hidden>
+                {Array.from({ length: people }, (_, i) => (
+                  <div key={i} className={s.person} style={{ pointerEvents: 'none' }}>
+                    <Skeleton w={90} h={18} r="text" />
+                    <Skeleton w="1.2em" h=".74em" r="lg" className={s.personScore} />
+                    <Skeleton w={150} h={16} r="text" />
+                  </div>
+                ))}
               </div>
-            ))}
+              <div className={s.verdictSk}>
+                <Skeleton h={28} w="92%" r="text" />
+                <Skeleton h={28} w="64%" r="text" />
+              </div>
+            </div>
+            <div className={s.roomSide}>
+              <Skeleton w={220} h={18} r="text" />
+              <Skeleton h={24} w="100%" r="text" style={{ marginTop: 16 }} />
+            </div>
           </div>
-          <div className="sk-status t-label" style={{ marginTop: 'auto', paddingTop: 20 }}>
-            {status}
-          </div>
+          <p className={`cap ${s.skStatus}`}>{status}</p>
         </div>
       </div>
     </section>

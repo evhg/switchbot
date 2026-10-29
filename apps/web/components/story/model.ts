@@ -109,6 +109,8 @@ export interface AcTick {
 
 export interface StoryModel {
   date: string;
+  /** The curve the night is told against (targets, the plan line). */
+  curve: TemperatureCurve;
   lo: number;
   wake: number;
   /** Last person up (the chart runs lights-out → end). */
@@ -375,6 +377,7 @@ export function buildStory(night: Night, people: readonly Person[], colorOf: (id
   }
   return {
     date: night.date,
+    curve,
     lo,
     wake,
     end,
@@ -398,3 +401,93 @@ export function buildStory(night: Night, people: readonly Person[], colorOf: (id
 
 export const whoLabel = (m: Moment, people: readonly StoryPerson[]) => (m.who ? people.find((p) => p.id === m.who)?.name ?? '' : '');
 export { lowerYou, durShort };
+
+// ───────────────────────── v2 selectors (docs/DESIGN.md §9.1, §11) ─────────────────────────
+
+/** Time of the highest raw CO₂ reading inside the sleep window (lights out → wake), the one the headline peak uses. */
+export function co2PeakAt(night: Night, peak: number): number {
+  let best: { ts: number; d: number } = { ts: night.lightsOut, d: Infinity };
+  for (const r of night.room) {
+    if (r.ts < night.lightsOut || r.ts >= night.wake) continue;
+    const d = Math.abs(r.co2 - peak);
+    if (d < best.d) best = { ts: r.ts, d };
+  }
+  return best.ts;
+}
+
+/** First minute inside the sleep window at or above `ppm` (interpolated per-minute series), or null. */
+export function co2CrossAt(model: StoryModel, ppm = 1000): number | null {
+  for (let t = model.lo; t <= model.wake; t += MIN) if (valueAt(model.series, 'co2', t) >= ppm) return t;
+  return null;
+}
+
+export interface NightStep {
+  t: number;
+  title: string;
+  detail: string;
+}
+
+const sentence = (t: string) => (/[.!?]$/.test(t) ? t : `${t}.`);
+
+/**
+ * The six steps "The night" holds on (§9.1 scene 3): lights out, then the strongest moments in between (CO₂
+ * crossing 1,000, the deepest stretch, aircon corrections, the room warming, long wakes), then wake with the CO₂
+ * peak. Every time and value comes from the model (core data); the full list stays in `model.moments`.
+ */
+export function nightSteps(model: StoryModel, co2Peak: number, peakAt: number, minsOver1000: number, max = 6): NightStep[] {
+  const ms = model.moments;
+  if (!ms.length) return [];
+  const temp = (t: number) => valueAt(model.series, 'temp', t);
+  const co2 = (t: number) => valueAt(model.series, 'co2', Math.min(t, model.wake));
+  const rh = (t: number) => valueAt(model.series, 'rh', t);
+  const first = ms[0]!;
+  // The closing step: the last person up (or the alarm).
+  const ends = ms.filter((m) => m.kind === 'up' || m.kind === 'alarm');
+  const last = ends.at(-1) ?? ms.at(-1)!;
+  const rank = (m: Moment): number => {
+    if (m.kind === 'co2' && /crossed 1,000/.test(m.text)) return 10;
+    if (m.kind === 'deep') return 9;
+    if (m.kind === 'ac' && /nudged|ran (warm|cold)/i.test(m.text)) return 8;
+    if (m.kind === 'ac' && /warmed/.test(m.text)) return 7.5;
+    if (m.kind === 'co2' && /crossed/.test(m.text)) return 7;
+    if (m.kind === 'awake') return 6;
+    if (m.kind === 'rh') return 5.5;
+    if (m.kind === 'hr') return 5;
+    if (m.kind === 'sleep') return 4;
+    if (m.kind === 'ac') return 3;
+    return 1;
+  };
+  const middle = ms
+    .filter((m) => m !== first && m !== last && m.t > first.t + 15 * MIN && m.t < last.t - 15 * MIN && !/peaked/.test(m.text))
+    .sort((a, b) => rank(b) - rank(a) || a.t - b.t);
+  const chosen: Moment[] = [];
+  for (const m of middle) {
+    if (chosen.length >= max - 2) break;
+    if (chosen.some((c) => Math.abs(c.t - m.t) < 25 * MIN)) continue;
+    chosen.push(m);
+  }
+  const pick = [first, ...chosen.sort((a, b) => a.t - b.t), last];
+  return pick.map((m, i) => {
+    const t = m.t;
+    const tc = temp(t);
+    const room = Number.isFinite(tc) ? `Room ${fmt(tc, 1)}°` : 'Room –';
+    let detail = '';
+    if (i === pick.length - 1) {
+      detail = Number.isFinite(co2Peak)
+        ? `CO₂ peaked at ${fmt(Math.round(co2Peak))} ppm at ${hm(peakAt)}${minsOver1000 > 0 ? `, ${dur(minsOver1000)} above 1,000 overall` : ''}.`
+        : `${room}.`;
+    } else if (i === 0) {
+      const h = rh(t);
+      detail = `${room}${Number.isFinite(h) ? `, humidity ${fmt(h)}%` : ''}.`;
+    } else if (m.kind === 'co2') {
+      detail = 'Two sleepers, a closed room, no fresh air coming in.';
+    } else if (m.kind === 'ac' || m.kind === 'deep') {
+      const tg = targetAt(model.curve, model.lo, t);
+      detail = tg !== null && Number.isFinite(tc) ? `${room} against a ${deg(tg)} plan.` : `${room}.`;
+    } else {
+      const c = co2(t);
+      detail = `${room}${Number.isFinite(c) ? `, CO₂ ${fmt(Math.round(c / 5) * 5)} ppm` : ''}.`;
+    }
+    return { t, title: sentence(m.text), detail };
+  });
+}

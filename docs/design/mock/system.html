@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sleep Lab · System</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  /* ---------- Layout: phone = list that drills in; desktop = list + detail ---------- */
+  .sys { padding-top: 8px; }
+  .pane { display: none; }
+  body[data-pane] .sys-list { display: none; }
+  body[data-pane] .pane.on { display: block; }
+  .pane-in { padding-bottom: 40px; }
+  .back { display: inline-flex; align-items: center; gap: 2px; height: 44px; margin-left: -10px; padding: 0 10px; border: 0; background: none; color: var(--ink-2); font-size: var(--t-body); cursor: pointer; }
+  .back svg { width: 20px; height: 20px; }
+  .pane h1 { margin: 6px 0 6px; }
+  .pane .lede { font-size: var(--t-sec); color: var(--ink-2); max-width: 56ch; }
+  .block { margin-top: 40px; }
+  .sys-list h1 { margin: 20px 0 24px 4px; }
+  .sys-list .grp { margin-bottom: 28px; }
+
+  @media (min-width: 1024px) {
+    .sys { padding-top: 0; }
+    .sys-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr); column-gap: 64px; max-width: 1180px; margin: 0 auto; align-items: start; }
+    body[data-pane] .sys-list, .sys-list { display: block; position: sticky; top: 0; padding: 56px 0 32px; max-height: 100vh; overflow: auto; }
+    .sys-list h1 { margin: 0 0 28px 12px; font-size: var(--t-head); }
+    .sys-list .feature { display: none; }
+    .sys-list .grp { margin-bottom: 22px; }
+    .sys-list .group-h { margin: 0 0 6px 12px; font-size: var(--t-cap); }
+    .sys-list .list { background: none; border: 0; border-radius: 0; overflow: visible; }
+    .sys-list .list > .li { min-height: 40px; padding: 8px 12px; border: 0; border-radius: var(--r-s); cursor: pointer; }
+    .sys-list .list > .li:hover { background: var(--surface); }
+    .sys-list .li .lt b { font-size: var(--t-sec); font-weight: 500; color: var(--ink-2); }
+    .sys-list .li .val { font-size: var(--t-cap); color: var(--ink-3); }
+    .sys-list .li .chev { display: none; }
+    .sys-list .li.on { background: var(--surface-2); }
+    .sys-list .li.on .lt b { color: var(--ink); }
+    .pane, body[data-pane] .pane { display: none; }
+    .pane.on, body[data-pane] .pane.on { display: block; }
+    .pane-in { padding: 56px 0 96px; max-width: 760px; }
+    .back { display: none; }
+  }
+  @media (min-width: 1920px) { .sys-grid { grid-template-columns: 300px minmax(0, 1fr); max-width: 1380px; column-gap: 88px; } .pane-in { max-width: 840px; } }
+
+  @media (max-width: 1023px) { .planrow { display: none !important; } }
+  /* phone list: tappable rows */
+  .li[data-go] { cursor: pointer; }
+  .li[data-go]:active { background: var(--surface-2); }
+
+  /* feature card (phone root) */
+  .feature { display: block; padding: 20px 20px 16px; margin-bottom: 32px; cursor: pointer; }
+  .feature .row1 { display: flex; justify-content: space-between; align-items: baseline; }
+  .feature .row1 b { font-size: var(--t-head); font-weight: 600; }
+  .feature .row1 span { color: var(--ink-2); font-size: var(--t-sec); display: inline-flex; align-items: center; gap: 2px; }
+  .feature .row1 span svg { width: 16px; height: 16px; }
+  .feature svg.mini { width: 100%; height: 88px; display: block; margin: 14px 0 10px; }
+  .feature .row2 { display: flex; justify-content: space-between; font-size: var(--t-sec); color: var(--ink-2); }
+  .feature .row2 b { color: var(--ink); font-weight: 500; }
+
+  /* ---------- Plan instrument ---------- */
+  .plan-wrap { display: grid; gap: 40px; }
+  @media (min-width: 1760px) {
+    #p-plan .pane-in { max-width: none; }
+    .plan-wrap { grid-template-columns: minmax(0, 840px) 320px; column-gap: 72px; align-items: start; }
+    body[data-pane='plan'] .sys-grid { max-width: 1720px; }
+  }
+  .sumrow { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 28px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .sumrow div { padding: 16px 0; }
+  .sumrow div + div { padding-left: 20px; border-left: 1px solid var(--line); }
+  .sumrow span { display: block; font-size: var(--t-cap); color: var(--ink-3); }
+  .sumrow b { display: block; font-size: var(--t-head); font-weight: 400; margin-top: 2px; }
+  .instrument { margin-top: 28px; padding: 24px 24px 0; overflow: hidden; }
+  @media (max-width: 1023px) { .instrument { margin-left: calc(var(--gutter) * -1); margin-right: calc(var(--gutter) * -1); border-radius: 0; border-left: 0; border-right: 0; padding: 20px var(--gutter) 0; } }
+  .instrument .chart-t { display: flex; justify-content: space-between; align-items: baseline; font-size: var(--t-sec); }
+  .instrument .chart-t b { font-weight: 560; }
+  .instrument .chart-t span { color: var(--ink-3); font-size: var(--t-cap); }
+  #curve { margin: 14px 0 18px; }
+  #curve svg { width: 100%; display: block; overflow: visible; touch-action: none; }
+  .node { cursor: pointer; }
+  .keys { display: grid; grid-template-columns: repeat(6, 1fr); gap: 1px; background: var(--line); margin: 0 -24px; border-top: 1px solid var(--line); }
+  @media (max-width: 1023px) { .keys { grid-template-columns: repeat(3, 1fr); margin: 0 calc(var(--gutter) * -1); } }
+  @media (min-width: 1024px) and (max-width: 1759px) { .keys { grid-template-columns: repeat(3, 1fr); } }
+  .key { position: relative; border: 0; background: var(--surface); text-align: left; padding: 14px 16px 14px; cursor: pointer; min-height: 72px; }
+  .key b { display: block; font-size: var(--t-sec); font-weight: 560; color: var(--ink-2); }
+  .key span { display: block; font-size: var(--t-cap); color: var(--ink-3); margin-top: 2px; }
+  .key:hover { background: var(--surface-2); }
+  .key[aria-pressed='true'] { background: var(--surface-2); }
+  .key[aria-pressed='true'] b { color: var(--ink); }
+  .key[aria-pressed='true'] span { color: var(--ink-2); }
+  .key[aria-pressed='true']::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--signal); }
+  .editor { margin-top: 32px; }
+  .editor h2 { margin-bottom: 4px; }
+  .dials { display: grid; gap: 12px; margin-top: 20px; }
+  @media (min-width: 1024px) { .dials { grid-template-columns: 1fr 1fr; gap: 16px; } }
+  .dial { padding: 18px 20px; }
+  .dial .dl { font-size: var(--t-sec); font-weight: 560; color: var(--ink-2); }
+  .dial .dr { display: grid; grid-template-columns: 52px 1fr 52px; align-items: center; margin-top: 10px; }
+  .dial .reading { text-align: center; min-width: 0; font-size: calc(var(--t-num) * .8); }
+  .dial .ds { text-align: center; font-size: var(--t-cap); color: var(--ink-3); margin-top: 8px; }
+  .knob { width: 52px; height: 52px; border-radius: 50%; border: 1px solid var(--line-2); background: var(--bg); color: var(--ink); display: grid; place-items: center; cursor: pointer; transition: background .2s, transform .1s; }
+  .knob:hover { background: var(--surface-2); }
+  .knob:active { transform: scale(.94); }
+  .knob svg { width: 22px; height: 22px; }
+  .toggle-row { display: flex; align-items: center; gap: 16px; padding: 18px 20px; margin-top: 12px; }
+  .toggle-row .lt { flex: 1; }
+  .toggle-row b { display: block; font-weight: 500; }
+  .toggle-row span { font-size: var(--t-sec); color: var(--ink-3); }
+  .plan-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; font-size: var(--t-sec); color: var(--ink-3); gap: 12px; flex-wrap: wrap; }
+  .textbtn { border: 0; background: none; color: var(--ink); font-weight: 560; font-size: var(--t-sec); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 10px 0; }
+  .textbtn svg { width: 16px; height: 16px; }
+  .aside h3 { font-size: var(--t-sec); font-weight: 560; color: var(--ink-2); margin: 0 0 12px; }
+  .aside .sched { list-style: none; padding: 0; margin: 0 0 40px; border-top: 1px solid var(--line); }
+  .aside .sched li { display: grid; grid-template-columns: 64px 44px 1fr; gap: 8px; padding: 11px 0; border-bottom: 1px solid var(--line); font-size: var(--t-sec); }
+  .aside .sched time { color: var(--ink-3); }
+  .aside .sched b { font-weight: 500; }
+  .aside .sched span { color: var(--ink-2); }
+  .kv { display: grid; grid-template-columns: 1fr auto; border-top: 1px solid var(--line); font-size: var(--t-sec); }
+  .kv > * { padding: 11px 0; border-bottom: 1px solid var(--line); }
+  .kv dt { color: var(--ink-2); } .kv dd { margin: 0; text-align: right; font-weight: 500; }
+  @media (max-width: 1759px) { .aside { display: none; } }
+
+  /* ---------- Other panes ---------- */
+  .themes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 32px; }
+  @media (min-width: 1024px) { .thumb { height: 140px; } .thumb i { font-size: 44px; } }
+  @media (min-width: 1024px) { .themes { grid-template-columns: repeat(4, 1fr); } }
+  .theme { border: 0; background: none; text-align: left; padding: 0; cursor: pointer; }
+  .thumb { height: 104px; border-radius: var(--r-m); border: 1px solid var(--line-2); position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; padding: 12px; }
+  .thumb i { font-style: normal; font-size: 34px; font-weight: 250; letter-spacing: -.04em; line-height: 1; }
+  .thumb u { display: block; height: 2px; width: 60%; margin-top: 8px; text-decoration: none; }
+  .theme[aria-pressed='true'] .thumb { outline: 2px solid var(--signal); outline-offset: 2px; }
+  .theme b { display: block; margin-top: 10px; font-size: var(--t-sec); font-weight: 560; }
+  .theme span { display: block; font-size: var(--t-cap); color: var(--ink-3); }
+  .fields { display: grid; gap: 20px; margin-top: 24px; max-width: 480px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+  .state { display: inline-flex; align-items: center; gap: 8px; font-size: var(--t-sec); color: var(--ink-2); white-space: nowrap; }
+  .checklist { list-style: none; padding: 0; margin: 24px 0 0; border-top: 1px solid var(--line); }
+  .checklist > li { padding: 16px 0; border-bottom: 1px solid var(--line); }
+  .checklist .ch { display: flex; gap: 14px; align-items: flex-start; }
+  .box { width: 24px; height: 24px; border-radius: 7px; border: 1.5px solid var(--line-2); flex: none; display: grid; place-items: center; margin-top: 1px; }
+  .box.done { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+  .box svg { width: 16px; height: 16px; }
+  .checklist b { font-weight: 500; }
+  .checklist .done-t b { color: var(--ink-3); text-decoration: line-through; text-decoration-color: var(--line-2); }
+  .checklist ol { margin: 10px 0 0 38px; padding: 0 0 0 18px; color: var(--ink-2); font-size: var(--t-sec); }
+  .checklist ol li { padding: 3px 0; }
+  .meter { height: 4px; background: var(--line); border-radius: 2px; margin-top: 18px; overflow: hidden; }
+  .meter i { display: block; height: 100%; background: var(--ink); }
+  code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: .88em; background: var(--surface-2); padding: 2px 6px; border-radius: 6px; }
+  .note { margin-top: 16px; padding: 16px 18px; border-radius: var(--r-m); background: var(--surface-2); font-size: var(--t-sec); color: var(--ink-2); }
+  .note b { color: var(--ink); font-weight: 560; }
+  .inline-form { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+  .inline-form .input { flex: 1; min-width: 120px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail" aria-label="Navigation"></aside>
+  <div style="min-width:0">
+    <main class="main sys">
+      <div class="sys-grid">
+
+        <!-- Root list (phone) / category list (desktop) -->
+        <nav class="sys-list" aria-label="System">
+          <h1 class="title">System</h1>
+          <div class="feature card" data-go="plan">
+            <div class="row1"><b>Tonight’s plan</b><span>Edit ${''}</span></div>
+            <svg class="mini" id="mini"></svg>
+            <div class="row2"><span>Starts <b class="num">21:47</b></span><span>Coolest <b class="num">19.0°</b></span><span>Wake <b class="num">06:47</b></span></div>
+          </div>
+          <div class="grp"><p class="group-h">Tonight</p><div class="list">
+            <div class="li planrow" data-go="plan"><div class="lt"><b>Tonight’s plan</b></div><span class="val">19.0° coolest</span></div>
+            <div class="li" data-go="tags"><div class="lt"><b>Tonight’s tags</b></div><span class="val" id="tagcount">None</span></div>
+          </div></div>
+          <div class="grp"><p class="group-h">Household</p><div class="list">
+            <div class="li" data-go="appearance"><div class="lt"><b>Appearance</b></div><span class="val">Auto</span></div>
+            <div class="li" data-go="people"><div class="lt"><b>People</b></div><span class="val">You, Erik</span></div>
+            <div class="li" data-go="notify"><div class="lt"><b>Morning report</b></div><span class="val">Off</span></div>
+          </div></div>
+          <div class="grp"><p class="group-h">Data and devices</p><div class="list">
+            <div class="li" data-go="source"><div class="lt"><b>Data source</b></div><span class="val">Simulator</span></div>
+            <div class="li" data-go="devices"><div class="lt"><b>Devices</b></div><span class="val">0 of 4 linked</span></div>
+            <div class="li" data-go="health"><div class="lt"><b>Google Health</b></div><span class="val">Not connected</span></div>
+            <div class="li" data-go="calibration"><div class="lt"><b>CO₂ calibration</b></div><span class="val">1 alert</span></div>
+          </div></div>
+          <div class="grp"><p class="group-h">Help</p><div class="list">
+            <div class="li" data-go="setup"><div class="lt"><b>Setup guide</b></div><span class="val">2 of 7</span></div>
+            <div class="li" data-go="diag"><div class="lt"><b>Diagnostics</b></div><span class="val"></span></div>
+          </div></div>
+          <p class="foot" style="margin-top:4px">Settings are stored on this device.</p>
+        </nav>
+
+        <div class="panes">
+          <!-- Tonight's plan -->
+          <section class="pane" id="p-plan"><div class="pane-in">
+            <button class="back">System</button>
+            <div class="plan-wrap">
+              <div>
+                <h1 class="title">Tonight’s plan</h1>
+                <p class="lede">The temperature the aircon aims for at bed height, phase by phase from lights out (usually 23:17).</p>
+                <div class="sumrow">
+                  <div><span>Starts</span><b class="num" id="s-start">21:47</b></div>
+                  <div><span>Coolest</span><b class="num" id="s-cool">19.0°</b></div>
+                  <div><span>Wake</span><b class="num" id="s-wake">22.0°</b></div>
+                </div>
+                <div class="instrument card">
+                  <div class="chart-t"><b>Target temperature</b><span>Limits 17–24 °C</span></div>
+                  <div id="curve"></div>
+                  <div class="keys" id="keys" role="group" aria-label="Phases"></div>
+                </div>
+                <div class="editor">
+                  <h2 class="head" id="ed-name">Deep window</h2>
+                  <p class="sec" id="ed-desc">Coolest stretch, timed for the first sleep cycles.</p>
+                  <div class="dials">
+                    <div class="dial card">
+                      <div class="dl">Starts</div>
+                      <div class="dr"><button class="knob" data-k="rel" data-d="-10" aria-label="Earlier"></button><div class="reading num" id="ed-rel">+0:40</div><button class="knob" data-k="rel" data-d="10" aria-label="Later"></button></div>
+                      <div class="ds" id="ed-clock">23:57 · after lights out</div>
+                    </div>
+                    <div class="dial card">
+                      <div class="dl">Target</div>
+                      <div class="dr"><button class="knob" data-k="temp" data-d="-0.5" aria-label="Cooler"></button><div class="reading num" id="ed-temp">19.0<span class="unit">°C</span></div><button class="knob" data-k="temp" data-d="0.5" aria-label="Warmer"></button></div>
+                      <div class="ds" id="ed-tdesc">Aircon set point 19°</div>
+                    </div>
+                  </div>
+                  <div class="toggle-row card">
+                    <div class="lt"><b>Glide into the next phase</b><span id="ed-ramp">Changes gradually instead of in one step.</span></div>
+                    <button class="switch" role="switch" aria-checked="false" id="ramp" aria-label="Glide into the next phase"></button>
+                  </div>
+                  <div class="plan-foot"><span>Saved on this phone</span><button class="textbtn" id="reset"></button></div>
+                </div>
+              </div>
+              <div class="aside">
+                <h3>What the aircon will do tonight</h3>
+                <ul class="sched" id="sched"></ul>
+                <h3>Last night on this plan</h3>
+                <dl class="kv">
+                  <dt>Time on target</dt><dd class="num">92%</dd>
+                  <dt>First 4 hours, average</dt><dd class="num">19.6°</dd>
+                  <dt>Warmest, at 05:48</dt><dd class="num">22.2°</dd>
+                  <dt>Corrections sent</dt><dd class="num">1</dd>
+                </dl>
+              </div>
+            </div>
+          </div></section>
+
+          <!-- Tags -->
+          <section class="pane" id="p-tags"><div class="pane-in">
+            <button class="back">System</button>
+            <h1 class="title">Tonight’s tags</h1>
+            <p class="lede">For the night ending Friday 30 October. One tap each evening; tags become filters and experiment arms in the Lab.</p>
+            <div class="chips" id="chips"></div>
+            <p class="foot" style="margin-top:20px">Stored on this phone until the backend is connected.</p>
+          </div></section>
+
+          <!-- Appearance -->
+          <section class="pane" id="p-appearance"><div class="pane-in">
+            <button class="back">System</button>
+            <h1 class="title">Appearance</h1>
+            <p class="lede">Auto follows the phone’s light or dark setting, and switches to red-on-black night mode from 21:00 to 07:00 Phuket time.</p>
+            <div class="themes" id="themes"></div>
+          </div></section>
+
+          <!-- People -->
+          <section class="pane" id="p-people"><div class="pane-in">
+            <button class="back">System</button>
+            <h1 class="title">People</h1>
+            <p class="lede">Names used across the app. Leave a field empty to keep the default.</p>
+            <div class="fields">
+              <div class="field"><label for="n1">First sleeper</label><input class="input" id="n1" placeholder="You"></div>
+              <div class="field"><label for="n2">Second sleeper</label><input class="input" id="n2" value="Erik"></div>
+            </div>
+            <p class="foot" style="margin-top:16px">Stored on this device.</p>
+          </div></section>
+
+          <!-- Morning report -->
+          <section class="pane" id="p-notify"><div class="pane-in">
+            <button class="back">System</button>
+            <h1 class="title">Morning report</h1>
+            <p class="lede">A short email at 07:30 with the room score and tonight’s one suggestion.</p>
+            <div class="block list">
+              <div class="li"><div class="lt"><b>Send the morning report</b><span>Needs Supabase for delivery</span></div><button class="switch" role="switch" aria-checked="false" aria-label="Send the morning report"></button></div>
+            </div>
+            <div class="fields"><div class="field"><label for="em">Email</label><input class="input" id="em" type="email" placeholder="you@example.com"></div></div>
+          </div></section>
+
+          <!-- Data source -->
+          <section class="pane" id="p-source"><div class="pane-in">
+            <button class="back">System</button>
+            <h1 class="title">Data source</h1>
+            <p class="lede">Where the nights come from. The simulator stands in until the sensors arrive.</p>
+            <div class="block"><div class="seg" role="group" aria-label="Data source" style="width:100%;max-width:420px"><button aria-pressed="true">Simulator</button><button aria-pressed="false">Supabase</button></div></div>
+            <div class="block list">
+              <div class="li"><div class="lt"><b>Nights</b><span>1 Aug – 29 Oct</span></div><span class="val num">90</span></div>
+              <div class="li"><div class="lt"><b>Nights with complete data</b><span>The Lab uses only these</span></div><span class="val num">80</span></div>
+            </div>
+            <div class="note"><b>Supabase isn’t set up yet.</b> Add the project URL and key to read real data. The exact settings are in <a class="link" href="#diag">Diagnostics</a>.</div>
+          </div></section>
+
+          <!-- Devices -->
+          <section class="pane" id="p-devices"><div class="pane-in">
+            <button class="back">System</button>
+            <h1 class="title">Devices</h1>
+            <p class="lede">What feeds the room data and drives the aircon.</p>
+            <div class="block list" id="devlist"></div>
+            <div class="block"><p class="group-h">Freshness</p>
+              <div class="list">
+                <div class="li"><div class="lt"><b>Last room reading</b></div><span class="val num">14:55 · 10 s ago</span></div>
+                <div class="li"><div class="lt"><b>Webhook vs poll lag</b></div><span class="state"><span class="dot"></span>Not linked</span></div>
+                <div class="li"><div class="lt"><b>Gaps in the last 24 h</b></div><span class="val">None</span></div>
+                <div class="li"><div class="lt"><b>SwitchBot calls today</b></div><span class="val num">– of 5,000</span></div>
+                <div class="li"><div class="lt"><b>Google Health last sync</b></div><span class="state"><span class="dot"></span>Not linked</span></div>
+              </div>
+            </div>
+            <div class="block"><p class="group-h">Coming later</p>
+              <div class="list"><div class="li"><div class="lt"><b>Pan/Tilt Cam Plus 3K</b><span>Phase 3 · RTSP on the LAN, needs a home box</span></div><span class="val">Later</span></div></div>
+            </div>
+          </div></section>
+
+          <!-- Google Health -->
+          <section class="pane" id="p-health"><div class="pane-in">
+            <button class="back">System</button>
+            <h1 class="title">Google Health</h1>
+            <p class="lede">Sleep stages, heart rate, HRV, blood oxygen and breathing rate from both Fitbit Air bands.</p>
+            <div class="block list">
+              <div class="li"><div class="lt"><b>You</b><span>Fitbit Air · last sync –</span></div><span class="state"><span class="dot"></span>Not connected</span></div>
+              <div class="li"><div class="lt"><b>Erik</b><span>Fitbit Air · last sync –</span></div><span class="state"><span class="dot"></span>Not connected</span></div>
+            </div>
+            <div class="block"><button class="btn primary">Connect Google Health</button></div>
+            <p class="foot" style="margin-top:14px">Read-only. Each person signs in with their own Google account.</p>
+          </div></section>
+
+          <!-- Calibration -->
+          <section class="pane" id="p-calibration"><div class="pane-in">
+            <button class="back">System</button>
+            <h1 class="title">CO₂ calibration</h1>
+            <p class="lede">Outdoor air is about 420 ppm. Log an outdoor check now and then; nights that dip below it point to sensor drift.</p>
+            <div class="inline-form block"><input class="input num" inputmode="numeric" placeholder="ppm outside" style="max-width:160px"><input class="input" placeholder="Note"><button class="btn">Log check</button></div>
+            <div class="block"><p class="group-h">Log</p><div class="list">
+              <div class="li"><div class="lt"><b>Night minimum 371 ppm</b><span>Below outdoor air: likely sensor drift. Recalibrate outdoors.</span></div><span class="val">12 Oct</span></div>
+              <div class="li"><div class="lt"><b>Outdoor check · 428 ppm</b><span>Balcony, 5 min untouched</span></div><span class="val">2 Oct</span></div>
+            </div></div>
+          </div></section>
+
+          <!-- Setup -->
+          <section class="pane" id="p-setup"><div class="pane-in">
+            <button class="back">System</button>
+            <h1 class="title">Setup guide</h1>
+            <p class="lede">Install order for unboxing day. Tick each step as you go.</p>
+            <div class="meter"><i style="width:28.6%"></i></div>
+            <p class="cap" style="margin-top:8px">2 of 7 done</p>
+            <ul class="checklist" id="setup"></ul>
+          </div></section>
+
+          <!-- Diagnostics -->
+          <section class="pane" id="p-diag"><div class="pane-in">
+            <button class="back">System</button>
+            <h1 class="title">Diagnostics</h1>
+            <p class="lede">For troubleshooting. Nothing here needs changing day to day.</p>
+            <div class="block list">
+              <div class="li"><div class="lt"><b>Simulator seed</b></div><span class="val num">42</span></div>
+              <div class="li"><div class="lt"><b>Window</b></div><span class="val num">90 nights</span></div>
+              <div class="li"><div class="lt"><b>Metrics computed in</b></div><span class="val num">1,560 ms · cached</span></div>
+              <div class="li"><div class="lt"><b>App version</b></div><span class="val num">fe244a8</span></div>
+            </div>
+            <div class="block"><p class="group-h">Connect Supabase</p>
+              <p class="sec">Set <code>NEXT_PUBLIC_SUPABASE_URL</code> and <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code> in the deployment’s environment, then redeploy.</p>
+            </div>
+          </div></section>
+        </div>
+      </div>
+    </main>
+    <div class="phone-pad"></div>
+  </div>
+</div>
+<nav class="tabbar" aria-label="Tabs"></nav>
+
+<script src="shell.js"></script>
+<script>
+renderShell('system');
+document.querySelectorAll('.back').forEach((b) => { b.innerHTML = svgI('left') + 'System'; b.onclick = () => { history.pushState(null, '', location.pathname + location.search); route(); }; });
+document.querySelector('.feature .row1 span').innerHTML = 'Edit' + svgI('chev');
+document.querySelectorAll('.sys-list .li[data-go]').forEach((li) => li.insertAdjacentHTML('beforeend', svgI('chev', 'chev')));
+document.querySelectorAll('.knob').forEach((k) => k.innerHTML = svgI(+k.dataset.d < 0 ? 'minus' : 'plus'));
+document.getElementById('reset').innerHTML = svgI('reset') + 'Reset to default';
+document.querySelectorAll('[data-go]').forEach((e) => e.onclick = () => { location.hash = e.dataset.go; });
+
+function route() {
+  const h = location.hash.slice(1); const desk = innerWidth >= 1024;
+  const pane = h || (desk ? 'plan' : '');
+  if (pane) document.body.dataset.pane = pane; else delete document.body.dataset.pane;
+  document.querySelectorAll('.pane').forEach((p) => p.classList.toggle('on', p.id === 'p-' + pane));
+  document.querySelectorAll('.sys-list .li').forEach((li) => li.classList.toggle('on', li.dataset.go === pane));
+  scrollTo(0, 0); drawCurve();
+}
+addEventListener('hashchange', route);
+
+/* ---------- Plan instrument ---------- */
+const DEFAULT = JSON.parse(JSON.stringify(PLAN));
+let plan = JSON.parse(JSON.stringify(PLAN)); let sel = 2;
+const DESC = ['Cools the room before bed so it’s ready at lights out.', 'Gentle hold while you both fall asleep.', 'Coolest stretch, timed for the first sleep cycles.', 'Holds, then glides toward the warmer morning phase.', 'Warmer for the REM-heavy last cycles.', 'Warm enough to wake comfortably, then off 30 minutes later.'];
+const lo = NIGHT.lightsOut;
+function drawCurve() {
+  const box = document.getElementById('curve'); if (!box.offsetParent) return;
+  const desk = innerWidth >= 1024; const H = desk ? 280 : 220;
+  box.innerHTML = ''; const w = box.clientWidth;
+  const s = document.createElementNS(NS, 'svg'); s.setAttribute('viewBox', `0 0 ${w} ${H}`); s.setAttribute('height', H); s.setAttribute('class', 'chart'); box.appendChild(s);
+  const E = (t, a) => { const e = document.createElementNS(NS, t); for (const k in a) e.setAttribute(k, a[k]); s.appendChild(e); return e; };
+  const a = lo - 120, b = lo + 480, tmin = 17, tmax = 24, pr = 34, pt = 26, pb = 28;
+  const X = (t) => (t - a) / (b - a) * (w - pr), Y = (v) => pt + (tmax - v) / (tmax - tmin) * (H - pt - pb);
+  for (let v = 17; v <= 24; v++) { E('line', { x1: 0, x2: w - pr, y1: Y(v), y2: Y(v), class: v % 2 ? 'grid' : 'grid', 'stroke-opacity': v % 2 ? .45 : 1 }); if (v % 2 === 1) E('text', { x: w - pr + 8, y: Y(v) + 4 }).textContent = v + '°'; }
+  for (let hr = 22; hr <= 30; hr += 2) { const t = hr * 60; E('text', { x: X(t), y: H - 6, 'text-anchor': 'middle' }).textContent = clock(t); }
+  E('line', { x1: X(lo), x2: X(lo), y1: pt - 14, y2: H - pb, stroke: 'var(--line-2)', 'stroke-dasharray': '2 3' });
+  const lt = E('text', { x: X(lo) + 6, y: pt - 6 }); lt.textContent = 'Lights out';
+  // area + line
+  const pts = sample((t) => planAt(t, plan, lo), lo + plan[0].rel, b, 1).map(([t, v]) => [X(t), Y(v)]);
+  E('path', { d: line(pts) + `L${pts[pts.length - 1][0]} ${H - pb}L${pts[0][0]} ${H - pb}Z`, fill: 'var(--signal-soft)', opacity: .7 });
+  E('path', { d: line(pts), fill: 'none', stroke: 'var(--signal)', 'stroke-width': 2.4, 'stroke-linejoin': 'round' });
+  // selected phase span
+  const s0 = lo + plan[sel].rel, s1 = sel < 5 ? lo + plan[sel + 1].rel : b;
+  E('rect', { x: X(s0), y: pt - 14, width: X(s1) - X(s0), height: H - pb - pt + 14, fill: 'var(--ink)', opacity: .045 });
+  plan.forEach((ph, i) => { const t = lo + ph.rel; const on = i === sel;
+    const g = E('g', { class: 'node', transform: `translate(${X(t)},${Y(ph.temp)})` });
+    g.innerHTML = `<circle r="18" fill="transparent"/><circle r="${on ? 8 : 5}" fill="${on ? 'var(--signal)' : 'var(--bg)'}" stroke="var(--signal)" stroke-width="2"/>${on ? '<circle r="14" fill="none" stroke="var(--signal)" stroke-opacity=".35"/>' : ''}`;
+    g.onclick = () => select(i);
+    if (on) { const tx = E('text', { x: X(t), y: Y(ph.temp) + 34, 'text-anchor': 'middle', 'paint-order': 'stroke', stroke: 'var(--surface)', 'stroke-width': 5 }); tx.textContent = ph.temp.toFixed(1) + '°'; tx.style.fill = 'var(--ink)'; tx.style.fontWeight = 560; } });
+  drawMini();
+}
+function drawMini() {
+  const a = lo - 120, b = lo + 480;
+  const m = document.getElementById('mini'); const mw = m.clientWidth || 340; m.setAttribute('viewBox', `0 0 ${mw} 88`);
+  const MX = (t) => (t - a) / (b - a) * mw, MY = (v) => 6 + (23 - v) / 5 * 76;
+  const mp = sample((t) => planAt(t, plan, lo), lo + plan[0].rel, b, 2).map(([t, v]) => [MX(t), MY(v)]);
+  m.innerHTML = `<line x1="0" x2="${mw}" y1="${MY(19)}" y2="${MY(19)}" stroke="var(--line)"/><line x1="0" x2="${mw}" y1="${MY(21)}" y2="${MY(21)}" stroke="var(--line)"/><path d="${line(mp)}" fill="none" stroke="var(--signal)" stroke-width="2"/>`;
+}
+function select(i) { sel = i; render(); }
+function render() {
+  const ph = plan[sel];
+  document.getElementById('keys').innerHTML = plan.map((p, i) => `<button class="key" aria-pressed="${i === sel}" data-i="${i}"><b>${p.name}</b><span class="num">${clock(lo + p.rel)} · ${p.temp.toFixed(1)}°${p.ramp ? ' ↗' : ''}</span></button>`).join('');
+  document.querySelectorAll('.key').forEach((k) => k.onclick = () => select(+k.dataset.i));
+  document.getElementById('ed-name').textContent = ph.name;
+  document.getElementById('ed-desc').textContent = DESC[sel];
+  document.getElementById('ed-rel').textContent = relFmt(ph.rel);
+  document.getElementById('ed-clock').textContent = `${clock(lo + ph.rel)} · ${ph.rel < 0 ? 'before' : 'after'} lights out`;
+  document.getElementById('ed-temp').innerHTML = ph.temp.toFixed(1) + '<span class="unit">°C</span>';
+  document.getElementById('ed-tdesc').textContent = `Aircon set point ${Math.round(ph.temp - (sel === 0 ? .5 : 0))}°`;
+  const r = document.getElementById('ramp'); r.setAttribute('aria-checked', !!ph.ramp); r.disabled = sel === 5; r.style.opacity = sel === 5 ? .4 : 1;
+  document.getElementById('ed-ramp').textContent = sel < 5 ? `Glide from ${ph.temp.toFixed(1)}° to ${plan[sel + 1].temp.toFixed(1)}° instead of one step.` : 'The last phase has nothing to glide into.';
+  const temps = plan.map((p) => p.temp);
+  document.getElementById('s-start').textContent = clock(lo + plan[0].rel);
+  document.getElementById('s-cool').textContent = Math.min(...temps).toFixed(1) + '°';
+  document.getElementById('s-wake').textContent = clock(lo + plan[5].rel);
+  document.getElementById('sched').innerHTML = plan.map((p, i) => `<li><time class="num">${clock(lo + p.rel)}</time><b class="num">${Math.round(p.temp - (i === 0 ? .5 : 0))}°</b><span>${p.name}${p.ramp ? ', gliding' : ''}</span></li>`).join('') + `<li><time class="num">${clock(lo + plan[5].rel + 30)}</time><b>Off</b><span>Wake + 30 min</span></li>`;
+  drawCurve();
+}
+document.querySelectorAll('.knob').forEach((k) => k.onclick = () => { const ph = plan[sel]; const d = +k.dataset.d;
+  if (k.dataset.k === 'temp') ph.temp = Math.max(17, Math.min(24, ph.temp + d));
+  else { const min = sel ? plan[sel - 1].rel + 10 : -180, max = sel < 5 ? plan[sel + 1].rel - 10 : 600; if (sel !== 1) ph.rel = Math.max(min, Math.min(max, ph.rel + d)); }
+  render(); });
+document.getElementById('ramp').onclick = () => { if (sel < 5) { plan[sel].ramp = !plan[sel].ramp; render(); } };
+document.getElementById('reset').onclick = () => { plan = JSON.parse(JSON.stringify(DEFAULT)); render(); };
+
+/* ---------- Other panes ---------- */
+const TAGS = ['Alcohol', 'Caffeine after 14:00', 'Late meal', 'Late exercise', 'Heavy duvet', 'Door ajar', 'Sick', 'Away'];
+const on = new Set(['Door ajar']);
+function tags() { document.getElementById('chips').innerHTML = TAGS.map((t) => `<button class="chip" aria-pressed="${on.has(t)}">${t}</button>`).join('');
+  document.querySelectorAll('#chips .chip').forEach((c) => c.onclick = () => { on.has(c.textContent) ? on.delete(c.textContent) : on.add(c.textContent); tags(); });
+  document.getElementById('tagcount').textContent = on.size ? [...on].join(', ') : 'None'; }
+tags();
+const TH = [['Auto', 'Follows the phone', 'linear-gradient(135deg,#f4f3ef 50%,#0e0e0f 50%)', '#141413', '#d6480c'], ['Light', 'Warm paper', '#f4f3ef', '#141413', '#d6480c'], ['Dark', 'Graphite', '#0e0e0f', '#f1f0ec', '#ff5f1f'], ['Night', 'Red only, 21:00–07:00', '#000', '#c42a1e', '#c42a1e']];
+document.getElementById('themes').innerHTML = TH.map(([n, h, bg, ink, sig], i) => `<button class="theme" aria-pressed="${i === 0}"><div class="thumb" style="background:${bg}"><i class="num" style="color:${ink};${i === 0 ? 'mix-blend-mode:difference;color:#fff' : ''}">75</i><u style="background:${sig}"></u></div><b>${n}</b><span>${h}</span></button>`).join('');
+const DEV = [['Hub Mini', 'IR to the aircon, gateway for the meter', 'Not linked'], ['Meter Pro CO₂', 'USB-C power · CO₂ every minute', 'Not linked'], ['Aircon · Toshiba Carrier', 'Remote profile setAll (assumed)', 'Open loop'], ['Fitbit Air × 2', 'Through Google Health: last sync, battery', 'Not linked']];
+document.getElementById('devlist').innerHTML = DEV.map(([n, d, st]) => `<div class="li"><div class="lt"><b>${n}</b><span>${d}</span></div><span class="state"><span class="dot"></span>${st}</span></div>`).join('');
+const SETUP = [
+  ['SwitchBot app and account', ['Install the SwitchBot app, region Thailand / Asia', 'Allow Bluetooth, Local Network, Notifications', 'Use 2.4 GHz Wi-Fi (or iPhone hotspot with Maximize Compatibility)'], 1],
+  ['Hub Mini', ['Line of sight to the AC receiver module', 'Note model W0202203 (Matter) or W0202200', 'Pair, then let it update firmware', 'Indicator Light → OFF'], 1],
+  ['Meter Pro CO₂', ['Pair on AA batteries, update firmware', 'Calibrate outdoors on batteries (5 min untouched, expect 400–500 ppm)', 'Remove AAs, run on USB-C 5 V/1 A', 'CO₂ interval 1 min · Alert Sound & Light OFF', 'Store Data in Cloud · bed height, away from AC and shower'], 0],
+  ['Aircon remote', ['Hub Mini → Add Remote → Air Conditioner → Smart Matching', 'Test on/off, 18/20/22 °C, fan, DRY (full set = setAll)', 'Otherwise “Others” ladder C18…C24, DRY22, OFF', 'Learn ECO SLEEP + Hi-Power; note if the receiver beeps', 'Photograph the RAV-… rating plate'], 0],
+  ['Developer token', ['Profile → Preferences → tap App Version ×10', 'Copy token + secret into Supabase secrets (never git)'], 0],
+  ['Pan/Tilt Cam Plus 3K (can wait)', ['Update firmware first (RTSP needs 2025 firmware)', 'Night Vision Auto · indicator off or taped', 'Create a Camera Account for RTSP'], 0],
+  ['Darkness audit', ['Lights off, eyes adapted 10 min', 'Tape AC receiver LEDs (not the IR window), chargers, router'], 0],
+];
+let firstOpen = SETUP.findIndex((x) => !x[2]);
+document.getElementById('setup').innerHTML = SETUP.map(([t, st, d], i) => `<li><div class="ch ${d ? 'done-t' : ''}"><span class="box ${d ? 'done' : ''}">${d ? svgI('check') : ''}</span><div><b>${t}</b>${i === firstOpen ? '<div class="cap">Next up</div>' : ''}</div></div>${i === firstOpen ? `<ol>${st.map((x) => `<li>${x}</li>`).join('')}</ol>` : ''}</li>`).join('');
+
+render(); route(); drawMini(); initReveal();
+let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(drawCurve, 120); });
+</script>
+</body>
+</html>

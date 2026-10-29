@@ -11,13 +11,13 @@
  * ── Viewport ─────────────────────────────────────────────────────────────────────────────────────────────
  *   useInView(ref, { once = true, threshold = 0.15, rootMargin = '0px 0px -8% 0px' }) → boolean
  *   <Reveal as="div" delay={ms} y={28} stagger className style>…</Reveal>     one-shot rise + fade
- *       stagger: direct children get --i = index (70 ms apart). Use `mask` for headline line masks (.sh-line).
+ *       stagger: direct children get --i = index (80 ms apart). Use `mask` for headline line masks (.sh-line).
  *   <LazyMount minHeight={220}>…</LazyMount>   mounts children when near the viewport (Recharts then animates in)
  *
  * ── Numbers ──────────────────────────────────────────────────────────────────────────────────────────────
  *   <CountUp value={76} dp={0} format={(v) => …} duration={1300} from={0} className="t-hero" textClassName="grad-num" />
  *       Renders the final value for a11y / no-JS, reserves its width (no layout shift), counts on reveal.
- *       When `value` changes later it tweens from the shown value. Night: 500 ms. Reduced: no count.
+ *       When `value` changes later it tweens from the shown value. Night and reduced motion: no count (§8.2).
  *   useCountUp(ref, value, opts) – same, imperative, for your own element.
  *
  * ── Scroll progress ──────────────────────────────────────────────────────────────────────────────────────
@@ -26,7 +26,7 @@
  *       onProgress(p) once per frame while it moves. Mutate DOM refs inside onProgress; never setState there.
  *   <Chapter id="night" n={3} title="The night" accent="night" pinned={5.6} onProgress={…}>…</Chapter>
  *       A story chapter. `pinned` = height in screens (5.6 → 560svh) with a sticky 100svh stage inside.
- *       Sets --ch-accent / --accent, draws the chapter glow and outlined number, registers for active-chapter
+ *       v2: no accent change (--ch-accent is an alias of --signal), no glow / outlined number; registers for active-chapter
  *       tracking. Children can read progress with useChapterProgress((p) => …).
  *   useChapterProgress(cb, [from, to]?) – subscribe to the enclosing chapter's p (remapped to [from, to]).
  *   useChapter() → { id, n, title } of the enclosing chapter (or null).
@@ -35,7 +35,7 @@
  *   subscribeChapterProgress(id, fn) / scrollToChapter(id) – for StoryHeader segments.
  *
  * ── Drawing ──────────────────────────────────────────────────────────────────────────────────────────────
- *   <DrawPath d="M…" stroke="var(--temp)" />                draws in on reveal (1.3 s)
+ *   <DrawPath d="M…" stroke="var(--temp)" />                draws in on reveal (1.4 s)
  *   <DrawPath d="M…" scrub={[0, .8]} />                     dashoffset tied to chapter progress 0→.8
  *       (pathLength=1 is set for you; don't combine with strokeDasharray patterns.)
  *   <ScrubWipe range={[0, 1]}>{(copy) => <svg>…</svg>}</ScrubWipe>
@@ -45,8 +45,7 @@
  *   <Parallax speed={0.3}>…</Parallax>  decorative only, CSS scroll-driven (@supports), static otherwise.
  *
  * ── Ambient ──────────────────────────────────────────────────────────────────────────────────────────────
- *   <Sky initial={{ dusk: 1 }} />  fixed dusk / mid / dawn layers + stars (dark only); hidden in night mode.
- *   setSky({ dusk, mid, dawn, dim })  imperative, from onProgress (opacity writes only).
+ *   <Sky/> and setSky(): RETIRED in v2 (flat background). Both are no-ops kept for compatibility.
  *
  * ── Transitions ──────────────────────────────────────────────────────────────────────────────────────────
  *   withViewTransition(update, { kind: 'nav' | 'theme', x, y })   View Transitions API when present + full motion.
@@ -187,9 +186,9 @@ export function Reveal({
   children: ReactNode;
   /** ms before the reveal starts. */
   delay?: number;
-  /** Rise distance in px (default --rise = 28). */
+  /** Rise distance in px (default --rise = 18). */
   y?: number;
-  /** Give direct children --i so they rise 70 ms apart. */
+  /** Give direct children --i so they rise 80 ms apart. */
   stagger?: boolean;
   /** Headline line-mask mode (children use .sh-line > span). */
   mask?: boolean;
@@ -261,7 +260,7 @@ export interface CountUpOptions {
 const countedKeys = new Set<string>();
 
 /** Imperative count-up: writes textContent of `ref` (no React renders per frame). */
-export function useCountUp(ref: RefObject<Element | null>, value: number, { dp = 0, format, duration = 1300, from = 0, start = 'view', delay = 0, onceKey }: CountUpOptions = {}) {
+export function useCountUp(ref: RefObject<Element | null>, value: number, { dp = 0, format, duration = 1200, from = 0, start = 'view', delay = 0, onceKey }: CountUpOptions = {}) {
   const fmtRef = useRef(format ?? defaultFormat(dp));
   fmtRef.current = format ?? defaultFormat(dp);
   const shown = useRef<number | null>(null);
@@ -276,12 +275,12 @@ export function useCountUp(ref: RefObject<Element | null>, value: number, { dp =
       const level = motionLevel();
       const f = fmtRef.current;
       const a = shown.current ?? from;
-      if (level === 'none' || !Number.isFinite(to) || !Number.isFinite(a) || a === to) {
+      if (level !== 'full' || !Number.isFinite(to) || !Number.isFinite(a) || a === to) {
         el.textContent = f(to);
         shown.current = to;
         return;
       }
-      const dur = level === 'calm' ? 500 : duration;
+      const dur = duration;
       const t0 = performance.now() + delay;
       const tick = (now: number) => {
         const t = Math.min(1, Math.max(0, (now - t0) / dur));
@@ -300,7 +299,7 @@ export function useCountUp(ref: RefObject<Element | null>, value: number, { dp =
   useIsoLayoutEffect(() => {
     const el = ref.current;
     if (!el || shown.current !== null) return;
-    if (motionLevel() === 'none' || !Number.isFinite(value) || (onceKey && countedKeys.has(onceKey))) {
+    if (motionLevel() !== 'full' || !Number.isFinite(value) || (onceKey && countedKeys.has(onceKey))) {
       shown.current = value;
       started.current = true;
       return;
@@ -511,8 +510,8 @@ export function Chapter({
   accent = 'verdict',
   pinned,
   dwell,
-  glow = true,
-  outline = true,
+  glow = false,
+  outline = false,
   lazy = false,
   reducedProgress = 1,
   onProgress,
@@ -757,60 +756,9 @@ export function setSky(mix: SkyMix) {
   }
 }
 
-function starField(n: number, seed: number) {
-  let s = seed;
-  const rnd = () => ((s = (s * 16807) % 2147483647) - 1) / 2147483646;
-  const out: { x: number; y: number; r: number; o: number }[] = [];
-  for (let i = 0; i < n; i++) out.push({ x: rnd() * 100, y: rnd() * 70, r: 0.25 + rnd() * 0.6, o: 0.25 + rnd() * 0.6 });
-  return out;
-}
-const STARS_A = starField(40, 7);
-const STARS_B = starField(70, 13);
-
-/** Fixed sky behind a story page. Stars only in dark theme (they're transparent in light). Hidden in night mode. */
-export function Sky({ initial = { dusk: 1 } }: { initial?: SkyMix }) {
-  const a = useRef<HTMLDivElement>(null);
-  const b = useRef<HTMLDivElement>(null);
-  const { level } = useMotionPrefs();
-  useIsoLayoutEffect(() => {
-    for (const k of ['dusk', 'mid', 'dawn', 'dim'] as const) {
-      const el = skyEls[k];
-      if (el) el.style.opacity = String(skyState[k]);
-    }
-    setSky(initial);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  useEffect(() => {
-    if (level !== 'full') return;
-    return subscribeScroll((y) => {
-      if (y > 4000) return; // stars are long gone by then
-      if (a.current) a.current.style.transform = `translate3d(0,${(-y * 0.06).toFixed(1)}px,0)`;
-      if (b.current) b.current.style.transform = `translate3d(0,${(-y * 0.12).toFixed(1)}px,0)`;
-    });
-  }, [level]);
-  const dots = (s: typeof STARS_A) => (
-    <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
-      {s.map((d, i) => (
-        <circle key={i} cx={d.x} cy={d.y} r={d.r * 0.18} fill="currentColor" opacity={d.o} />
-      ))}
-    </svg>
-  );
-  return (
-    <div className="sky" aria-hidden>
-      <div className="sky-layer dusk" ref={(el) => void (skyEls.dusk = el)} />
-      <div className="sky-layer mid" ref={(el) => void (skyEls.mid = el)}>
-        <div className="sky-stars" ref={a}>
-          {dots(STARS_A)}
-        </div>
-        <div className="sky-stars" ref={b}>
-          {dots(STARS_B)}
-        </div>
-      </div>
-      <div className="sky-layer dawn" ref={(el) => void (skyEls.dawn = el)} />
-      <div className="sky-noise" />
-      <div className="sky-dim" ref={(el) => void (skyEls.dim = el)} />
-    </div>
-  );
+/** RETIRED in v2 (§8.3: flat --bg, no sky or stars). Kept so v1 screens compile; renders nothing. */
+export function Sky(_props: { initial?: SkyMix }) {
+  return null;
 }
 
 // ───────────────────────────────────────── view transitions ─────────────────────────────────────────

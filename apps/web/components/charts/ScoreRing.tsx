@@ -5,9 +5,9 @@ import { useCountUp, useInViewCallback, useMotionPrefs } from '../motion.tsx';
 import { useSvgId } from './common.tsx';
 
 /**
- * Oura-style ring(s): outer = headline score, optional inner = second score (recovery).
- * Gradient stroke (colour → lighter), soft blurred twin underneath (day themes), draws in over 1.6 s on reveal
- * with the centre number counting up. Night: flat colour, no glow, 600 ms. Reduced motion: final state.
+ * Score ring(s), v2: outer = headline score, optional inner = second score (recovery). Flat stroke in `color`
+ * (no gradient, no glow), thin numerals (300), draws in once on reveal. Night / reduced motion: final state.
+ * v2 prefers the linear score scale (§7.2); rings remain for compact person scores.
  *
  *   <ScoreRing value={82} inner={89} color="var(--person-a)" label="You sleep" size={96}
  *              onClick={…} selected centerSub="rec 89" animate glow showValue />
@@ -47,7 +47,7 @@ export function ScoreRing({
   const gid = useSvgId('ring');
   const fid = useSvgId('ringblur');
 
-  const stroke = Math.max(5, size * 0.073);
+  const stroke = Math.max(3, size * 0.045);
   const innerStroke = Math.max(3, stroke * 0.57);
   const r = size / 2 - stroke / 2 - 2;
   const ri = r - stroke / 2 - innerStroke / 2 - 3;
@@ -59,8 +59,9 @@ export function ScoreRing({
   const o = arc(r, value);
   const i = inner !== undefined ? arc(ri, inner) : null;
   const cx = size / 2;
-  const hi = night ? color : `color-mix(in oklab, ${color} 30%, white)`;
-  const showGlow = glow && !night && Number.isFinite(value);
+  void glow;
+  void night;
+  const showGlow = false;
   return (
     <button
       ref={ref}
@@ -74,7 +75,7 @@ export function ScoreRing({
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ opacity: selected === false ? 0.5 : 1, transition: 'opacity .2s', overflow: 'visible' }} aria-hidden>
         <defs>
           <linearGradient id={gid} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" style={{ stopColor: hi }} />
+            <stop offset="0%" style={{ stopColor: color }} />
             <stop offset="100%" style={{ stopColor: color }} />
           </linearGradient>
           {showGlow && (
@@ -115,16 +116,16 @@ export function ScoreRing({
           y={centerSub ? '46%' : '50%'}
           textAnchor="middle"
           dominantBaseline="central"
-          fill="var(--num-color)"
+          fill="var(--text)"
           fontSize={size * 0.3}
-          fontWeight={750}
-          letterSpacing="-0.04em"
-          style={{ fontFamily: 'var(--font-num)', fontVariantNumeric: 'tabular-nums' }}
+          fontWeight={300}
+          letterSpacing="-0.03em"
+          style={{ fontFamily: 'var(--font)', fontVariantNumeric: 'tabular-nums' }}
         >
           {fmt(value)}
         </text>
         {centerSub && (
-          <text x="50%" y="69%" textAnchor="middle" dominantBaseline="central" fill="var(--text-2)" fontSize={Math.max(8.5, size * 0.09)} letterSpacing="0.1em" style={{ fontFamily: 'var(--font-mono)', textTransform: 'uppercase' }}>
+          <text x="50%" y="69%" textAnchor="middle" dominantBaseline="central" fill="var(--text-2)" fontSize={Math.max(13, size * 0.12)} style={{ fontFamily: 'var(--font)' }}>
             {centerSub}
           </text>
         )}

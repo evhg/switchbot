@@ -1,564 +1,555 @@
-# Sleep Lab design system: "Kinetic Night"
+# Sleep Lab design system v2: "Instrument"
 
-Status: **adopted**, 2026-10-29. This replaces the ad-hoc dataviz styling in `apps/web/app/globals.css` and the card stack on the Today tab.
+Status: **adopted**, 2026-10-29. This replaces v1 ("Kinetic Night", commit fe244a8).
 
-What the user asked for:
-- "the ui is very basic, make it smooth and look expensive"
-- "just like kinetiq landing page, make it a story as you scroll down the page with animations"
+What the user asked for, newest first:
+- About System on a 5K display in desktop Chrome: "this looks so busy, don't know where to look, hard to read … Give this a total re-design like a professional app ui designer would. Make it an award winning design."
+- "make it smooth and look expensive"
+- "like the Kinetiq landing page, make it a story as you scroll down the page with animations" (the Today tab)
 
-Reference: [kinetiq.xyz](https://kinetiq.xyz). On a phone it is a run of centred sections, each with one idea, one huge number and a short line under it. It uses frosted top and bottom bars, a mono face for labels, and stays quiet. We keep that pacing. The pinned, scroll-scrubbed parts come from Apple product pages and Whoop/Oura.
+Taken together, the brief is to keep the Today scroll story and the premium feel, and make every screen calm, readable and clearly ordered on a 2560 px desktop and on an iPhone home-screen PWA.
+
+The idea in one line: **Sleep Lab is a precision instrument for two sleepers.** It uses one typeface, neutral greys and a single signal colour, and colour only ever means something. Each screen has one reading in large type, with everything else quieter and pushed back.
 
 ---
 
 ## 0. The decision
 
-Three directions were mocked as working scroll stories. Each was captured as a 390×844 screenshot sequence in dark and night mode, plus light mode for two of them.
+Three directions were mocked as responsive static pages: Today and System, at 2560×1440, 1440×900 and 390×844 @2x, in dark, light and night. Each was judged on whether the eye lands in one second, craft and originality, 5K and iPhone behaviour, the scroll story, night mode, and whether it can be built with no new dependencies.
 
 | Direction | Verdict |
 |---|---|
-| **KINETIC** (winner) | Closest to Kinetiq: one huge number per chapter, mono labels, a frosted header with chapter progress. All its numbers come from the real simulator (seed 42, night of 2026‑10‑28). Its pinned "The night" chapter is the best of the three: one cursor scrubs both hypnograms, room °C, CO₂ and the aircon ticks together, with live readouts and captions at real moments. It is the most legible at a 10‑second glance (76 fills the first screen) and the cheapest to run at 60 fps (flat black, no blur behind charts). |
-| CALM CINEMATIC | Has the most atmosphere: the sky changes dusk → night → dawn as the clock moves, and the light theme is lovely. But the serif-italic display and cards on gradients read as "wellness app", not Kinetiq, and drawing 8 fixed gradient layers costs a lot on iPhone. **Grafted:** sky crossfade (reduced to 3 layers), floating glass pill tab bar, the compositor-only chart wipe, the ±(50 ppm + 5 %) CO₂ ribbon, the "In a sentence" insight block, the warm light theme, the caption list built from real data (including HR lows). |
-| NOCTURNE | Has the finest typographic taste (Instrument Serif headlines) and the most careful night-mode rules. But its numbers were invented (84 / 71 don't exist in the data), its dark capture shows an unstyled light page, and serif + light weights lose the punch of Kinetiq's big figures. **Grafted:** in night mode giant numerals drop to `--text-2`; the ghost chart rises to 25 % in night mode; dwell zones at both ends of a scrub; a blurred twin glow under the score rings (off in night mode); the ivory "paper" light background. |
+| **INSTRUMENT** (winner) | Inter Tight only, neutral greys and one orange signal colour that appears only for the selection, the scrub cursor, the plan line and anything over a limit. This gives the strongest hierarchy of the three: at 2560 the thin-weight "75" is the only large object on the screen. "The night" is the best single moment in any of the mocks: a sticky-graphic scene with steps on the left and one cursor scrubbing both hypnograms, room °C against the plan, CO₂ and aircon ticks, with a live readout. Its *Tonight's plan* pane is a real product surface: a summary row, a clickable curve, phase keys, Starts/Target dials, and at ≥1760 px "What the aircon will do tonight". The phone System root opens on a *Tonight's plan* card. It has the most distinctive identity of the three and still reads as calm. |
+| QUIET LUXURY | The most "Apple Settings" of the three, and very calm. Its Today, however, is a sequence of competent but generic slides; at 2560 several scenes are mostly empty space with small charts. **Grafted:** the System sub-pages listed in the desktop sidebar's second level, so there is one navigation column instead of two; the General pane (Appearance + People + Region) with number-free theme thumbnails, which also removes the 76-vs-75 bug; avatar-letter name fields that are obviously editable; the desktop Today "at a glance" row (Lights out · On the curve · CO₂ over 1,000 · Tonight). |
+| EDITORIAL | The most beautiful typography (Newsreader serif headlines and ledes), and a strong feature-article Today. A second family and serif ledes make it read as a magazine rather than a tool, and its desktop Today ran 10.8 screens at 1440. **Grafted:** the rule that every chart's title is the finding; labels written directly on the chart with no legends; the CO₂ chart with the crossing time and the peak labelled on the line; the advice card with "Edit tonight's plan" and "Remind me at 22:30"; the collapsed aircon log; the quiet closing line; the "making the data agree" rules (§11); ghost data drawn at 32–38 %. |
 
-Fixes to the winner, from its own notes:
-- In night mode the huge numerals were the brightest thing on screen; they now use `--text-2`.
-- Night-mode deep sleep at `#3a0904` was invisible; it now uses the app's existing `#560f09`.
-- The cursor's CO₂ readout must clamp to the sleep window (it showed 1,310 after wake while the headline peak said 1,285).
+### Fixes to the winner before it ships
 
-Reference screenshots (KINETIC mock, dark, real data):
+1. **Ghost hypnograms.** The mock draws unrevealed stages as outlined boxes, which reads as noise (see `06-the-night-390-dark.png`). They become filled blocks at `--ghost` opacity with no stroke.
+2. **System desktop navigation.** The mock adds an in-content category column beside the sidebar, which means two navigation columns. This is replaced by the sidebar's second level, taken from Quiet Luxury (`graft-sidebar-settings-2560.png`). Values such as "Door ajar" and "You, Erik" stay on the phone list only.
+3. **Empty band on the desktop hero.** The gap between the person rows and the hypnogram strip gets the Quiet Luxury "at a glance" row. The hypnogram strip moves down to open "The night".
+4. **Phone "The night" header.** "7 h 23 m in the dark." squeezes in beside "The night". It moves to its own line under the scene label.
+5. **Aircon tick row.** On the phone the ticks collide with the 23:00 axis label. Ticks sit in their own 16 px row with an 8 px gap above the time axis.
+6. **Light-mode signal.** `#d6480c` measures 3.95:1 on `#f4f3ef`, which fails for small text. It is now `#c2410c` (4.66:1 as text; white on it ≈ 4.8:1).
+7. **Sparse Appearance pane at 2560.** Appearance, People and Region merge into one *General* pane.
+8. **Numbers.** The three mocks disagree with each other: asleep 6h 41m / 7h 14m, CO₂ peak 1,245 / 1,257, crossing at 02:31 / 02:44. **None of the mock numbers is canonical.** The build takes every value from `packages/core` through the selectors in §11.
 
-| | | | |
-|---|---|---|---|
-| ![hero](design/01-hero.png) Hero | ![lights out](design/02-lights-out.png) Lights out (pinned, scrubbed) | ![night](design/03-the-night.png) The night (pinned, scrubbed) | ![air](design/04-the-air.png) The air |
-| ![bodies](design/05-bodies.png) Your bodies | ![drivers](design/06-drivers.png) What drove it | ![tonight](design/07-tonight.png) Tonight | ![night mode](design/08-night-mode.png) Night mode, The night |
+### Reference images (`docs/design/`)
 
-Graft reference (CALM, light): ![calm sky](design/graft-calm-sky.png). Only the sky crossfade, the pill tab bar and the light palette are taken from it. Its typography is not.
+| | | |
+|---|---|---|
+| ![](design/01-today-hero-2560-dark.png) Today hero, 2560 dark | ![](design/02-the-night-2560-dark.png) The night, 2560 (sticky graphic) | ![](design/03-tonights-plan-2560-dark.png) Tonight's plan, 2560 (with fix 2, the left list moves into the sidebar) |
+| ![](design/04-today-hero-1440-light.png) Today hero, 1440 light | ![](design/05-today-hero-390-dark.png) Today hero, iPhone | ![](design/06-the-night-390-dark.png) The night, iPhone (ghost style replaced by fix 1) |
+| ![](design/07-system-390-dark.png) System root, iPhone | ![](design/08-tonights-plan-390-dark.png) Tonight's plan, iPhone | ![](design/09-night-mode-390.png) Night mode, The night |
+| ![](design/graft-sidebar-settings-2560.png) Graft: sidebar second level + General pane | ![](design/graft-at-a-glance-2560.png) Graft: "at a glance" row (bottom of hero) | |
 
----
-
-## 1. Principles
-
-1. **One idea per screen.** Each chapter has one headline, one huge number and at most one chart. If a screen needs two charts, it is two screens.
-2. **The number is the hero.** Display figures run 96–212 px with tight tracking. Labels are tiny mono capitals. The size contrast between the two does the work that colour and boxes did before.
-3. **Your finger is the playhead.** Time-based data (the night) is scrubbed by scroll, never auto-played. Momentum stays native. Pinning uses `position: sticky` only.
-4. **Black is the canvas.** In dark mode depth comes from light (a radial glow per chapter, the sky at the top), not from shadows or stacked cards. Cards are kept for dense exploration (Room, Body, Lab, System).
-5. **One accent per chapter.** Colour says where you are in the story. Series colours (You, Erik, °C, CO₂, stages) never change between chapters.
-6. **Glance first, explore second.** The first screen answers "how did we sleep?" in under 10 seconds. The header segments jump to any chapter. Every story chart has a tap-through to its full explorable card.
-7. **Night mode is a different instrument, not a dimmer.** It is red only and very dim, with no ambient motion. Scrubbing still works because it moves only with the finger.
-8. **Motion confirms, it never decorates data.** Transform and opacity only. Nothing loops on top of data, and nothing blocks reading the final value.
+The winning mock's source is in `docs/design/mock/`: `base.css` holds the tokens and components, `shell.js` the scroll engine and number helpers, plus `today.html` and `system.html`. Open them in a browser and add `?theme=light|dark|night` to force a theme. The mock numbers are placeholders.
 
 ---
 
-## 2. Typography
+## 1. What changed from v1 and why
 
-Load both with `next/font/google` in `app/layout.tsx` and expose them as CSS variables:
+| v1 "Kinetic Night" | v2 "Instrument" | Why |
+|---|---|---|
+| A phone layout centred in a `max-width:1120px` box, with the floating pill tab bar on desktop too | At ≥1024 px a persistent sidebar, a 12-column content grid up to 1240/1400 px, and a 672 px reading column for settings. The phone keeps a solid bottom tab bar. | On a 5K screen more than half the width was dead, and the pill sat on top of charts. |
+| 33 font sizes, nine of them ≤ 11 px; mono caps labels at 9.5–10.5 px | 7 roles; **13 px is the minimum on phone and 14 px on desktop**, axis ticks included; a size step at ≥1920 px | "hard to read". |
+| Two families (Inter Tight + Geist Mono), five label voices, numbered eyebrows "01 APPEARANCE", dash kickers, 21 uppercase rules | One family. Sentence case everywhere. **Exactly one label style**: `.label`, secondary size, weight 560, `--text-2`. | Every element said "label", so nothing read as content. |
+| One accent per chapter (violet, cyan, blue, amber, lime, mint), a rainbow progress bar, per-tile tints, 82 hex values | One signal colour per theme, used only for meaning. Series colours are fixed and few. | Colour stopped meaning anything, and series fought with UI accents. |
+| Weights 750–800 at −0.075 em, gradient numerals, outlined chapter numerals, glows, star field, sky crossfade | Weights 250/300 for readings, 400 body, 560 labels, 600 titles. No gradients, glows, outlines or stars. | "busy", not "expensive". The luxury signal is restraint. |
+| Cards nested in cards on every tab | Space and hairlines. A card only wraps a self-contained interactive object, and cards never nest. | Nothing grouped and nothing stood out. |
+| Tab bar + sticky section JumpBar + in-card segmented controls (Lab: 3 chip rows on one card) | One navigation layer per level. JumpBars removed. A desktop "On this page" rail at ≥1760 px. Lab uses a sentence-builder. | Three stacked navigation layers. |
+| The curve editor fourth on System, between Data source and Tags; dev telemetry next to preferences | *Tonight's plan* is its own page, reachable from Today › Tonight and first in System. Diagnostics, the setup guide and freshness each have their own page. | Progressive disclosure. The plan is the one thing you act on nightly. |
+| 76 in theme previews vs 75 score; CO₂ 1,245 vs "peaked at 1,257"; 80 vs 90 nights unexplained | One selector per number, and the scrub clamps to the sleep window (§11) | Trust. |
+| Fonts via `next/font/google` (§2 of v1) | `next/font/local`, Inter Tight only. Delete `GeistMono-latin-var.woff2`. | The Google loader breaks the Vercel build. |
 
-```ts
-import { Inter_Tight, Geist_Mono } from 'next/font/google';
-const display = Inter_Tight({ subsets: ['latin'], weight: 'variable', variable: '--font-display', display: 'swap' }); // 100–900 axis; we use 300–800
-const mono = Geist_Mono({ subsets: ['latin'], weight: ['400', '500', '600'], variable: '--font-mono', display: 'swap' });
-// <html className={`${display.variable} ${mono.variable}`}>
-```
+Kept from v1: the Today story's chapter order and its pinned, finger-scrubbed "The night" chapter; the three themes, with automatic night mode from 21:00 to 07:00 ICT; the rule that motion uses only transform and opacity; reduced-motion support; and all chart token names (§3.4).
 
-Both families are in the installed Next 15.5 `next/font/google` font data (checked: `Inter Tight` has a 100–900 wght axis, and `Geist Mono` is listed). No package is needed.
+---
 
-- `--font: var(--font-display), system-ui, -apple-system, sans-serif` (body and UI)
-- `--font-num: var(--font-display)` with `font-feature-settings: 'tnum' 1, 'lnum' 1, 'ss01' 1`. Every number uses the `.num` class so counting digits don't jump.
+## 2. Principles
 
-### Type scale (px at a 390 pt viewport)
-
-| Token / class | Size / line-height | Weight | Tracking | Use |
-|---|---|---|---|---|
-| `.t-hero` | 212 / 0.78 (clamp 160–212 by `vw`) | 800 | −0.075em | The Sleep Air score on the hero |
-| `.t-mega` | 120 / 0.82 | 800 | −0.06em | CO₂ mean, "+24" drivers net, outlined chapter numbers (stroke only) |
-| `.t-clock` | 118 (Lights out) and 76 (The night) / 0.9 | 300 | −0.045em | Scrubbed clocks. Thin weight means time in motion |
-| `.t-big` | 64 / 0.9 | 750 | −0.05em | Temperature readout (20.3 °C), person scores |
-| `.t-h1` | 52 / 0.95 | 750 | −0.045em | Chapter headline ("Two people. One sealed room.") |
-| `.t-h2` | 28 / 1.05 | 700 | −0.03em | Night captions, page titles on other tabs |
-| `.t-h3` | 20 / 1.15 | 650 | −0.02em | Card titles in dense tabs |
-| `.t-stat` | 23 / 1 | 700 | −0.02em | Vitals row values, table figures |
-| `.t-body` | 17 / 1.4 | 450 | −0.01em | Lede and verdict sentences |
-| `.t-small` | 13.5 / 1.4 | 450 | 0 | Notes and driver labels |
-| `.t-label` | 10.5 / 1.3, mono, UPPERCASE | 500 | 0.14em | Kickers ("03 — THE NIGHT"), units, axis titles |
-| `.t-micro` | 9.5 / 1.2, mono, UPPERCASE | 400 | 0.12em | Chart axis ticks, row labels in charts |
-
-Rules:
-- Units sit after the number in `.t-label` at 0.3–0.4 of the number's size, aligned to the baseline, in `--text-2`.
-- Headlines use two tones: the first sentence in `--text`, the second in the chapter accent ("Two people. **One sealed room.**").
-- The hero number uses a vertical gradient fill, `--text` to `--ac-hero` at 35 %. Night mode uses a flat `--text-2`.
-- Never more than three type sizes on one screen besides the labels.
+1. **One reading per screen.** Each screen opens with a single answer in large type: the score, the clock, the plan, "Right now". Everything after it is visibly secondary. Ask of every screen: where does the eye land in one second?
+2. **Signal means something.** There is one signal colour per theme. It marks only the selected item, the scrub cursor, the plan line on the Tonight/plan charts, and states over a limit (CO₂ over 1,000 ppm, negative drivers, a drift alert). Everything else is greyscale ink.
+3. **Sentence case, one label voice.** No uppercase, no letter-spaced labels, no eyebrows with numbers, no mono for labels.
+4. **Space, not boxes.** Group with whitespace and one hairline. A card means "this is one object you can interact with", such as the plan instrument, a list group or a dial. Cards never nest.
+5. **Show 3–4 things, then offer more.** Long tails go into "More analysis" rows, which open a sheet on the phone or a side panel / page on desktop.
+6. **Desktop is a layout, not a stretched phone.** A sidebar, a grid, readable measures, and story scenes composed as two columns.
+7. **Numbers agree everywhere.** There is one source per number, and it is rendered the same way on every surface.
+8. **Calm motion.** Opacity plus a small rise, lines that draw in, a cursor that follows your finger. Nothing loops and nothing decorates the data.
 
 ---
 
 ## 3. Colour tokens
 
-The token **names** already used by charts stay the same (`--bg`, `--surface`, `--text`, `--text-2`, `--muted`, `--grid`, `--axis`, `--person-a`, `--person-b`, `--temp`, `--rh`, `--setpoint`, `--stage-*`, `--band-*`, `--good`, `--warn`, `--serious`, `--critical`, `--div-pos`, `--div-neg`, `--spark-*`). This keeps every Recharts and SVG chart working; only the values change. New tokens are marked ★.
+All colours live in `apps/web/styles/tokens.css` as custom properties on `:root[data-theme=…]`. Charts (inline SVG and Recharts) read **only** these variables.
 
-Theme switching keeps the current mechanism (`data-theme` on `<html>`, `THEME_BOOT`, auto night 21:00–07:00 ICT).
+### 3.1 Core tokens
 
-### 3.1 Dark (the main look)
+| Token (v2 name) | Dark | Light | Night | Notes |
+|---|---|---|---|---|
+| `--bg` | `#0e0e0f` | `#f4f3ef` | `#000000` | Page. Dark is no longer pure black, so surfaces can sit one step above it. |
+| `--rail` *(new)* | `#0a0a0b` | `#ebeae5` | `#000000` | Sidebar and phone tab bar, one step dimmer than the content (Linear's "inverted L"). |
+| `--surface` | `#151516` | `#ffffff` | `#0c0201` | List groups, cards, sheets. |
+| `--surface-2` | `#1d1d1f` | `#efeee9` | `#160403` | Selected sidebar row, segmented-control track, hover. |
+| `--hairline` | `#262628` | `#dfddd6` | `#2a0705` | Dividers and row separators. Now solid, not alpha. |
+| `--hairline-2` | `#38383b` | `#c9c7bf` | `#3d0a07` | Control borders, input outlines. |
+| `--grid` | `#1c1c1e` | `#e8e6e0` | `#170302` | Chart gridlines, only at key values. |
+| `--axis` | `#38383b` | `#c9c7bf` | `#2a0604` | Axis baselines. |
+| `--text` | `#f1f0ec` (16.9:1) | `#141413` (16.6:1) | `#c42a1e` (3.7:1) | Primary text and "You" ink. |
+| `--text-2` | `#aeada7` (8.6:1) | `#4c4b47` (7.9:1) | `#9a2016` (2.6:1) | Secondary text, labels, units. |
+| `--muted` → also `--text-3` | `#8a8983` (5.5:1) | `#66655f` (5.3:1) | `#7a1a12` (2.0:1) | Captions and axis ticks. **Raised from v1** (`#6c6c68` failed AA). |
+| `--signal` *(new)* | `#ff5f1f` (6.4:1) | `#c2410c` (4.7:1) | `#c42a1e` | The one colour. |
+| `--signal-soft` *(new)* | `rgba(255,95,31,.16)` | `rgba(194,65,12,.12)` | `rgba(196,42,30,.18)` | Area above a limit, selected phase band. |
+| `--on-accent` | `#120700` | `#ffffff` | `#000000` | Text on a signal fill. |
+| `--accent` | `= --signal` | | | Kept as an alias so existing components still work. |
+| `--ghost` | `.32` | `.30` | `.38` | Opacity of not-yet-revealed data (v1: .14/.18). |
 
-| Token | Value | Note |
+Contrast figures are WCAG ratios against `--bg`. On `--surface` subtract about 0.3.
+
+### 3.2 Data series
+
+| Token | Dark | Light | Night | Use |
+|---|---|---|---|---|
+| `--person-a` (You) | `= --text` | `= --text` | `#c42a1e` | You are ink. Hypnograms, vitals, the You column. |
+| `--person-b` (Erik) | `#8fb0cf` | `#3c6c98` | `#8a1d14` | Erik is steel blue, the only non-signal hue in the story. |
+| `--temp` | `#7cbfb4` | `#1f7a70` | `#c42a1e` | Room °C, only where it shares a chart with another measure (Room/Lab). On a Today track by itself it uses `--text`. |
+| `--co2` | `#d1b47c` | `#8f6a14` | `#9a2016` | CO₂, same rule. Above 1,000 ppm the line switches to `--signal`. |
+| `--rh` | `#a8a0e0` | `#5a4fb8` | `#7a1a12` | Humidity (Room only). |
+| `--setpoint` | `= --muted`, dashed 4/4 | | | Plan / setpoint. Always dashed, never coloured. On the Tonight and plan charts the plan is `--signal`. |
+| `--outdoor` | `#c98f7a` | `#a6503a` | `#7a1a12` dashed | Outdoor vs bedroom. |
+| `--dew` | `#b892c4` | `#8a4f99` | `#7a1a12` dotted | Dew point. |
+
+Rule: a chart uses at most **two** hues. A third series must be `--muted`, dashed.
+
+### 3.3 Stages, status, diverging
+
+- **Sleep stages** use the person's colour, with opacity rising with depth. They are defined with `color-mix` so a person scope can override `--person`:
+  - `--stage-deep: var(--person)` (100 %)
+  - `--stage-light: color-mix(in srgb, var(--person) 85%, var(--bg))`
+  - `--stage-rem: color-mix(in srgb, var(--person) 70%, var(--bg))`
+  - `--stage-awake: color-mix(in srgb, var(--person) 40%, var(--bg))`
+  - Row position carries the stage too: Awake on top, Deep at the bottom. The default `--person` is `--person-a`, and `.p-erik` sets it to `--person-b`.
+  - In night mode the stages are fixed reds: `#c42a1e`, `#9a2016`, `#7a1a12`, `#4a0f09`.
+- **Status:**
+  - `--good: var(--muted)`, because "fine" is not colourful.
+  - `--warn: var(--text-2)`.
+  - `--serious` and `--critical: var(--signal)`.
+  - `--good-text: var(--text-2)`, `--bad-text: var(--signal)`.
+  - Bands: `--band-good: transparent`, `--band-warn: rgba(ink, .04)`, `--band-serious` and `--band-critical: var(--signal-soft)`.
+- **Diverging** (driver bars, effect sizes, the correlation matrix): `--div-pos: var(--text)`, `--div-neg: var(--signal)`, `--div-mid: var(--surface-2)`.
+- **Deltas against a person's own baseline are neutral.** They are written as text with an arrow and the typical value ("↓ 4 bpm vs typical 53"), never in red or green. Colour is used only where good or bad is unambiguous and the item is a score driver.
+
+### 3.4 Token renames and removals (for the implementation PR)
+
+- **Kept names** (charts keep working): `--bg --surface --surface-2 --text --text-2 --muted --hairline --hairline-2 --grid --axis --ring-track --on-accent --person-a --person-b --temp --co2 --rh --setpoint --dew --outdoor --good --warn --serious --critical --good-text --bad-text --band-* --stage-* --div-* --spark-line --spark-band --ghost --accent --font --font-num`.
+- **New:** `--rail --signal --signal-soft --text-3` (an alias of `--muted`), `--person`.
+- **Aliased, then deleted after the migration:**
+  - `--ch-accent` and every `--ac-*` → `var(--signal)`. Chapters no longer change colour.
+  - `--s1…--s8` → map to `--person-a`, `--person-b`, `--temp`, `--co2`, `--dew`, `--rh` and `--outdoor`, then replace each usage.
+  - `--seq` → `--person-a`, `--seq-2` → `--person-b`.
+- **Deleted:**
+  - `--font-mono` (23 usages): replace with `--font` and `.num`. Only `.code` in Diagnostics uses `ui-monospace`.
+  - `--sky-*`, `--star`, `--glow-o`, `--shine-o`, `--surface-glass` (the phone top bar uses `color-mix(in srgb, var(--bg) 92%, transparent)`; night mode uses a solid `--bg`), `--raise`.
+  - The `.t-label`, `.t-micro`, `.t-hero`, `.t-mega` and `.t-big` classes.
+- `--shadow`: dark `inset 0 1px 0 rgba(255,255,255,.04)`, light `0 1px 2px rgba(20,20,19,.05)`, night `none`.
+
+### 3.5 Themes
+
+- `data-theme` on `<html>` is `light`, `dark` or `night`. `lib/theme-boot.ts` sets it before first paint.
+- **Auto** follows `prefers-color-scheme`, then forces `night` from 21:00 to 07:00 ICT (Asia/Bangkok).
+- The `?theme=light|dark|night` query parameter forces a theme. It is used for screenshots and does not persist.
+- **Night mode rules:**
+  - Red only. No pixel brighter than `#c42a1e`, and G and B are both ≤ `0x30`.
+  - No blur, no shadow, no translucency, no ambient motion.
+  - Identity comes from lightness, dash pattern and direct labels, never from hue.
+- **Contrast ceiling in night mode.** `#c42a1e` on black is 3.7:1, the hard maximum under the red-only rule, so 4.5:1 cannot be met. To compensate:
+  - essential text in night mode is at least 17 px, so it passes the large-text-equivalent bar;
+  - essential text always uses `--text`. `--text-2` and `--muted` are only for redundant information (units, ticks, captions that restate a labelled value);
+  - primary buttons are outlined in `--text` rather than filled;
+  - giant readings use `--text` at weight 300, not 250.
+
+---
+
+## 4. Typography
+
+### 4.1 Family and loading
+
+**Inter Tight only.** It is OFL, a variable 100–900 latin subset, and already in the repo at `apps/web/app/fonts/InterTight-latin-var.woff2`.
+
+```ts
+// app/layout.tsx
+import localFont from 'next/font/local';
+const sans = localFont({
+  src: './fonts/InterTight-latin-var.woff2',
+  weight: '100 900',
+  variable: '--font-display',
+  display: 'swap',
+  fallback: ['system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+});
+// <html className={sans.variable}>. Remove the Geist Mono loader and delete GeistMono-latin-var.woff2.
+```
+
+- **Never use `next/font/google`**: it breaks the Vercel build. If a family changes, download the latin variable woff2 from fonts.gstatic.com with curl into `app/fonts`, and use OFL fonts only.
+- `--font: var(--font-display), system-ui, -apple-system, 'Segoe UI', sans-serif;` and `--font-num: var(--font)`.
+- On `body`, set `font-feature-settings: 'tnum' 1, 'cv11' 1, 'ss03' 1`. Tabular figures are used everywhere, so counting numbers never jitter.
+- `.code` (Diagnostics only, for env var names) uses `ui-monospace, 'SF Mono', Menlo, monospace` at the secondary size.
+
+### 4.2 Scale
+
+There are seven roles. Each is a custom property that steps at the breakpoints, so components only ever use the role.
+
+| Role / class | Phone < 1024 | Desktop ≥ 1024 | Large ≥ 1920 | Weight · tracking · line height | Use |
+|---|---|---|---|---|---|
+| `--t-display` / `.display` | 96 | 136 | 168 | 250 (night 300) · −0.045em · 0.9 | One per screen: Today score (the hero uses 1.5×: 144 / 204 / 252), the scrubbed clock |
+| `--t-num` / `.reading` | 48 | 60 | 72 | 300 · −0.03em · 1 | Instrument readings: "4h 02m", dial values, person scores, "+5" |
+| `--t-title` / `.title` | 30 | 36 | 42 | 600 · −0.022em · 1.15 | Page titles, scene headlines ("Same curve. More air.") |
+| `--t-head` / `.head` | 20 | 22 | 24 | 600 · −0.012em · 1.3 | Section and chart titles, the finding sentence |
+| `--t-body` / `.body` | 17 | 18 | 19 | 400 · 0 · 1.5 | Body, list rows, step text |
+| `--t-sec` / `.sec`, `.label` | 15 | 16 | 17 | 400 (`.label` 560) · 0 · 1.5 | Secondary text, **the one label style**, row values |
+| `--t-cap` / `.cap` | 13 | 14 | 15 | 400 · 0 · 1.4 | Captions, axis ticks, footers. **The minimum. Nothing is smaller.** |
+
+- **Units** (`.unit`): 0.42× the number at display and reading sizes, 0.6× at body and below, weight 400, `--text-2`, and a 0.08em gap before the unit, e.g. `24.6°`, `612 ppm`, `6h 41m`.
+- **Hierarchy within a block** comes from size and the ink level (`--text` / `--text-2` / `--muted`), never from colour or uppercase.
+- **Two-tone sentences** (ink, then `--text-2`) are allowed **once per screen**: the Today verdict ("You both slept well. Humidity above 60%…").
+- **Measure:** body copy is at most 38rem (about 66 characters). Scene ledes are at most 30rem.
+- **Weights in use:** 250, 300, 400, 560, 600. No 700 or above anywhere.
+
+---
+
+## 5. Layout, grid, breakpoints, navigation
+
+### 5.1 Breakpoints
+
+| Name | Width | Layout |
 |---|---|---|
-| `--bg` | `#000000` | True black for OLED |
-| `--surface` | `#0b0b0c` | Cards in dense tabs |
-| `--surface-2` | `#141416` | Inputs, segmented track, hover |
-| ★`--surface-glass` | `rgba(10,10,12,.82)` | Header and tab bar (with blur) |
-| `--text` | `#f4f4f1` | |
-| `--text-2` | `#a7a7a2` | |
-| `--muted` | `#6c6c68` | |
-| ★`--hairline` | `rgba(255,255,255,.09)` | Row dividers, card borders |
-| ★`--hairline-2` | `rgba(255,255,255,.16)` | Focused borders, cursor track |
-| `--border` | `var(--hairline)` | |
-| `--grid` | `rgba(255,255,255,.07)` | Chart gridlines |
-| `--axis` | `rgba(255,255,255,.16)` | |
-| `--ring-track` | `rgba(255,255,255,.08)` | |
-| `--accent` | `var(--ch-accent)` | ★ resolves per chapter (see 3.4) |
-| `--on-accent` | `#000000` | Text on accent pills |
-| `--person-a` | `#4d9bff` | You |
-| `--person-b` | `#ff7a3d` | Erik |
-| `--temp` | `#3fd0ff` | Room °C |
-| ★`--co2` | `#ffb020` | CO₂ line |
-| `--rh` | `#9085e9` | |
-| `--setpoint` | `#c98500` | Aircon steps |
-| `--dew` | `#d55181` | |
-| `--outdoor` | `#e66767` | |
-| `--stage-deep` | `#2f5bff` | |
-| `--stage-light` | `#6f9bff` | |
-| `--stage-rem` | `#b7c9ff` | |
-| `--stage-awake` | `#ffb020` | |
-| `--good` / `--good-text` | `#3ddc84` / `#5be39a` | |
-| `--warn` | `#ffb020` | |
-| `--serious` | `#ff8a4c` | |
-| `--critical` / `--bad-text` | `#ff5a4e` / `#ff7a70` | |
-| `--band-good` | `rgba(61,220,132,.05)` | CO₂ band washes |
-| `--band-warn` | `rgba(255,176,32,.09)` | |
-| `--band-serious` | `rgba(255,138,76,.12)` | |
-| `--band-critical` | `rgba(255,90,78,.16)` | |
-| `--div-pos` / `--div-neg` | `#c8ff3d` / `#ff5a4e` | Driver bars |
-| `--spark-line` / `--spark-band` | `#6c6c68` / `rgba(255,255,255,.05)` | |
-| ★`--ghost` | `.14` | Opacity of the unrevealed part of a scrubbed chart |
-| ★`--glow-o` | `.22` | Chapter glow opacity |
+| phone | < 600 | Single column, 20 px gutter, top bar plus bottom tab bar |
+| tablet | 600–1023 | Phone chrome. Content column centred, max 640 px. Theme thumbnails 4 across. |
+| desktop | ≥ 1024 | Sidebar 264 px plus content grid. The phone top bar and tab bar are removed. |
+| wide | ≥ 1440 | Today scenes get the full 5/12 + 7/12 split. Settings show a side column where defined. |
+| xwide | ≥ 1760 | "On this page" rail on Today, Room, Body and Lab. Plan side column ("What the aircon will do tonight"). |
+| large | ≥ 1920 | Type step (§4.2). Sidebar 300 px. Content max 1400 px. Gutters 64 px. |
 
-### 3.2 Light ("ivory paper", grafted from Calm and Nocturne)
+Verify at 390×844, 430×932, 1024×768, 1440×900 and 2560×1440 (a 5K display at DPR 2).
 
-| Token | Value |
-|---|---|
-| `--bg` | `#f5f1e8` |
-| `--surface` | `#fffdf9` |
-| `--surface-2` | `#efe9dc` |
-| `--surface-glass` | `rgba(250,247,240,.78)` |
-| `--text` / `--text-2` / `--muted` | `#14131a` / `#55525e` / `#8b8794` |
-| `--hairline` / `--hairline-2` | `rgba(20,19,26,.09)` / `rgba(20,19,26,.16)` |
-| `--grid` / `--axis` / `--ring-track` | `rgba(20,19,26,.07)` / `rgba(20,19,26,.18)` / `rgba(20,19,26,.08)` |
-| `--on-accent` | `#ffffff` |
-| `--person-a` / `--person-b` | `#2f6fe0` / `#d9622a` |
-| `--temp` / `--co2` | `#0a8fc0` / `#c77d00` |
-| `--rh` / `--setpoint` / `--dew` / `--outdoor` | `#6250d6` / `#a86d00` / `#c2457a` / `#d03b3b` |
-| `--stage-deep` / `-light` / `-rem` / `-awake` | `#1d3fc4` / `#4f7fe8` / `#9db6f2` / `#d99400` |
-| `--good` / `--good-text` | `#1f9e5a` / `#13703f` |
-| `--warn` / `--serious` / `--critical` / `--bad-text` | `#d99400` / `#e0763f` / `#d03b3b` / `#b02a2a` |
-| `--band-good/warn/serious/critical` | `rgba(31,158,90,.07)` / `rgba(217,148,0,.10)` / `rgba(224,118,63,.11)` / `rgba(208,59,59,.12)` |
-| `--div-pos` / `--div-neg` | `#5a9e00` / `#d03b3b` |
-| `--spark-line` / `--spark-band` | `#8b8794` / `rgba(20,19,26,.05)` |
-| `--ghost` / `--glow-o` | `.18` / `.35` (glows are pastel washes on ivory) |
+### 5.2 Grid and spacing
 
-Light chapter accents use the "darker step" column in 3.4. The hero sky becomes a pale dawn (see 3.5).
+- **Spacing** uses a 4/8 scale: `--sp-1…--sp-24` (4…96), plus `--section`, the space between sections: 64 phone / 112 desktop / 136 large.
+- **Content grid on desktop:**
+  - 12 columns with 32 px column gaps;
+  - `max-width: 1240px` (1400 at ≥1920);
+  - side padding `clamp(40px, 5vw, 96px)`;
+  - centred in the space to the right of the sidebar.
+- **Measures:**
+  - reading column (settings detail, Body vitals list): **672 px**;
+  - *Tonight's plan*: 832 px, plus a 300 px side column at ≥1760;
+  - Today scenes: the full grid.
+- **Radii:** `--r-s 10`, `--r-m 14`, `--r-l 20`, `--r-pill 999`. Only these four.
 
-### 3.3 Night (red on black, unchanged values plus additions)
+### 5.3 Navigation
 
-Keep **every existing night value** in `globals.css` (`--bg #000`, `--text #a3241a`, `--text-2 #7d1a12`, `--muted #5c130d`, stages `#560f09 / #7a1a11 / #8f1f16 / #b0261b`, the band reds, and so on). Add:
+There is one navigation layer per level, and never more than two levels.
 
-| Token | Value | Note |
-|---|---|---|
-| `--surface-glass` | `#050000` | Solid, no blur |
-| `--hairline` / `--hairline-2` | `rgba(150,24,12,.18)` / `rgba(150,24,12,.30)` | |
-| `--person-a` / `--person-b` | `#a3241a` / `#6e170f` | Told apart by lightness, plus Erik is dashed in line charts |
-| `--temp` / `--co2` | `#9c2219` / `#7d1a12` | CO₂ is also told apart by its band wash |
-| `--ch-accent` (all chapters) | `#a3241a` | Every chapter accent collapses to one red |
-| `--div-pos` / `--div-neg` | `#7d1a12` / `#b0261b` | Gains are dim, losses bright |
-| `--ghost` | `.25` | Grafted from Nocturne, keeps the ghost legible |
-| `--glow-o` | `0` | No glows, sky, stars, gradients or shine |
-| ★`--num-color` | `var(--text-2)` | Giant numerals (`.t-hero`, `.t-mega`, `.t-clock`) use this |
+**Phone (< 1024)**
+- **Top bar**, sticky, 56 px:
+  - date ("Thu 29 Oct", body size, 600), followed by the current chapter or page in `--text-2`;
+  - previous/next night as 44 px icon buttons;
+  - on Today, a 2 px neutral (`--text-2`) progress line along the bottom edge;
+  - a hairline appears once the page scrolls;
+  - background is `color-mix(--bg 92%)` with no blur. Night mode uses a solid background.
+- **Drill-in pages** replace the date with a "‹ System" back link (44 px target) and a large page title below the bar.
+- **Bottom tab bar**, solid `--rail`, top hairline:
+  - 5 tabs (Today, Room, Body, Lab, System), each a 24 px icon over a 13 px sentence-case label, weight 500;
+  - inactive `--muted`; active label `--text` with the active icon in `--signal`;
+  - full-width strip, not a floating pill, padded for `env(safe-area-inset-bottom)`;
+  - content reserves `calc(64px + safe-area)` at the bottom.
 
-In the other themes `--num-color: var(--text)`. Night-mode audit rule: no pixel may exceed sRGB `#c42a1e`, and green and blue channels must stay ≤ `0x30`. Check this with the screenshot script (section 11).
-
-### 3.4 Chapter accents (`--ch-accent`, set by `<Chapter accent>`)
-
-| Chapter | Dark | Light | Night |
-|---|---|---|---|
-| 01 Verdict | `#a495ff` violet | `#5b4bd6` | `#a3241a` |
-| 02 Lights out | `#3fd0ff` cyan (= `--temp`) | `#0a8fc0` | ″ |
-| 03 The night | `#5b8cff` | `#2f5fe0` | ″ |
-| 04 The air | `#ffb020` amber (= `--co2`) | `#c77d00` | ″ |
-| 05 Your bodies | `--text` (person colours do the work) | `--text` | ″ |
-| 06 What drove it | `#c8ff3d` lime / `#ff5a4e` | `#5a9e00` / `#d03b3b` | ″ |
-| 07 Tonight | `#3dffa8` mint | `#0f9e66` | ″ |
-
-The header kicker, progress-segment fill, outlined chapter number, chapter glow and primary button all read `--ch-accent`. The accent swaps with a 0.9 s crossfade, driven by the active chapter.
-
-### 3.5 Sky (grafted from Calm, cut down to 3 layers)
-
-This is a fixed `<div class="sky">` behind the Today story, made of three stacked gradient layers. Only `opacity` changes, and at most two layers are non-zero at a time.
-
-| Layer | Dark | Light |
-|---|---|---|
-| `--sky-dusk` | `linear-gradient(180deg,#1a1233 0%,#2c1a3f 45%,#000 100%)` plus radial `#ff9a5a` at 12 % on the horizon | `linear-gradient(180deg,#f7e3d3 0%,#efe2ef 50%,var(--bg) 100%)` |
-| `--sky-mid` | `linear-gradient(180deg,#05071a 0%,#000 70%)` plus a star field (2 SVG layers, 40 and 70 dots, parallax 0.06 and 0.12) | `linear-gradient(180deg,#e6e9f5 0%,var(--bg) 70%)`, no stars |
-| `--sky-dawn` | `linear-gradient(180deg,#071a24 0%,#0e2a33 40%,#000 100%)` plus radial teal at 10 % | `linear-gradient(180deg,#e2f0ea 0%,var(--bg) 70%)` |
-
-Mapping: Verdict = dusk. Lights out goes dusk → mid. The night: mid until the cursor passes 04:30, then mid → dawn up to wake. The air through What drove it: the sky fades to 0 (plain `--bg`, data-first). Tonight: dusk again at 60 %. Night mode: `.sky { display: none }`.
+**Desktop (≥ 1024): sidebar ("inverted L")**
+- `--rail` background, 264 / 300 px wide, sticky to the full viewport height, with a hairline on its right edge. From top to bottom:
+  1. Wordmark: "Sleep Lab", 17/600, with a small signal-ring icon.
+  2. Night picker: "Thu 29 Oct" (600) over "Night of Wed 28" (`--muted`), with ‹ › buttons. Keyboard: `[` and `]`.
+  3. Five destinations as 40 px rows with an icon and label. The selected row has a `--surface-2` fill, `--text` label and signal icon.
+  4. **Only on System**, the second level indented under System. Group labels (Tonight, Household, Data and devices, Help) are `.cap`; items are 36 px rows; the selected item has a `--surface-2` fill.
+  5. Footer, pinned to the bottom: "Bedroom now 24.6° · CO₂ 612 ppm · Humidity 58%" as label/value rows, then "● Simulated data · 14:55" in `.cap`. These are live room readings, and in night mode this is the only chrome that changes.
+- There is no JumpBar on any page. On long pages at ≥1760 a fixed right rail lists "On this page": `.cap` items, the current one in `--text` with a 16 px signal tick, the rest `--muted`.
 
 ---
 
-## 4. Surfaces, elevation, radii, borders, blur
+## 6. Components
 
-- **No shadows in dark or night.** Elevation is a 1 px `--hairline` border plus, for raised items only, a 1 px inner top highlight `inset 0 1px 0 rgba(255,255,255,.06)`.
-- **Light shadows** (Calm's three soft layers): `--shadow: 0 1px 1px rgba(20,19,26,.04), 0 6px 16px -6px rgba(20,19,26,.08), 0 28px 56px -18px rgba(20,19,26,.14)`.
-- **Radii:** `--r-xl 28px` (sheets, hero person cards), `--r-lg 22px` (cards), `--r-md 14px` (tiles, inner blocks), `--r-sm 10px` (chips, inputs), `--r-pill 999px`. Chart bars use 2.5 px corners.
-- **Glass:** only on the fixed header, the tab bar and sheets: `background: var(--surface-glass); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: same`. Never put glass over a scrolling chart. Night mode: no blur.
-- **Person cards** (Bodies chapter, Body tab): `--surface`, plus a corner wash `radial-gradient(120% 90% at 100% 0%, color-mix(in oklab, var(--person-x) 26%, transparent), transparent 60%)`. No wash in night mode.
-- **Chapter glow:** one absolutely positioned `div.glow` per chapter, `radial-gradient(60% 40% at 30% 20%, var(--ch-accent), transparent 70%)` at `opacity: var(--glow-o)`. It is a pre-blurred gradient, not `filter: blur`.
-- **Outlined chapter number:** `.t-mega` at 180 px, `color: transparent; -webkit-text-stroke: 1px var(--hairline-2)`, top-right, with parallax 0.3×. Hidden in night mode.
-- **Noise:** a 5 % monochrome noise PNG (2 KB, 128 px tile) over the sky to stop OLED gradient banding. Dark and light only.
-
----
-
-## 5. Spacing and layout
-
-- 4 px base grid. Tokens: `--sp-1 4`, `--sp-2 8`, `--sp-3 12`, `--sp-4 16`, `--sp-5 20`, `--sp-6 24`, `--sp-8 32`, `--sp-10 40`, `--sp-12 48`, `--sp-16 64`, `--sp-24 96`.
-- Side gutter is **16 px**. Content max-width is 560 px, centred. Tablet and desktop keep the existing `.stack.two` grid for the dense tabs.
-- Chapter padding: 96 px top (it clears the header), 112 px bottom (it clears the tab bar).
-- Safe areas: header `padding-top: max(10px, env(safe-area-inset-top))`, tab bar `bottom: max(10px, env(safe-area-inset-bottom))`.
-- Vertical rhythm inside a chapter: kicker → 16 → headline → 24 → number → 24 → chart → 16 → caption.
-
----
-
-## 6. Icon set (inline SVG, 24×24 viewBox, stroke 1.7, round caps and joins, `currentColor`)
-
-Put these in `components/icons.tsx` as `<Icon name="…" size={20} />`. Draw the paths in the same style as the existing TabBar icons.
-
-- Tabs: `moon` (Today), `house` (Room), `pulse` (Body), `flask` (Lab), `gear` (System)
-- Navigation: `chevron-left`, `chevron-right`, `chevron-down`, `arrow-up-right` (open the full card), `close`, `calendar`
-- Data: `thermometer`, `droplet` (RH), `co2` (a "CO₂" glyph in a cloud outline), `wind` (fresh air / ACH), `snowflake` (aircon cool), `fan`, `door`, `shower`, `bed`, `heart`, `lungs` (breathing), `o2` (SpO₂), `footprints` (steps), `zzz` (sleep), `sunrise` (wake), `sunset` (lights out)
-- Status: `check`, `alert`, `info`, `sparkle` (insight), `play` (arm tonight), `edit`, `refresh`
-- Event glyphs keep `EventGlyph` in `NightStrip.tsx`. Restyle them to 1.4 stroke `--text-2`.
-
-The active tab icon gets `--ch-accent` plus a 4 px dot underneath (`moon` filled at 15 % on Today).
-
----
-
-## 7. Components inventory
-
-All in `components/ui.tsx` unless noted. Props stay compatible with today's `Card`, `Segmented`, `Legend`, `Placeholder` and `TableView` call sites.
+Each component lives in `components/ui.tsx` unless noted. Every interactive element has a hit area of at least 44×44 px.
 
 | Component | Spec |
 |---|---|
-| **Card** | `--surface`, 1 px `--hairline`, `--r-lg`, padding 18 px, `--shadow` (light only). Header: `.t-label` kicker (optional), `.t-h3` title, `.t-small --text-2` sub, `meta` slot on the right. New `reveal` prop (default true) wraps it in `<Reveal>`. New `href` prop shows `arrow-up-right` and makes the title a link. |
-| **Chapter** (`components/story/Chapter.tsx`) | `<Chapter id n title accent sky pinned={vh?} onProgress?>`. Renders `<section data-chapter style="--ch-accent:…; height: pinned ? pinned*100+'svh' : auto">` with a `.pin` child (`position: sticky; top: 0; height: 100svh; overflow: hidden`). Registers with the scroll engine, writes `--p` (0–1) on the section and calls `onProgress(p)` for imperative drawing. Includes the glow and the outlined number. |
-| **SectionHeader** | Kicker `— 03  THE NIGHT` (mono, `--ch-accent`, a 16 px leading rule) plus `.t-h1` two-tone headline. Lines reveal with a mask (each line in `overflow: hidden`, inner `translateY(100%) → 0`, 90 ms stagger). |
-| **MetricTile** | Label (`.t-label`), value (`.t-stat` or `.t-big`), unit, optional `DeltaChip`, optional `Sparkline` (46×26). Variants: `row` (vitals table row, hairline separated) and `tile` (2-up grid). |
-| **DeltaChip** | Mono 10 px, padding 2 × 6, `--r-pill`, a ▲/▼ glyph. Tones: good is `--good-text` on a 10 % wash, bad is `--bad-text` on a 10 % wash, neutral is `--text-2`. Night: no wash, glyph and text only. |
-| **ScoreRing** | Keep the API. 7 px outer (score) and 4 px inner (recovery) on `--ring-track`, round caps, a gradient stroke (person colour → 70 % lighter), and Nocturne's blurred twin underneath (same arc, `filter: blur(6px)`, opacity .5) as a **pre-rendered** SVG `feGaussianBlur` drawn once. No twin in night mode. Draws in with `stroke-dashoffset` over 1.6 s `--ease-out`, centre number counts up. |
-| **Segmented** | Track `--surface-2`, `--r-pill`, 3 px inset. The selected thumb is an absolutely positioned pill that slides with `transform` (280 ms `--ease-out`). Labels are 13 px, weight 600. |
-| **TabBar** | Floating pill (from Calm): `position: fixed; left: 12px; right: 12px; bottom: max(10px, safe-area)`, height 62, `--r-pill`, glass. Five items, icon 22 + mono 9.5 label. The active item has a soft `--surface-2` capsule behind it that slides between tabs (transform). `--tabbar-h: 84px` reserved below the content. |
-| **StoryHeader** (`components/story/StoryHeader.tsx`) | Fixed glass bar on Today: date (`TUE 28 OCT`) · `LAST NIGHT` · active chapter `03 THE NIGHT` in `--ch-accent`. Below it, **7 progress segments** (2 px, 4 px gap). Each fills with `scaleX(p)` of its chapter, and tapping one scrolls to that chapter (`scrollIntoView({behavior: 'smooth'})`, instant under reduced motion). Prev/next night chevrons (DateNav's job) sit at the far right. |
-| **Sheet** | Bottom sheet for drill-down: glass, `--r-xl` top corners, a 36×4 grabber, slides with `translateY` (420 ms `--ease-out`), with a scrim at 50 % black (night: 80 %). Used for score focus (tap a ring → drivers), night-strip details and the date picker. Use the View Transitions API when present (`document.startViewTransition`), with a plain transform fallback. |
-| **Skeleton** | Replaces `Placeholder` and `Loading`. A `--surface-2` block with a shimmer (a 1.4 s linear `translateX` gradient sweep at 6 % white). Night mode: no shimmer, static `--surface`. Keep the shape of the final content: a ring skeleton for rings, a 3-line headline skeleton. The worker-progress text sits in `.t-label` under the hero skeleton ("ANALYSING NIGHT 23 OF 30"). |
-| **Toggle** | 46×28 track `--surface-2`, a 22 px knob, on = `--ch-accent` track with a `--on-accent` knob, 220 ms `--ease-out` transform. It replaces the visible checkbox styling (the native input stays for a11y). |
-| **Button** | `primary`: 48 px tall, `--r-pill`, `--ch-accent` background, `--on-accent` 15 px/650 label, plus a 1.2 s diagonal shine on reveal (off in night mode). `ghost`: hairline border, `--text`. `quiet`: text only, mono label. Pressed state: `scale(.97)` over 120 ms. |
-| **Reveal** (`components/story/Reveal.tsx`) | See section 9. |
-| **CountUp**, **DrawPath**, **ScrubWipe**, **Cursor** | See section 9. |
-| **Legend / Key / TableView / StatusDot** | Keep the APIs. Legend uses mono 10 px, keys are 10×3 bars or 6 px dots. |
+| **Page header** | `.title` plus an optional one-sentence `.sec` lede, max 38rem. No kicker, no badge. "Simulated" status lives in the sidebar footer (phone: System › Data & devices). |
+| **List group** (the inset grouped list) | `--surface`, `--r-l`. Rows are 56 px tall on phone and 52 on desktop, padded 16/20. Each row has a title (body), optional subtitle (`.sec`), right-aligned value (`.sec`, `--text-2`) and an optional chevron. Separators are hairlines inset to the text. Group header is `.label` 12 px above; footer is `.cap` 8 px below. Icon tiles are not used. |
+| **Featured card** | One per screen at most, e.g. the *Tonight's plan* card on the phone System root: `--surface`, `--r-l`, a title row with "Edit ›", a mini curve, then a three-figure strip. |
+| **Segmented control** | A track in `--surface-2`, `--r-pill`, 40 px tall. The selected segment is `--surface` (dark) or white (light) with a 1 px `--hairline-2`, label `--text`; others are `--text-2`. One per card at most. |
+| **Chip** (tags, phases on phone) | 44 px tall, `--r-pill`, 1 px `--hairline-2`, label body/`--text-2`. Selected: fill `--text`, label `--bg`, plus a 6 px signal dot. |
+| **Switch** | 52×32. Off: track `--surface-2`. On: track `--text` (night: `--text` outline). The thumb moves with a 200 ms ease-out. |
+| **Dial** (Starts / Target) | A `--surface` card with `.label` on top, then − and + (52 px round, 1 px `--hairline-2`) either side of a `.reading` value, with a single `.cap` meaning line underneath ("23:57 · after lights out"). **The value appears once.** |
+| **Instrument keys** (plan phases) | Joined keys in a strip with 1 px dividers, 6 across, wrapping to 3×2 below 1760. Each key has a name (body 560) over "21:47 · 20.5°" (`.sec`). The selected key has a 3 px `--signal` bar on top and a `--surface-2` fill. A "glides" phase shows ↗. |
+| **Input** | 48 px, `--r-m`, 1 px `--hairline-2`, label above. People rows: an avatar letter in the person colour, then "Person 1" (`.label`) above the editable name. The field is visibly bordered on focus and hover, so it reads as editable. |
+| **Buttons** | 48 px, `--r-pill`, padded 0 20 px, label body 560. **Primary** is filled `--signal` with `--on-accent` (night: outlined in `--text`). **Secondary** is a 1 px `--hairline-2` outline. **Text** has no border, `--text`, and is underlined on hover. One primary per screen. |
+| **Readout cells** | `.cap` caption over a value. Used for the "The night" live readout and the plan summary (Starts / Coolest / Wake). |
+| **Stat** | A `.reading` value plus a `.sec` line of meaning ("above 1,000 ppm, 02:44 – 06:46"). |
+| **Event list** | Time (`.sec`, tabular, 64 px column), then a short bold sentence (body 560) and an optional `.sec` detail. Used for before-bed, night steps and the aircon log. |
+| **Status** | A 6 px dot (`--muted`; `--signal` for an alert) plus `.sec` text. **No pill outlines.** |
+| **Disclosure** | A row with title, count ("7 commands") and chevron. It expands in place with a 250 ms height+opacity transition (immediate with reduced motion). |
+| **Sheet / side panel** | Phone: a bottom sheet, `--surface`, `--r-l` top corners, a grabber, max 90svh, closed by swipe, Esc or the scrim. Desktop: a right-hand panel 480 px wide, or a full page for big drill-ins. Used for "More analysis", the Body algorithm notes and the Lab matrix. |
+| **Advice card** | `--surface`, `--r-l`. A head-size sentence ("Crack the door 2 cm."), a `.sec` reason, then the primary button "Edit tonight's plan" and the text button "Remind me at 22:30". |
+| **Theme thumbnails** | Four miniature windows (Auto split, Light, Dark, Night) with abstract bars. **No numbers.** The selected one has a 2 px `--text` ring. The label is below in body size. |
+| **Skeletons** | `--surface-2` blocks with the final geometry, and no shimmer in night mode or with reduced motion. |
+
+Icons stay as in v1: inline SVG, 24×24 viewBox, 1.7 stroke, round caps, `currentColor`. Use them in navigation and buttons only, never as decoration in list rows.
 
 ---
 
-## 8. Chart style guide
+## 7. Chart guide
 
-### 8.1 Shared
+### 7.1 Shared rules
 
-- Line widths: 2.2 px primary, 1.5 px secondary, 1 px reference. Round joins and caps.
-- Gridlines: horizontal only, `--grid`, 1 px, at most 3 lines. No y-axis line. The x-axis is ticks only (`.t-micro`, `--muted`).
-- Reference lines (target °C, 1,000 ppm) are dashed `3 4` in `--text-2` at 60 %, with a right-aligned `.t-micro` label ("TARGET 20°", "1,000").
-- Area fills: a vertical gradient of the series colour, 35 % → 0 %. Night mode: 12 % flat.
-- **CO₂** always shows the fixed bands as full-width washes (`--band-*`), plus Calm's tolerance ribbon ±(50 ppm + 5 %) at 12 % of `--co2`. Above 1,000 the line is drawn in `--co2`; below it, in `--text-2` (a two-segment `<linearGradient>` with a hard stop at the 1,000 y-position).
-- **Hypnogram:** four lanes (awake top → deep bottom), segments are `rect`s with 2.5 px corners, joined by 1 px `--hairline-2` verticals. Couples are mirrored on one shared axis (You above, Erik below) in the story; the dense tab keeps two stacked lanes.
-- Person identity: colour in dark and light; in night mode lightness plus **Erik dashed `4 3`**.
-- Tooltips: a glass chip, mono 11 px, a 1 px `--hairline-2` vertical crosshair, values in `.t-stat` at 15 px. They follow the touch point and never cover the finger (offset 24 px above).
-- Text is never coloured by series. Use a key dot next to the label instead.
+- **The title is the finding.** One sentence-case title (`.head`) per chart, e.g. "6 of the last 30 nights averaged over 1,000 ppm" or "CO₂ crossed 1,000 at 02:44". An optional `.cap` line underneath gives method or units. Never use a legend, an axis title and a caption all at once.
+- **Label directly.** Series names sit at the line end or in the row header ("You", "Erik", "Room °C", "CO₂ ppm"). There are no legends.
+- **Marks:**
+  - Lines are 1.5 px (2 px for the hero series) with `vector-effect: non-scaling-stroke`.
+  - Plan and setpoint lines are dashed 4/4 in `--muted`, except the Tonight and plan charts, where the plan is `--signal` and last night's actual is `--muted`.
+  - Thresholds (1,000 ppm, 60 % RH) are dotted 2/3 lines in `--signal`, labelled at the right end. Only the area *beyond* the threshold is tinted, with `--signal-soft`.
+  - Areas use 6 % ink fill, or none.
+- **Axes:**
+  - gridlines appear only at key values, in `--grid`, with no vertical gridlines except on the hour in the night tracks;
+  - ticks are `.cap` (13/14/15 px) and tabular, in `--muted`;
+  - time axes use clock time ("23:00, 01:00 … 07:00") with no seconds;
+  - the y-axis sits on the right in story charts.
+- **Scales:** every scale is clamped. Temperature charts use 17–24 °C on the plan and 18–23 °C in the night tracks. An out-of-range value (the 29° pre-cool start) is stated in the text, never as an "off scale" marker.
+- **Ghost data** (not yet revealed by the scrub): filled marks at `--ghost` opacity with no stroke. Lines become a 1 px line at `--ghost`.
+- **Readout dots:** a 7 px dot in `--bg` with a 2 px stroke in the series colour (signal at the cursor).
+- **Tooltips** (Recharts, dense tabs): `--surface`, `--r-m`, 1 px `--hairline-2`, padding 10/12. Time in `.cap` above the values in `.sec` with tabular numerals. No shadow in night mode.
+- **Animation:** draw-in only (stroke-dashoffset or a clip-path wipe), at most once per mount, and never when reduced motion is on.
 
-### 8.2 Recharts (dense tabs)
+### 7.2 Chart catalogue (where each mark comes from)
 
-- Create one `chartTheme` in `components/charts/common.tsx` and spread it into every `<XAxis>`, `<YAxis>`, `<CartesianGrid>` and `<Tooltip>` (`axisLine={false}`, `tickLine={false}`, `tick={{ fill: 'var(--muted)', fontSize: 9.5, fontFamily: 'var(--font-mono)' }}`, `vertical={false}`, `stroke: var(--grid)`).
-- Animation: `isAnimationActive={motionOK && revealed}` with `animationDuration={900}` and `animationEasing="ease-out"`. Mount the chart inside `<Reveal>` so it animates when it enters the viewport, not on page load. In night mode or with reduced motion, `isAnimationActive={false}`.
-- The `ResponsiveContainer` height is fixed per chart, so nothing shifts while the chart animates.
-
-### 8.3 Custom SVG (story)
-
-The story charts are hand-written SVG, not Recharts: scrubbing needs per-frame control without React re-renders.
-- Every path gets `pathLength={1}` so drawing is `stroke-dasharray: 1; stroke-dashoffset: 1 - p`.
-- The large scrubbed chart (The night) uses the **compositor-only wipe** grafted from Calm. A ghost copy sits at `opacity: var(--ghost)`. The bright copy sits inside `div.wipe-outer { overflow: hidden; transform: translateX(calc((p - 1) * 100%)) }` → `div.wipe-inner { transform: translateX(calc((1 - p) * 100%)) }`. Both are transforms, so there is no repaint. The cursor is a `div` moved with `translateX(p * width)`.
-- Event markers are pre-rendered and get `.hit` (scale 0.4 → 1, opacity 0 → 1, 300 ms) when the cursor passes their x.
-- Sparklines are 46×26 (story) or 70×26 (Body tab): a `--spark-line` 1.4 px line over a ±1 SD `--spark-band`, ending in a 3 px dot in the person colour. They draw in over 1.3 s.
-
----
-
-## 9. Motion and scroll-story spec
-
-### 9.1 Tokens
-
-```css
---ease-out: cubic-bezier(.22, 1, .36, 1);   /* reveals, draws, count-ups */
---ease-io: cubic-bezier(.65, 0, .35, 1);    /* crossfades, caption swaps */
---ease-pop: cubic-bezier(.34, 1.36, .64, 1);/* small markers only */
---d-fast: 180ms; --d-base: 320ms; --d-reveal: 900ms; --d-draw: 1300ms; --d-count: 1300ms; --d-ring: 1600ms;
---stagger: 70ms;  --rise: 28px;
-```
-
-### 9.2 Engine (`lib/motion/`)
-
-`scroll-engine.ts` is a module singleton with no React dependency:
-
-```ts
-type Track = { el: HTMLElement; top: number; h: number; p: number; mode: 'pin' | 'pass'; cb?: (p: number) => void };
-export function register(el: HTMLElement, opts: { mode: 'pin' | 'pass'; onProgress?: (p: number) => void }): () => void;
-export function getActiveChapter(): string | null; export function subscribeChapter(fn: (id: string) => void): () => void;
-```
-
-How it works:
-- **One** `scroll` listener (`{ passive: true }`) and one `resize` listener, both coalesced into one `requestAnimationFrame(frame)`.
-- An `IntersectionObserver` (`rootMargin: '50% 0px'`) keeps the **active set**. Only active tracks are computed each frame.
-- Layout is measured (`offsetTop`, `offsetHeight`) **only** on register, on resize, on font load (`document.fonts.ready`) and from a `ResizeObserver` on `document.body`. `frame()` never reads layout; it uses only `scrollY` and `innerHeight`.
-- Progress: for `pin`, `p = clamp((scrollY - top) / (h - vh))`. For `pass`, `p = clamp((scrollY + vh - top) / (h + vh))`.
-- **Dwell zones** (from Nocturne): pinned scrubs remap `p` with a 4 % hold at each end, `p' = clamp((p - .04) / .92)`, so the first and last states rest briefly.
-- Writes go only through `el.style.setProperty('--p', p.toFixed(4))` and `cb(p)`, and only when `|Δp| > 0.0005`. The text of readouts (clock, ppm) changes only when the displayed string changes.
-- Tracks that have scrolled past are snapped to `p = 1`, and tracks not yet reached to `p = 0`, once, so fast flicks never leave a half state.
-
-React hooks (`lib/motion/hooks.ts`):
-- `useScrollProgress(ref, { mode, onProgress })` registers on mount and unregisters on unmount. It **never sets React state per frame**: `onProgress` mutates DOM refs directly.
-- `useActiveChapter()` uses `useSyncExternalStore` on `subscribeChapter` and re-renders only on a chapter change (the header and the accent).
-- `useMotionPrefs()` returns `{ reduced, night, level: 'full' | 'calm' | 'none' }` from `matchMedia('(prefers-reduced-motion: reduce)')` and `useTheme().resolved`. `full` = day themes; `calm` = night mode; `none` = reduced motion.
-
-Components (`components/story/`):
-- `<Reveal as="div" delay={0} stagger={false} y={28}>`: a one-shot IO (`threshold: 0.15`, `rootMargin: '0px 0px -8% 0px'`) adds `.in`. CSS: `.rv { opacity: 0; transform: translate3d(0, var(--rise), 0); transition: opacity var(--d-reveal) var(--ease-out), transform var(--d-reveal) var(--ease-out); transition-delay: calc(var(--i, 0) * var(--stagger)) }`, `.rv.in { opacity: 1; transform: none }`. With `stagger`, children get `--i`.
-- `<CountUp value dp format duration>`: starts on reveal and uses rAF with `--ease-out`. It renders the final value on the server and in the first paint for SSR and a11y (`aria-label` = final), then visually restarts from 0 on reveal. The text is `.num`.
-- `<DrawPath d progress?>`: with `progress` (scrubbed), it sets `strokeDashoffset` imperatively in `onProgress`; without it, it is a CSS transition on reveal over `--d-draw`.
-- `<ScrubWipe>`, `<Cursor>`: section 8.3.
-- `<Parallax speed>`: decorative only (outlined numbers, stars). It uses CSS scroll-driven animation behind `@supports (animation-timeline: view())`: `animation: px linear both; animation-timeline: view(); @keyframes px { from { transform: translateY(calc(var(--speed) * 60px)) } to { transform: translateY(calc(var(--speed) * -60px)) } }`. With no support it does nothing (static). It is never used for data.
-
-### 9.3 Performance rules (must hold for 60 fps on an iPhone 12 and newer)
-
-1. Animate only `transform` and `opacity`. SVG `stroke-dashoffset` is allowed on paths under 600 points. Never animate `width`, `height`, `top`, `filter`, `box-shadow`, `clip-path` or `backdrop-filter`.
-2. Use `will-change: transform` only on the pinned layer's moving children (cursor, wipe wrappers, hero number), at most 6 per chapter. Remove it after reveals finish.
-3. No `backdrop-filter` over anything that moves under it, except the header and tab bar. These two sit over the page, so keep them small (≤ 62 px tall).
-4. The `--p` custom property is consumed by at most ~12 descendants per section. A heavy subtree uses `onProgress` and sets `transform` directly on its refs.
-5. No layout reads in `frame()`. No React state updates per frame. No `scroll-behavior: smooth` on `html` (it fights iOS momentum).
-6. Downsample story series to ≤ 1 point per 2 px of width (`downsample` from core) before building paths. Memoize the paths by night date.
-7. `content-visibility: auto; contain-intrinsic-size: auto 900px` on non-pinned chapters and on dense-tab cards below the fold.
-8. Pinned heights use `svh` (not `vh`) so the iOS toolbar collapsing doesn't resize the pinned layers mid-scroll.
-9. Test sequence (section 11). Also check that the Performance panel in Chromium at 4× CPU throttle shows no long tasks over 16 ms while scrolling.
-
-### 9.4 Reduced motion (`prefers-reduced-motion: reduce`)
-
-- Every reveal, count-up, ring and draw renders its **final state** with no transition. Ambient sky, stars, parallax and shine are off.
-- Pinned chapters are **unpinned**: `<Chapter pinned>` renders at `height: auto`. The night chart shows the full night (p = 1) with all caption moments listed under it as a static timeline (time · caption rows). Lights out shows the final state plus the four facts.
-- Header segments still track position (that is information, not motion), but tap-to-jump uses `behavior: 'auto'`.
-
-### 9.5 Night-mode motion (`level: 'calm'`)
-
-- Reveals: opacity only, 350 ms, no rise, no stagger beyond 40 ms.
-- Count-ups: 500 ms. Rings: 600 ms.
-- Off: sky, stars, glows, outlined numbers, parallax, hero scale/fade-out, button shine, skeleton shimmer, clock-colon blink.
-- **Scrubbing stays.** It moves only under the finger and emits no light flashes. Captions crossfade at 250 ms.
+- **Hypnogram:** four rows, Awake on top, then REM, Light and Deep at the bottom. Blocks use the person's stage tokens (§3.3). Rows are 12 px on phone and 18 px on desktop with 4 px gaps. You and Erik are stacked, with a person label at the left.
+- **Room °C vs plan:** an ink line, the plan dashed `--muted`, and the correction ticks below in a separate aircon row.
+- **CO₂:** an ink line that turns `--signal` above 1,000 ppm, with the area above the threshold in `--signal-soft`. The crossing time and the peak are labelled on the line.
+- **30-night bars:** `--muted` bars, nights over 1,000 in `--signal`, last night in `--text`, and a dotted 1,000 line.
+- **Fresh-air meter:** a linear scale of 0–0.5 air changes per hour, a `--text` marker for last night, a `--signal` tick at "0.32 needed", and labels above.
+- **Driver bars:** centred on zero, positive in `--text` and negative in `--signal`, with the value as a signed `.label` in a left column.
+- **Score scale:** 0–100 ticks in `--hairline-2`, the filled portion in `--text`, a "typical 70" tick, and the current value as a 2 px signal tick.
+- **Room/Body/Lab dense charts** follow the same rules with Recharts:
+  - at most two hues plus a dashed `--muted` series;
+  - no rainbow KPI tiles;
+  - no speedometer gauges: the ventilation gauge becomes the fresh-air meter above.
+- **Correlation matrix:** diverging `--div-neg` → `--div-mid` → `--div-pos`, with the value printed in each cell at ≥ 13 px. It lives in a drill-in.
 
 ---
 
-## 10. The Today story, chapter by chapter
+## 8. Motion and the scroll story
 
-Data comes from `useSelectedNight()` (`night`, `room`, `person`) and `useNightDetail(date)` (`detail.report.headline / insights / drivers`, `detail.events`, `detail.people`), plus `usePlannedCurve()`. Names always go through `withNames`. Times use `hm()`. Every chapter works for any night chosen in the header, not just the latest. "Jump to latest night" becomes a pill in the header when you're viewing an older night.
+### 8.1 Tokens
 
-The scroll lengths below are for a 390×844 viewport. The total is about 17 screens. The hero alone answers the glance question.
+- `--ease: cubic-bezier(.2,.7,.2,1)` (reveals and settles), `--ease-io: cubic-bezier(.65,0,.35,1)` (sheets).
+- Durations:
+  - `--d-fast` 180 ms (hover, press);
+  - `--d-base` 300 ms (controls, page fade);
+  - `--d-reveal` 700 ms;
+  - `--d-draw` 1,400 ms (lines);
+  - `--d-count` 1,200 ms (the hero counts up; no other number counts).
+- `--stagger` 80 ms, `--rise` 18 px.
 
-### 01 · The verdict (hero, pinned 150svh, accent violet, sky dusk)
+### 8.2 Rules
 
-- **Layout:**
-  - kicker `— 01 THE STORY OF LAST NIGHT`
-  - `.t-hero` **Sleep Air** score (76) with `SLEEP AIR · ROOM SCORE / 100` under it
-  - the verdict sentence from `detail.report.headline`, split into two tones at its first full stop
-  - two person cards side by side: a ScoreRing with outer = sleep and inner = recovery, the name and a person dot, and `RECOVERY 89` in mono
-  - a cue `SCROLL THROUGH THE NIGHT` with a 1 px line that grows
-- **On load:**
-  1. The rings draw over 1.6 s.
-  2. The score counts up over 1.3 s.
-  3. The headline reveals line by line, 90 ms apart.
-  4. The person cards rise in at 200 ms and 270 ms.
-- **On scroll** (p 0 → 1):
-  - the hero number moves `translateY(-90px · p)`, scales `1 − .16p` and fades `1 − .55p`
-  - the verdict drifts up 60 px and fades to 40 %
-  - the cards drift up 40 px
-  - the cue fades by p × 4
-  - the sky darkens with a black overlay at `.55p`
-- **Interactions:**
-  - Tapping a ring opens the **Sheet** with that person's drivers (the old `focus` behaviour). Tapping the Sleep Air number opens the room drivers.
-  - While the worker is still analysing, the ring skeletons show and the verdict line reads "Reading the night…".
+- Animate transform and opacity only, apart from the stroke/clip draw-ins. Never animate layout properties.
+- Reveals run once per element: `IntersectionObserver` at 15 % visibility, then opacity 0→1 and translateY 18 px→0.
+- Pinning uses `position: sticky` only. Scroll progress is read in one rAF loop (`lib/motion/`, which keeps the v1 engine with its dwell zones) and written to CSS variables and SVG attributes. React never re-renders per frame.
+- Page changes use a 300 ms opacity crossfade. The desktop sidebar does not move.
+- **Reduced motion** (`prefers-reduced-motion: reduce`): everything renders in its final state. There are no rises, no draw-ins, no count-up and no bobbing scroll cue. The night scrub still works because it moves only with the finger, but cursor easing is removed.
+- **Night mode:** no rise (opacity only), no count-up, no skeleton shimmer.
 
-### 02 · Lights out (pinned 250svh, accent cyan, sky dusk → mid)
+### 8.3 How the story works
 
-- **Layout:**
-  - `.t-clock` 118 px clock
-  - `.t-big` room °C in `--temp`, with `ROOM AIR · −6.1° since 21:25`
-  - a temperature line from pre-cool start to lights-out over a dashed `TARGET 20°` line
-  - four "fact" rows below: pre-cool command, partner in bed, you in bed, "Cooled in N minutes"
-  - the rows come from `night.ac[0]`, `night.people[].sleep.start`, `detail.events` (`in_bed`, `both_in_bed`) and `pulldownWindow(night)` in `lib/analysis.ts`
-- **Scrub:**
-  - p maps to time over [first AC command − 0 min, `night.lightsOut`]
-  - the clock text, the °C readout (interpolated from the room series) and the "since" delta update when the displayed string changes
-  - the line draws via dashoffset, with a dot on its tip
-  - each fact row goes from `opacity .22` to 1 when its timestamp passes
-- **End state:** the clock holds at lights-out with "at bedtime".
-
-### 03 · The night (pinned 560svh, accent `#5b8cff`, sky mid → dawn) — the centrepiece
-
-- **Layout** (all inside the pinned 100svh):
-  - **Top row:**
-    - `.t-clock` 76 px live clock
-    - on the right, a mono readout grid: `● You DEEP`, `● Erik LIGHT`, `Room 19.2°`, `CO₂ 1,025`
-    - CO₂ turns `--co2` above 1,000
-  - **Chart:** one SVG, full width, about 46svh tall, in five lanes sharing one x-axis from lights-out to the last person up:
-    1. your hypnogram
-    2. Erik's hypnogram
-    3. room °C with the dashed target (`targetAt(curve, t)`)
-    4. CO₂ with bands, the 1,000 line and the ribbon
-    5. aircon ticks (`night.ac`, `--setpoint`, missed commands in `--critical`)
-    - Hour ticks are `.t-micro`.
-  - **Bottom:**
-    - caption block: time + person kicker in mono `--ch-accent`, then a `.t-h2` caption
-    - under it, `BEFORE · 01:27 YOUR DEEPEST STRETCH: 30 MIN` (the previous caption, mono, muted), so a fast scroller never loses context
-- **Scrub:**
-  - p (with dwell zones) maps to time
-  - the ScrubWipe reveals the bright chart up to the cursor over the `--ghost` copy
-  - the cursor line and its dots on °C and CO₂ move with `translateX`
-  - readouts update on string change
-  - the sky crossfades mid → dawn between 04:30 and wake
-- **Captions:**
-  - Build them from data in `lib/story.ts` (`buildNightMoments(night, detail, people)`), sorted by time and capped at 12. The kinds are:
-    - fell asleep (per person, `sleep.start` + first non-awake)
-    - HR nadir (`detail.people[].hrNadirAt`, "Your heart rate bottomed out: 47 bpm, 4 below baseline")
-    - longest deep stretch (per person)
-    - awakenings ≥ 4 min
-    - CO₂ crossed 900 / 1,000 / 1,500 (first crossing)
-    - RH > 60 % start
-    - each aircon command with its reason (`ac[].reason`, e.g. "Room ran cold. Aircon nudged +1°")
-    - CO₂ peak
-    - alarm
-    - each person up
-  - The active caption is the last moment with `t ≤ cursorTime`. Captions swap with a 450 ms `--ease-io` crossfade plus an 8 px rise.
-  - The CO₂ readout clamps to the sleep window, so it matches the headline peak.
-- **Exit:** the last 4 % holds at wake. A quiet link `OPEN THE FULL NIGHT STRIP ↗` opens the dense NightStrip (the existing component, with legend, event glyphs and tooltips) in a **Sheet**, so the old exploratory chart and its legend stay available.
-
-### 04 · The air (pinned 300svh, accent amber, sky off)
-
-- **Layout:**
-  - headline "Two people. **One sealed room.**" (accent second line, generated: `room.co2Mean > 1000 ? … : 'The air held up.'`)
-  - `.t-mega` CO₂ mean with `PPM CO₂ · NIGHT MEAN`
-  - an area chart of the night's CO₂ with bands, the 1,000 line and a peak marker (`PEAK 1,285 · 06:55`)
-  - two meters:
-    - minutes above 1,000 ppm
-    - ACH measured vs the ACH needed (`ACH_FOR_1000` from `lib/analysis.ts`)
-- **Scrub:**
-  - p 0 → .7 drives the number from the lights-out CO₂ to the mean (scroll-tied, not timed)
-  - the area draws left to right
-  - at p ≥ .7 the peak marker pops (`--ease-pop`)
-  - from .75 to 1 the two meters fill (`scaleX`)
-- **After the pin** (normal scroll):
-  - a 30-night CO₂-mean bar chart, last night in `--text` and the others in `--co2` above 1,000 or `--muted` below, rising with a 25 ms stagger
-  - the insight sentence ("Last night ran 35 ppm above your 30-night average…")
-
-### 05 · Your bodies (normal scroll, accent = text)
-
-- Headline "Two bodies, **both recovered.**", generated from the recovery scores.
-- Two person cards with a corner wash: sleep and recovery as `.t-big`, counting up.
-- Then the existing **VitalsSection** content restyled as a two-column comparison table:
-  - rows: steps, HRV, resting HR, sleep, SpO₂, breathing, skin temp
-  - each cell: `.t-stat` value, unit, DeltaChip vs baseline, and a 46×26 sparkline
-- Rows reveal with a 70 ms stagger, sparklines draw over 1.3 s, and the end dots fade in after them.
-- Any row opens the Body tab at that metric (`/body#hrv`).
-
-### 06 · What drove it (normal scroll, accent lime/red)
-
-- A `.t-mega` net points figure ("+24 POINTS NET VS A NEUTRAL NIGHT"), counting up.
-- A diverging driver list that merges the room and body drivers, sorted by |points|. Each row:
-  - mono points
-  - a source tag (`ROOM` / `YOU` / `ERIK`)
-  - the label
-  - a bar growing from the centre axis (`scaleX` from the axis edge, 1.2 s, 80 ms stagger), lime to the right, red to the left
-- Footer: `Typical 70 → Sleep Air 76` and `Mean recovery 85`.
-- Then the **"In a sentence"** block (from Calm): `detail.report.insights` as `.t-body` sentences with hairline separators. This replaces the old Insight card. The "Why →" link becomes "See it in the night ↑", which scrolls to chapter 03 at the matching moment.
-
-### 07 · Tonight (pinned 230svh, accent mint, sky dusk 60 %)
-
-- **Layout:**
-  - headline generated from the plan ("Same curve. **More air.**")
-  - PlanChart restyled:
-    - the plan as a mint step line with a gradient fill
-    - last night's actual as a dotted `--text-2` line
-    - phase labels (`PRE-COOL 20.5°`, `DEEP 19°`, …) on the axis
-  - the tip sentence
-  - a CTA pill: the plan name and pre-cool time on the left, a primary **Arm tonight** button on the right
-  - **Edit curve** (ghost) links to `/settings#curve`
-- **Scrub:**
-  - p 0 → .8 draws the plan path and moves a tip dot along it
-  - phase labels appear as the dot passes them
-  - at .85 the tip and the CTA rise in
-- **After the pin:** the aircon log (all of `night.ac`: time, set °C in `--temp` `.t-stat`, reason), revealed row by row.
-- **Finale:** "That was last night. **Sleep well.**" (`.t-h1`, second line in `--text-2`).
+- **Phone:** scenes stack in a single column. "The night" pins below the top bar for about 300svh. The scrub moves the clock, cursor, clip reveal and live readouts together, and the six step captions crossfade below the chart.
+- **Desktop:** each scene is a 5/12 text column (sticky, vertically centred) beside a 7/12 visual. "The night" uses the *sticky graphic* pattern: the step list sits on the left, and the active step gets a 2 px signal bar and `--text` while the others are `--muted`. The graphic on the right is pinned, and the clock plus readout sit above it in a single row.
+- **Holding each step.** The cursor is tied to scroll, but it holds on each step's exact minute for the first 35 % of that step (Editorial graft), so the readout matches the sentence while you read it.
+- **Length budget:** the Today page is at most **8 viewport heights at 2560×1440** and at most 9 at 1440×900. "The night" takes about 3 of those.
+- **Backdrop:** a flat `--bg`. There is no per-chapter glow, sky or star field.
 
 ---
 
-## 11. Other tabs: same language, lighter motion
+## 9. Screens and information architecture
 
-These tabs are for exploration. They don't pin or scrub. Cards `<Reveal>` once with a 60 ms stagger in the first viewport and no stagger after it. Recharts animates on reveal (8.2). Every tab gets:
-- a large page header: `.t-h1` title (e.g. "Room") with DateNav's chevrons as 36 px glass circle buttons, the date in mono and a `SIMULATED` / `LIVE` pill
-- a **sticky segmented jump bar** under it (glass, 44 px) that scrolls to sections. It uses `Segmented` with sliding-thumb styling and tracks the section in view with IO.
+Every non-Today screen has the same anatomy:
+1. a header (title plus one sentence);
+2. **one hero** ("right now" or the key reading);
+3. **three or four primary sections**;
+4. "**More analysis**", a list group whose rows open a sheet on the phone or a page or side panel on desktop.
 
-### Room
-- **Hero strip:** four live tiles (°C, RH, CO₂, dew point) in a 2×2 grid. Each is a `.t-big` value, a unit and a 6-hour sparkline drawing in. The CO₂ tile's border glows in its band colour (dark and light only).
-- Sections are **Air** (CO₂ ramp & forecast, Ventilation verdict, Fresh-air tracker, Nights over 1,000 ppm), **Comfort** (comfort chart, 24-hour rhythm, Nights off the temperature curve), **Aircon** (setpoint vs actual, room response, duty and filter) and **Events** (events, shower impact, outdoor vs bedroom).
-- **Ventilation verdict** becomes a semicircle gauge: median CO₂ needle against the 1,000 decision line. The needle rotates in over 900 ms on reveal.
-- **Calendar heatmaps:** cells fade in by week (40 ms stagger). Use `--band-*` at full strength for the cells.
-- **Setpoint vs actual:** missed commands get a pulsing ring, twice on reveal, then static.
+There are no JumpBars. On desktop at ≥1760, the "On this page" rail lists the primary sections.
 
-### Body
-- A person switcher as a large Segmented control with person dots at the top. The page accent becomes that person's colour.
-- **Last night card:** a ScoreRing pair plus the hypnogram as a full-width hero chart, with no card chrome (edge to edge inside the gutter).
-- Sections are **Heart** (sleeping HR with the nadir marker popping in, 14-night ridgeline with the ridges rising and staggered 30 ms, HRV with a baseline band), **Breathing & O₂** (SpO₂ strip, breathing), **Trends** (recovery trends with a 7/30/90 Segmented, skin temperature vs room) and **Algorithm** (ours vs Google's).
-- Vitals rows use **MetricTile row** with 70×26 sparklines.
+### 9.1 Today (7 scenes plus a close)
 
-### Lab
-- Lead with the **experiment board** as a forest plot: intervals draw out from the estimate dot (600 ms), with an "n / 35 nights" progress bar per arm.
-- **Room vs body scatter:** the x/y selectors become Segmented chips. Changing them animates the dots to their new positions (`transform`, 500 ms `--ease-out`, keyed by night). The trend line redraws.
-- **Correlation matrix:** cells fade in diagonally (8 ms per cell, capped at 400 ms). Keep the chance-correlation warning as an `info` callout.
-- **Couple view and thermal compromise:** mirrored hypnograms (You above, Erik below) on one axis, with synchrony bands highlighted.
+| # | Scene | Phone | Desktop |
+|---|---|---|---|
+| 1 | **Last night** (verdict) | "Room score, last night" `.label`; **75** at hero display size with "/ 100" as a unit; the 0–100 scale with typical 70 marked; the verdict as a two-tone `.title` ("You both slept well. Humidity above 60% for 2h 04m held the room back."); You and Erik rows, each with a dot, name, "Recovery 79 · asleep …" and the sleep score at `.reading` with the unit "sleep". | Score and verdict in columns 1–6, people in columns 8–12. Below them, a hairline and the **"at a glance" row** of four readout cells (Lights out · On the curve · CO₂ over 1,000 · Tonight's advice), grafted from Quiet Luxury. |
+| 2 | **Before bed** | "21:47" `.reading`; "The room was cool before you were in bed."; pre-cool chart (plan dashed); event list (aircon on, target reached, lights out). | Text left, chart and event list right. |
+| 3 | **The night** (pinned) | Scene label, then "7 h 23 m in the dark." on its own line (fix 4); the clock at `.display`; a readout row (You stage · Erik stage · Room °C · CO₂, where CO₂ turns signal above 1,000); stacked tracks (You, Erik, Room °C vs plan, CO₂, aircon ticks); step caption. | Sticky graphic (§8.3). Six steps: lights out; Erik's deepest stretch; CO₂ crossing 1,000; the +1° correction; the room warming; wake and CO₂ peak. All times and values come from core. |
+| 4 | **The air** | "4h 02m" `.reading` above 1,000 ppm; "Fresh at first, stale by morning."; the full-night CO₂ chart with the crossing and peak labelled; the fresh-air meter (0.17 of 0.32 needed); the 30-night bars. | Text left; CO₂ chart right; meter and bars beneath it in two columns. |
+| 5 | **Your bodies** | A one-line finding ("Erik recovered better than usual. You, about as usual."); one stage bar per person; a You \| Erik table (sleep score, recovery, lowest HR, HRV, SpO₂, breathing), each shown against that person's typical with a neutral arrow; the link "Open Body ›". | Text left, table right. |
+| 6 | **What drove it** | "+5 points" `.reading`; "The curve carried the night. Humidity cost the most."; Room and Bodies subtotals; 8 signed driver bars. | Text left, bars right. |
+| 7 | **Tonight** | "Same curve. More air."; the advice card ("Crack the door 2 cm." · **Edit tonight's plan** → System › Tonight's plan · "Remind me at 22:30"); the plan chart (plan in signal, last night in `--muted`); tag chips for tonight; "Last night's aircon log · 7 commands" as a disclosure (collapsed on phone, open on desktop). | Text and advice left, chart and log right. |
+| — | **Close** | "That was last night." `.head` in `--text-2`, with a text button "Back to top". | Same, centred under the grid. |
 
-### System (the `/settings` route)
-- Grouped iOS-style lists in Cards: hairline rows, a 44 px minimum row height, chevrons, Toggles.
-- **Appearance:** the theme choice becomes four swatch tiles (Auto, Light, Dark, Night), each a mini preview of the hero (a 64 px "76" in that theme's colours). Selecting one runs the theme swap inside `document.startViewTransition` (circular reveal from the tap point, 500 ms) when supported, and an instant swap otherwise. The swap is always instant when going into night mode.
-- **Temperature curve editor:** the CurveEditor gets the plan styling (mint step line, phase handles as 28 px glass knobs with a mono °C label that follows the drag).
-- **Device status / data freshness:** a status dot plus "2 min ago" in mono, with a calm pulse on a fresh ingest (off in night mode).
-- **Setup checklist:** a progress ring at the top (n/N) and checkable rows with a stroke-draw checkmark (300 ms).
+Today keeps v1's data wiring (`components/story/model.ts`). The work is presentation only.
+
+### 9.2 Room
+
+- **Hero, "Right now":** the CO₂ state as `.display` ("612 ppm"), followed by a one-line status ("Fresh. Door closed since 22:10.") and **one** piece of advice. Temperature and humidity appear as two readout cells beside or below it. The four rainbow KPI tiles are removed.
+- **Primary sections:**
+  - CO₂ ramp and forecast, with one segmented control for the forecast mode;
+  - Setpoint vs actual;
+  - Nights over 1,000 ppm (the 30-night bars, with ERV and fresh-air figures as a stat row).
+- **More analysis** (each a drill-in):
+  - Ventilation verdict (morning CO₂, fresh air, with ERV), shown as a meter rather than a gauge;
+  - Fresh-air tracker;
+  - Temperature × humidity;
+  - 24-hour rhythm;
+  - Nights off the temperature curve;
+  - Room response;
+  - Aircon duty and filter;
+  - Events;
+  - Shower impact;
+  - Outdoor vs bedroom.
+
+### 9.3 Body
+
+- **Header:** "Body" plus a **You / Erik segmented control** in the header row (not a giant pill).
+- **Hero:** the sleep score `.display`, with "6h 41m asleep · recovery 79" as `.sec`.
+- **Primary sections:**
+  - Last night: one stage row plus the hypnogram;
+  - Vitals: a calm list in the reading column (HR nadir, HRV, SpO₂, breathing), each with value, neutral delta and "typical …";
+  - Recovery trends: one chart, with the range set by a segmented control.
+- **More analysis:**
+  - Sleeping heart rate;
+  - HRV through the night;
+  - Last 14 nights;
+  - Blood oxygen (mean, dips per hour);
+  - Breathing;
+  - Resting HR;
+  - Steps (day before);
+  - Skin temperature vs room.
+- "Our sleep/wake vs Google's" (the algorithm notes) opens in an info **sheet** from an ⓘ button beside the hypnogram title.
+
+### 9.4 Lab
+
+- **Hero:** the strongest signal as one sentence plus its effect size ("Nights under 900 ppm: +6 min deep sleep · could be noise").
+- **Primary sections:**
+  - **Experiment board:** one question per row, as a forest plot with breathing room and the outcome picked from a single segmented control.
+  - **Room × body:** a sentence-builder replaces the three chip rows. It reads "Compare **[Temperature ▾]** with **[Deep sleep ▾]**, **[same night ▾]**", where each bracket is a menu button (a sheet on the phone, a popover on desktop). The scatter title states r and its meaning ("No real link").
+  - **By nightly mean CO₂.**
+  - **Couple:** in sync, mirrored hypnograms, thermal compromise.
+- **More analysis:** the 14-feature correlation matrix.
+- Keep the honest copy: "Correlation, not causation" and "Mostly noise".
+- The night count is "80 of 90 nights", with a short explanation of the excluded sick and away nights and sensor gaps. It links to Data & devices.
+
+### 9.5 System (route `/settings`)
+
+**Phone root.** A large "System" title, then:
+1. a featured **Tonight's plan** card (mini curve, "Starts 21:47 · Coolest 19.0° · Wake 06:47", "Edit ›");
+2. grouped lists whose rows each show a value and a chevron:
+
+| Group | Row → page | What the page contains (everything from v1 is preserved) |
+|---|---|---|
+| — | **Tonight's plan** | Summary row (Starts / Coolest / Wake). The curve chart with the selected phase shaded and clickable nodes (limits 17–24 °C shown in the header). Six instrument keys (Pre-cool, Falling asleep, Deep window, Middle, Late / REM, Wake). The selected phase's **Starts** and **Target** dials and the "Glide into the next phase" switch. "Saved on this phone". **Reset to default**. At ≥1760 a side column adds "What the aircon will do tonight" (the command schedule worked out from the plan) and "Last night on this plan" (time on target, average for the first 4 hours, warmest, corrections sent). This page uses `CurveEditor.tsx` with the new presentation. |
+| Tonight | **Tonight's tags** — value: the selected tags | Eight chips (Alcohol, Caffeine after 14:00, Late meal, Late exercise, Heavy duvet, Door ajar, Sick, Away) for "the night ending Fri 30 Oct", with the footer "Tags become filters and experiment arms in the Lab." |
+| Household | **General** — value: "Auto · You, Erik" | Appearance: four thumbnails and the night-mode hours footer. People: two name fields, each with an avatar letter, plus "Leave empty to use the default". Region: time zone (Phuket UTC+7) and night-mode hours 21:00–07:00. |
+| Household | **Morning report** — value: On/Off | The morning report notification toggle, with the push permission state. |
+| Data and devices | **Data & devices** — value: "Simulator" | Source segmented control (Simulator / Supabase, with "not set up" when unconfigured). Nights: "90 · 1 Aug – 29 Oct, 80 with complete data". Freshness: last room reading, gaps in the last 24 h, Google Health last sync. Devices: Hub Mini, Meter Pro CO2, Aircon (Toshiba Carrier), the Fitbit bands and the camera, each with a detail line and a status dot. "Coming later: camera" is a row on this page. |
+| Data and devices | **Google Health** — value: "Not connected" | The connect button, both bands, and what data is read. |
+| Data and devices | **CO₂ calibration** — value: "1 alert" | Add an outdoor check, the history, and the drift warning row ("Night minimum below outdoor air: sensor drift"). |
+| Help | **Setup guide** — value: "2 of 7" | A checklist of all 7 groups with every step from `SettingsScreen.tsx` `SETUP`, and progress for each group. |
+| Help | **Diagnostics** | Seed / window (42 / 90), metrics compute time (ms, cached), app version, SwitchBot calls today (– / 5,000), webhook vs poll lag, the Supabase env var names `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` (in `.code`), and Supabase sign-in state. |
+
+**Desktop.**
+- The sidebar shows System's second level: Tonight's plan, Tonight's tags, General, Morning report, Data & devices, Google Health, CO₂ calibration, Setup guide, Diagnostics.
+- The detail pane is a 672 px column (832 for the plan), and Tonight's plan opens by default.
+- There is no masonry and no second column of settings, so the eye reads one column top to bottom.
+
+**Shared.**
+- Each sub-page has its own URL (`/settings/plan`, `/settings/tags`, …), so Today's "Edit tonight's plan" can deep-link and the back button works.
+- On the phone, the drill-in fades in over 300 ms and slides 24 px (fade only with reduced motion).
 
 ---
 
-## 12. Verification checklist
+## 10. Accessibility
 
-- `cd apps/web && npx next build` passes. No new npm dependencies.
-- **Playwright** against `next start`, viewport 390×844, `isMobile`, `hasTouch`, `deviceScaleFactor: 3`:
-  - wait for skeletons to clear, then capture Today every 300 px in dark, light and night (`localStorage` theme override or `data-theme`)
-  - capture each other tab top-to-bottom every 600 px
-- Look at every frame:
-  - pinned chapters hold position and the cursor moves
-  - captions change
-  - no frame shows a half-revealed state after a fast jump
-  - night frames contain no non-red hues (sample the pixels: G and B ≤ 0x30, max R ≤ 0xC4)
-- Reduced-motion run (`reducedMotion: 'reduce'` context): chapters unpinned, final states only, no layout overlap.
-- Scroll-jank check: Chromium trace with 4× CPU throttle, scrolling the night chapter. No frames over 16.7 ms caused by script or style recalc.
+- **Contrast targets**, in light and dark:
+  - body and primary text ≥ 7:1;
+  - secondary text, labels, captions and axis ticks ≥ 4.5:1;
+  - non-text marks (lines, focus rings, control borders) ≥ 3:1.
+  - The token values in §3 meet these on `--bg`. Check again when anything sits on `--surface-2`.
+  - Night mode is the documented exception (§3.5): the ceiling is 3.7:1, compensated by size.
+- **Focus:** `:focus-visible` gives a 2 px `--text` outline at a 2 px offset with radius matching the element (night: `--text`). Never remove it. Do not draw focus with the signal colour, which is reserved for meaning.
+- **Hit sizes:**
+  - at least 44×44 for every control;
+  - dial buttons are 52 px;
+  - at least 8 px between adjacent targets;
+  - list rows are 52–56 px.
+- **Text:**
+  - the minimum is 13 px on phone and 14 on desktop;
+  - sizes are in px tokens but must survive 200 % browser zoom without horizontal scroll at 1024+;
+  - no text is set in images.
+- **Semantics:**
+  - the sidebar and tab bar are `<nav aria-label="Main">`, with `aria-current="page"` on the current item;
+  - System's second level is a nested list;
+  - segmented controls use `role="radiogroup"`;
+  - switches use `role="switch"`;
+  - dials are `<button>`s with `aria-label`s ("Later start", "Warmer"), and the value sits in an `aria-live="polite"` region.
+- **Charts:** every story chart has an `aria-label` that states the finding (the title sentence), plus a visually hidden table or summary for scrubbed values. Colour is never the only channel: thresholds are also dashed and labelled, and stages are also encoded by row position.
+- **Motion:** honour `prefers-reduced-motion` (§8.2). Nothing flashes more than three times a second.
+- **Keyboard:** `[` and `]` move between nights, the arrow keys move between plan phases, and Esc closes sheets and panels.
+
+---
+
+## 11. Making the data agree
+
+- **Single selectors.** Each number below has exactly one function. Today, Room, Body, Lab, System and the theme previews all call it:
+  - the room score;
+  - per-person sleep score, recovery and time asleep;
+  - lights out;
+  - CO₂ crossing time, peak and minutes above 1,000;
+  - time on the curve;
+  - air changes per hour;
+  - driver points.
+  - These live in `components/story/model.ts` or `lib/analysis.ts`.
+- **CO₂ peak:** the maximum within the sleep window (lights out → wake). The scrub readout clamps to the sleep window, so it can never show a value higher than the headline peak.
+- **Nights:** "90 nights" is the simulator window. Lab's figure is "80 of 90 nights with complete data". The 10 excluded nights (sick, away, sensor gaps) are explained once, in Data & devices, and linked from Lab.
+- **Theme previews contain no numbers.**
+- **Formatting** goes through `lib/format.ts`:
+  - durations as "7h 14m" (no spaces inside, a space between the parts);
+  - thousands separators ("1,245 ppm");
+  - temperatures with one decimal in readouts and none on axes ("19.0°" vs "19°");
+  - 24-hour clock times.
+
+---
+
+## 12. Implementation notes and verification
+
+- **No new npm dependencies.** Only `next`, `react`, `recharts` and `@supabase/supabase-js`. Fonts come only through `next/font/local`.
+- **Suggested order:**
+  1. tokens and type, keeping old names as aliases (§3.4);
+  2. the Shell: sidebar, phone top bar and tab bar;
+  3. System IA and its sub-routes;
+  4. Today scenes;
+  5. Room, Body and Lab anatomy;
+  6. delete the aliases, `--font-mono`, JumpBar and the Geist Mono file.
+- **Before merging:**
+  - `cd apps/web && npx next build` passes;
+  - if `packages/core` changed, `cd packages/core && npx vitest run` passes;
+  - capture with Playwright against `next start` at 2560×1440 (DPR 1), 1440×900, 1024×768, and 390×844 and 430×932 (mobile, touch, DPR 2), in light, dark and night (`?theme=`), waiting until no `.sk` skeleton remains; then look at the shots.
+- **Checks:**
+  - no text under 13 px (grep the CSS for `font-size` values below the tokens);
+  - no `text-transform: uppercase`;
+  - no `--font-mono`;
+  - no `--ac-*`;
+  - night-mode pixels: G and B ≤ 0x30, R ≤ 0xC4;
+  - the Today desktop page is ≤ 8 screens at 2560;
+  - the same score and the same CO₂ peak on every surface.
