@@ -1,19 +1,42 @@
-// SwitchBot webhook receiver. Register https://<ref>.supabase.co/functions/v1/switchbot-webhook/<WEBHOOK_SECRET>
-// (SwitchBot doesn't sign deliveries, so the secret path is the authentication). Replies 200 at once and writes
-// in the background.
+// SwitchBot webhook receiver, registered by switchbot-admin {"action":"register-webhook"} as
+// https://<ref>.supabase.co/functions/v1/switchbot-webhook/<secret>. SwitchBot doesn't sign deliveries, so the
+// secret path segment is the authentication. It matches either the WEBHOOK_SECRET function secret (optional) or
+// the Vault secret `switchbot_webhook_secret` (migration 0008, checked through a service_role-only RPC).
+// Replies 200 at once and writes in the background.
+import { timingSafeEqual } from '../../../packages/core/src/health/signature.ts';
 import { normalizeMac, parseWebhookEvent } from '../../../packages/core/src/switchbot/parse.ts';
 import { urlSecretMatches } from '../_shared/auth.ts';
 import { optEnv } from '../_shared/env.ts';
 import { background, json, serve } from '../_shared/http.ts';
 import { readingToRow } from '../_shared/rows.ts';
-import { serviceClient } from '../_shared/supabase.ts';
+import { type Db, serviceClient } from '../_shared/supabase.ts';
 import { floorMinute } from '../_shared/time.ts';
+import { webhookSecretCandidates } from '../_shared/webhook.ts';
+
+// A path secret that verified against Vault is cached per worker for a few minutes, so a burst of deliveries
+// doesn't add a database round trip each. Only a value that already verified is cached.
+const VAULT_CACHE_MS = 5 * 60_000;
+let vaultOk: { secret: string; at: number } | null = null;
+
+async function authorized(req: Request, db: Db): Promise<boolean> {
+  const configured = optEnv('WEBHOOK_SECRET');
+  if (configured && urlSecretMatches(req, configured)) return true;
+  const candidates = webhookSecretCandidates(req.url).filter((c) => c.length >= 32 && c.length <= 256);
+  if (vaultOk && Date.now() - vaultOk.at < VAULT_CACHE_MS && candidates.some((c) => timingSafeEqual(c, vaultOk!.secret))) return true;
+  for (const c of candidates) {
+    const { data, error } = await db.rpc('verify_switchbot_webhook_secret', { p_secret: c });
+    if (error) console.error('verify_switchbot_webhook_secret', error.message);
+    if (data === true) {
+      vaultOk = { secret: c, at: Date.now() };
+      return true;
+    }
+  }
+  return false;
+}
 
 serve(async (req) => {
-  // 404 rather than 401 so the endpoint doesn't confirm it exists. Without WEBHOOK_SECRET nothing can match.
-  const secret = optEnv('WEBHOOK_SECRET');
-  if (!secret) console.warn('switchbot-webhook: not configured (WEBHOOK_SECRET is not set); rejecting');
-  if (req.method !== 'POST' || !secret || !urlSecretMatches(req, secret)) return json({ error: 'not found' }, 404);
+  // 404 rather than 401 so the endpoint doesn't confirm it exists.
+  if (req.method !== 'POST' || !(await authorized(req, serviceClient()))) return json({ error: 'not found' }, 404);
   const receivedAt = Date.now();
   let body: unknown;
   try {
