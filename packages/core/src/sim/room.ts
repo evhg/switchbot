@@ -163,7 +163,7 @@ export function simulateRoom(
 
     // Controller sees only meter readings, as in production.
     if (m >= ctrlFrom && m <= ctrlTo && m > 0) {
-      const recent = readings.slice(Math.max(0, m - 40), m);
+      const recent = readings.slice(Math.max(0, m - 60), m);
       const last = log[log.length - 1];
       const cmd = decideAcCommand({
         now: ts,
@@ -174,6 +174,7 @@ export function simulateRoom(
         lastCommand: last,
         commandsTonight: log.length,
         recent,
+        tonight: log,
       });
       if (cmd) {
         log.push(cmd);

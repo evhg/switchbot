@@ -28,7 +28,7 @@ export interface SimOptions {
   endDate?: string;            // wake date (YYYY-MM-DD, ICT) of the LAST night; default = today in ICT
   people?: Person[];
   curve?: TemperatureCurve;    // default DEFAULT_CURVE
-  remote?: RemoteProfile;      // default setAll profile
+  remote?: RemoteProfile;      // default DEFAULT_REMOTE (setAll, quiet mode ON); withQuiet(DEFAULT_REMOTE, false) = closed loop
   volumeM3?: number;           // default 120
 }
 export function simulateNights(opts?: SimOptions): Night[]               // oldest → newest, 1-min room data 18:00→12:00 ICT, truth populated
@@ -39,27 +39,81 @@ export function simulateLiveReading(now: Ms, opts?: SimOptions): RoomReading   /
 
 ## control/: aircon controller (owner: sim agent)
 ```ts
+export interface QuietConfig {                     // every field optional; omitted = DEFAULT_QUIET
+  enabled?: boolean;                               // default true (quiet mode ON)
+  settleMin?: number;                              // default 15: lights-out + 15 min still behaves as before lights-out
+  emergencyThresholdC?: number;                    // default 1.5 °C (bed-height room vs the target quiet mode holds)
+  emergencyMinMinutes?: number;                    // default 20
+  maxEmergencyPerNight?: number;                   // default 1
+  maxExtraPerNight?: number;                       // default 1: emergencies + resends while asleep, one shared budget
+  rampStrategy?: 'third' | 'midpoint' | 'end';     // default 'third' (see below)
+}
+export const DEFAULT_QUIET: Required<QuietConfig>
+export function resolveQuiet(remote: RemoteProfile): Required<QuietConfig>   // a stored profile without `quiet` → quiet ON
+export function withQuiet(remote: RemoteProfile, enabled: boolean): RemoteProfile
 export interface RemoteProfile {
   kind: 'setAll' | 'customize';
   ladder?: { button: string; state: AcState }[];   // for 'customize': learned buttons, e.g. C18..C24
   minIntervalMin: number;                          // default 20; IR receivers beep, so keep commands rare
   maxCommandsPerNight: number;                     // default 12
-  quietAfterLightsOutMin?: number;                 // optional: no commands in the first N min
+  quietAfterLightsOutMin?: number;                 // optional: no commands in the first N min (closed-loop mode)
+  quiet?: QuietConfig;                             // quiet mode while asleep; default ON
 }
-export const DEFAULT_REMOTE: RemoteProfile
+export const DEFAULT_REMOTE: RemoteProfile        // setAll, quiet: DEFAULT_QUIET
+export const DEFAULT_LADDER_REMOTE: RemoteProfile
+export function remoteCommand(now: Ms, state: AcState, remote: RemoteProfile, reason: string): AcCommand | null  // setAll or nearest ladder button
 export interface ControllerInput {
   now: Ms; lightsOut: Ms; wake: Ms;
   curve: TemperatureCurve;
   remote: RemoteProfile;
   lastCommand?: AcCommand;            // our assumed current AC state
   commandsTonight: number;
-  recent: RoomReading[];              // last ≥30 min of readings, ascending
+  recent: RoomReading[];              // last ≥30 min of readings, ascending (quiet mode wants ~60 min)
+  biasC?: number;                     // prior setpoint − bed target, default −1
+  tonight?: AcCommand[];              // tonight's commands so far, ascending. Quiet mode needs it to count extras while asleep:
+                                      // WITHOUT it quiet mode sends no emergency and no resend while asleep (planned steps only)
 }
 export function decideAcCommand(input: ControllerInput): AcCommand | null
-// Strategy: setpoint = round(target + bias). Bias is a small integer offset (−2..+2) learned from the
-// bed-height error (the ducted unit's return-air sensor differs from the bed). Respect minInterval and
-// the nightly cap. Never send a duplicate state. Mark the prior command landed=false if the room
-// didn't move toward the target within ~30 min of a change. Power on from precool until wake+30 min.
+// Closed loop (quiet off, and in quiet mode before lights-out + settleMin): setpoint = round(target + bias). Bias is a
+// small integer offset (−2..+2) learned from the bed-height error (the ducted unit's return-air sensor differs from
+// the bed); between calls it is carried by the last command, recovered exactly from its setpoint and target
+// (recoverBias: set 20 for 20.5 °C is bias −1, never the −0.5 rounding residue). Respect minInterval and the nightly
+// cap. Never send a duplicate state. Mark the prior command landed=false if the room didn't move toward the target
+// within ~30 min of a change, and resend it once. Power on from precool
+// until wake+30 min, then OFF.
+// Quiet mode (default) from lights-out + settleMin until the OFF at wake + 30 min — the receiver beeps on every frame:
+//  - only the planned steps from quietSteps(): each non-ramped phase start (deep, late, wake) and ONE step per ramped
+//    phase; a step whose rounded setpoint (or ladder button) would not change under the bias in use is skipped; a step
+//    not sent within 30 min of its time (minInterval, backoff) is dropped. A step inside the settle window (lights-out →
+//    lights-out + settle, e.g. a phase at +10 blocked by minInterval after the onset command) is carried into quiet
+//    mode with the 30 min measured from asleepFrom, unless the next step is due within 30 min (that one carries it).
+//    Bias: the one the last command was sent with (an emergency's carries its correction), replaced by the one measured
+//    at the step time (room steady under an unchanged setpoint ≥ 45 min) only when they differ by > 0.75 °C, by ≤ 1 °C
+//    per step. A re-measured bias never adds a step (noChange is judged with the bias in use), and a step never moves
+//    against the plan. So the number of planned steps while asleep always equals planAcSchedule's asleepCount.
+//  - rampStrategy 'third': at 1/3 of the ramp, jump to the target 2/3 along (minimax error Δ/3 = 0.8 °C for the default
+//    19 → 21.5 ramp; the next phase's step finishes it). 'midpoint': midpoint → midpoint target (Δ/2). 'end': no step.
+//  - extras: at most maxExtraPerNight (default 1) in total while asleep, each an emergency or a resend:
+//  - emergency: at most maxEmergencyPerNight, when every reading of the last emergencyMinMinutes is ≥ threshold off the
+//    target quiet mode holds (the staircase, not the ramp), the room is not converging, the last command is ≥ 45 min
+//    old and no planned step in the same direction is due within 30 min. setpoint ± round(deviation), max 2.
+//  - resend: only of a planned "curve: …" command that is not a fan-only change.
+//  → at most asleepCount + maxExtraPerNight commands (beeps) while asleep: 3 + 1 for the default curve.
+//  - always: minInterval, the nightly cap (last slot kept for OFF), setpoint within ceil(minC)..floor(maxC) and 16..30.
+//  Reasons: "curve: <phase> start (quiet) …", "curve: <phase> ramp (one step) (quiet) …", "emergency: …", "resend: …".
+
+export interface QuietStep { ts: Ms; targetC: number; phase: CurvePhaseName; kind: 'phase' | 'ramp' }
+export function quietSteps(curve, lightsOut, wake, quiet: Required<QuietConfig>): QuietStep[]   // from lights-out (settle window included)
+export function recoverBias(sp: number, targetC: number, limits: { lo: number; hi: number }, prior: number, maxAbs?: number): number
+export interface PlannedAcCommand { ts: Ms; state: AcState; button?: string; targetC: number | null; phase: CurvePhaseName | 'off';
+  kind: 'on' | 'phase' | 'ramp' | 'off'; reason: string; asleep: boolean /* lights-out + settle ≤ ts < wake: a beep while asleep */ }
+export interface AcPlan { quiet: boolean; commands: PlannedAcCommand[]; asleepCount: number; total: number;
+  maxExtraAsleep: number | null /* quiet: maxExtraPerNight (emergency or resend); null when quiet is off */; asleepFrom: Ms }
+export function planAcSchedule(input: { curve; lightsOut: Ms; wake: Ms; remote: RemoteProfile; biasC?: number }): AcPlan
+// Pure: the schedule the controller plans (constant bias: biasC rounded, default −1; no misses or emergencies; each
+// command at least minInterval after the previous one; same step rules as above). The controller's planned steps while
+// asleep match it in number; their setpoints may differ by 1 °C once the bias is measured. Default curve, quiet ON:
+// precool 20 · onset 19 · deep 18 · middle ramp step 20 (at +280 min) · late 21 · (wake skipped, still 21) · OFF → 3 while asleep.
 ```
 
 ## metrics/: analysis (owner: metrics agent)

@@ -5,7 +5,7 @@
  * into plan clock times, "last night on this plan", nights with complete data and CO₂ drift alerts.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { DEFAULT_CURVE, type CurvePhaseName, type TagKey, type TemperatureCurve } from '@sleep-lab/core';
+import { DEFAULT_CURVE, DEFAULT_REMOTE, planAcSchedule, withQuiet, type CurvePhaseName, type TagKey, type TemperatureCurve } from '@sleep-lab/core';
 import { useData } from '@/lib/data/context.tsx';
 import type { Dataset } from '@/lib/data/types.ts';
 import { addDays, ictDate, ictHour, ictMinuteOfDay, MIN } from '@/lib/format.ts';
@@ -152,23 +152,58 @@ export interface ScheduleStep {
   /** What the aircon is actually sent (whole degrees). */
   setC: number | null;
   what: string;
+  /** Sent while you sleep (lights out + settle → wake): the receiver beeps. */
+  asleep: boolean;
 }
-/** What the controller will send tonight: one command per phase (integer set points), off at wake + 30 min. */
-export function aircon(curve: TemperatureCurve, lightsOut: number): ScheduleStep[] {
-  const steps: ScheduleStep[] = curve.phases.map((p, i) => {
-    const next = curve.phases[i + 1];
-    const glides = Boolean(p.ramp && next && next.targetC !== p.targetC);
-    return {
-      at: clock(lightsOut + p.startMin),
-      targetC: p.targetC,
-      setC: Math.round(p.targetC),
-      what: glides ? `${PHASE_NAME[p.name]}, gliding to ${next!.targetC.toFixed(1)}°` : PHASE_NAME[p.name],
-    };
-  });
+export interface AirconPlan {
+  steps: ScheduleStep[];
+  /** Commands (= receiver beeps) while asleep. */
+  asleepCount: number;
+  total: number;
+  quiet: boolean;
+  /** Quiet mode: extra commands it may still send while asleep (a resend or an emergency correction, one budget). */
+  maxExtraAsleep: number | null;
+}
+const PLAN_DAY = Date.UTC(2026, 0, 1);
+/**
+ * What the controller will send tonight (`planAcSchedule` from core, the same rules the backend runs): the pre-cool,
+ * the falling-asleep command, then in quiet mode only the planned steps while asleep (a ramp is one step), off at
+ * wake + 30 min. Whole-degree set points with `biasC` when known (the backend's ac_state.bias_c), else the default
+ * (the bed reads about 1° above the aircon's sensor). The backend sends the same number of steps while asleep; a set
+ * point may differ by 1° once it has measured the room's offset.
+ */
+export function aircon(curve: TemperatureCurve, lightsOut: number, quiet = true, biasC?: number): AirconPlan {
   const t = planTimes(curve, lightsOut);
-  steps.push({ at: clock(t.off), targetC: null, setC: null, what: `Off, ${OFF_AFTER_WAKE} min after wake (${clock(t.wake)})` });
-  return steps;
+  const lo = PLAN_DAY + lightsOut * MIN;
+  const wake = lo + (t.wake - lightsOut) * MIN;
+  const plan = planAcSchedule({ curve, lightsOut: lo, wake, remote: withQuiet(DEFAULT_REMOTE, quiet), ...(biasC !== undefined ? { biasC } : {}) });
+  const glide = (name: CurvePhaseName) => {
+    const i = curve.phases.findIndex((p) => p.name === name);
+    return curve.phases[i + 1]?.targetC;
+  };
+  const steps = plan.commands.map((c): ScheduleStep => {
+    const at = clock(lightsOut + (c.ts - lo) / MIN);
+    if (c.kind === 'off') return { at, targetC: null, setC: null, what: `Off, ${OFF_AFTER_WAKE} min after wake (${clock(t.wake)})`, asleep: false };
+    const name = c.phase === 'off' ? '' : PHASE_NAME[c.phase];
+    const what =
+      c.kind === 'ramp'
+        ? quiet
+          ? `${name}, one step toward ${fmtC(glide(c.phase as CurvePhaseName))}`
+          : `${name}, gliding`
+        : c.kind === 'on'
+          ? `${name}, aircon on`
+          : name;
+    return { at, targetC: c.targetC, setC: c.state.setpointC, what, asleep: c.asleep };
+  });
+  return { steps, asleepCount: plan.asleepCount, total: plan.total, quiet: plan.quiet, maxExtraAsleep: plan.maxExtraAsleep };
 }
+const fmtC = (c: number | undefined) => (c === undefined ? '' : `${c.toFixed(1)}°`);
+
+/**
+ * Preview of the plan with or without quiet mode, kept on this device like the plan itself. It does not change the
+ * aircon: the backend runs quiet mode unless AC_QUIET=false is set on the server.
+ */
+export const useQuietMode = () => usePref<boolean>('quietMode', true);
 
 export interface LastNightOnPlan {
   date: string;
@@ -193,7 +228,7 @@ export function lastNightOnPlan(ds: Dataset | null): LastNightOnPlan | null {
     earlyMean: r.tempEarlyMean,
     warmest: warm?.tempC ?? NaN,
     warmestAt: warm?.ts ?? n.wake,
-    corrections: n.ac.filter((c) => c.reason.startsWith('correction')).length,
+    corrections: n.ac.filter((c) => c.reason.startsWith('correction') || c.reason.startsWith('emergency')).length,
     commands: n.ac.length,
   };
 }

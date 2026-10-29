@@ -18,6 +18,7 @@ import { enablePush, pushSupported } from '@/lib/push.ts';
 import { isNightHour, useTheme, type ResolvedTheme, type ThemeMode } from '@/lib/theme.tsx';
 import { NotMember, OnboardingSteps } from '../account/Onboarding.tsx';
 import { CurveEditor } from '../CurveEditor.tsx';
+import { Icon } from '../icons.tsx';
 import { withViewTransition } from '../motion.tsx';
 import { systemHref, useChrome, type SystemSlug } from '../nav.tsx';
 import { Button, Chip, Chips, Field, Group, Input, PageHeader, PersonField, Readout, Readouts, Row, Segmented, Skeleton, Status, Switch, ThemeThumbs } from '../ui.tsx';
@@ -39,6 +40,7 @@ import {
   useMorningReport,
   usePlanClock,
   useSetupProgress,
+  useQuietMode,
   useTonightTags,
 } from './model.ts';
 import s from './system.module.css';
@@ -66,7 +68,8 @@ export function PlanPage({ back = true }: { back?: boolean }) {
   const pc = usePlanClock();
   const ph = curve.phases;
   const times = planTimes(curve, pc.lightsOut);
-  const schedule = aircon(curve, pc.lightsOut);
+  const [quiet, setQuiet] = useQuietMode();
+  const plan = aircon(curve, pc.lightsOut, quiet);
   const last = useMemo(() => lastNightOnPlan(dataset ?? latest), [dataset, latest]);
   const actual = useMemo(() => {
     const n = (dataset ?? latest)?.nights.at(-1);
@@ -109,8 +112,25 @@ export function PlanPage({ back = true }: { back?: boolean }) {
         <aside className={s.planAside} aria-label="Tonight in detail">
           <section className={s.asideBlock}>
             <h2 className={s.asideH}>What the aircon will do tonight</h2>
+            <div className={s.quiet}>
+              <p className={s.quietLine}>
+                <Icon name="bell" size={18} />
+                <span>
+                  {quiet ? 'Quiet mode: ' : 'Preview without quiet mode: '}
+                  <b className="num">{plan.asleepCount}</b> {plan.asleepCount === 1 ? 'command' : 'commands'} while you sleep
+                  <span className="ink-3">
+                    {quiet
+                      ? plan.maxExtraAsleep
+                        ? `, at most ${plan.maxExtraAsleep} more if needed`
+                        : ''
+                      : ', plus corrections'}
+                  </span>
+                </span>
+              </p>
+              <Switch checked={quiet} onChange={setQuiet} label={<span className="sr-only">Preview the plan with quiet mode (does not change the aircon)</span>} />
+            </div>
             <ol className={s.sched}>
-              {schedule.map((st, i) => (
+              {plan.steps.map((st, i) => (
                 <li key={i}>
                   <span className="num ink-2">{st.at}</span>
                   <b className="num">{st.targetC === null ? 'Off' : `${fmt(st.targetC, 1)}°`}</b>
@@ -118,10 +138,17 @@ export function PlanPage({ back = true }: { back?: boolean }) {
                     {st.what}
                     {st.setC !== null && st.setC !== st.targetC && <span className="ink-3"> · set {st.setC}°</span>}
                   </span>
+                  <span className={s.beep}>{st.asleep && <Icon name="bell" size={16} title="Beeps while you sleep" />}</span>
                 </li>
               ))}
             </ol>
-            <p className="cap">The aircon only takes whole degrees, so half-degree targets are sent rounded; the controller corrects by up to 2° if the room drifts.</p>
+            <p className="cap">
+              The aircon’s receiver beeps on every command.{' '}
+              {quiet
+                ? `Quiet mode changes the setting only at these planned steps while you sleep (a glide is one step), plus at most one extra command: a resend if a step doesn’t take, or a correction if the room stays 1.5° off for 20 min. A set point can end up 1° different once the room’s offset is measured.`
+                : 'Preview only: the aircon stays in quiet mode, which is set on the server. Without it, the controller would also follow each glide degree by degree and correct whenever the room drifts, so more beeps.'}{' '}
+              Half-degree targets are sent rounded. The switch only changes this preview.
+            </p>
           </section>
           <section className={s.asideBlock}>
             <h2 className={s.asideH}>Last night on this plan</h2>

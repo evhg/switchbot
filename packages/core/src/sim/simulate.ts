@@ -142,7 +142,7 @@ export function simulateLiveReading(now: Ms, opts: SimOptions = {}): RoomReading
   const localDate = ictDate(now);
   const noon = ictMidnight(localDate) + 12 * 60 * MIN;
   const date = now >= noon ? addDays(localDate, 1) : localDate;
-  const key = [r.seed, date, r.volume, r.curve.id, r.remote.kind, r.people.map((p) => p.id).join(',')].join('|');
+  const key = [r.seed, date, r.volume, r.curve.id, r.remote.kind, JSON.stringify(r.remote.quiet ?? null), r.people.map((p) => p.id).join(',')].join('|');
   if (!cache || cache.key !== key) cache = { key, day: simulateFull(date, r).day };
   const start = cache.day[0]!.ts;
   const idx = Math.min(DAY_MIN - 1, Math.max(0, Math.floor((now - start) / MIN)));

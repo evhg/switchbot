@@ -3,8 +3,11 @@
 // outside it (or with the night disabled), only an "ensure off" when the assumed state is still ON.
 // DRY_RUN (default true until the remote is verified; only an explicit false/0/no/off turns it off) logs commands
 // without sending them.
+// Quiet mode (the receiver beeps on every IR frame): ON by default — from lights-out + 15 min only the planned phase
+// steps plus at most one extra command (an emergency correction or a resend; packages/core CONTRACT.md). AC_QUIET=false (or 0/no/off)
+// switches it off for every night; anything else, or unset, keeps the stored profile's setting (default on).
 import { decideAcCommand, evaluateLanding, offCommand } from '../../../packages/core/src/control/controller.ts';
-import { DEFAULT_REMOTE, type RemoteProfile } from '../../../packages/core/src/control/remote.ts';
+import { DEFAULT_REMOTE, type RemoteProfile, withQuiet } from '../../../packages/core/src/control/remote.ts';
 import { toSwitchBotCommand } from '../../../packages/core/src/switchbot/ac.ts';
 import type { AcCommand, AcState } from '../../../packages/core/src/types.ts';
 import { requireCron } from '../_shared/auth.ts';
@@ -48,7 +51,8 @@ serve(async (req) => {
   const inWindow = night.ac_enabled && now >= onFrom && now <= wake + 90 * MIN;
 
   const stateRow = must(await db.from('ac_state').select('*').eq('device_id', acId).maybeSingle(), 'ac_state') as AcStateRow | null;
-  const remote: RemoteProfile = stateRow?.remote ?? DEFAULT_REMOTE;
+  const stored: RemoteProfile = stateRow?.remote ?? DEFAULT_REMOTE;
+  const remote: RemoteProfile = envFlagSafe('AC_QUIET') ? stored : withQuiet(stored, false);
   // Live and dry runs keep separate assumed states: live = ac_state (only real, successful sends move it);
   // dry = the newest dry-run row. Flipping DRY_RUN off therefore never inherits a state that was never sent.
   const lastRow = await assumedLastRow(db, acId, dryRun, stateRow);
@@ -77,11 +81,16 @@ serve(async (req) => {
     return await send(db, { acId, dryRun, cmd: off, nightDate: lastRow?.night_date ?? night.date, stateRow });
   }
 
-  const countQ = db.from('ac_commands').select('id', { count: 'exact', head: true }).eq('device_id', acId).eq('night_date', night.date);
-  const { count, error: countErr } = await (dryRun ? countQ.eq('dry_run', true) : countQ.eq('dry_run', false).eq('sent_ok', true));
-  // Never bypass the nightly cap because the count failed.
-  if (countErr || count === null) throw new Error(`ac_commands count: ${countErr?.message ?? 'no count'}`);
-  const commandsTonight = count;
+  // Tonight's commands (same dry/live split as the assumed state): the count feeds the nightly cap, the list lets
+  // quiet mode count tonight's resends and emergencies.
+  const tonightQ = db.from('ac_commands').select('*').eq('device_id', acId).eq('night_date', night.date);
+  const { data: tonightRows, error: tonightErr } = await (dryRun ? tonightQ.eq('dry_run', true) : tonightQ.eq('dry_run', false).eq('sent_ok', true))
+    .order('ts', { ascending: true })
+    .limit(200);
+  // Never bypass the nightly cap because the query failed.
+  if (tonightErr || !tonightRows) throw new Error(`ac_commands tonight: ${tonightErr?.message ?? 'no rows'}`);
+  const tonight = (tonightRows as AcCommandRow[]).map(rowToCommand);
+  const commandsTonight = tonight.length;
 
   const recent = await loadRoom(db, meterId, now - 90 * MIN, now + MIN);
 
@@ -102,6 +111,7 @@ serve(async (req) => {
     curve,
     remote,
     commandsTonight,
+    tonight,
     recent: recent.filter((r) => r.ts >= now - 60 * MIN),
     ...(lastCommand ? { lastCommand } : {}),
     ...(stateRow?.bias_c !== null && stateRow?.bias_c !== undefined ? { biasC: stateRow.bias_c } : {}),
@@ -111,7 +121,7 @@ serve(async (req) => {
   if (lastCommand && lastRow?.id && landedBefore == null && typeof lastCommand.landed === 'boolean') {
     await markLanded(db, lastRow.id, lastCommand.landed, night.date, lastCommand);
   }
-  if (!cmd) return json({ ok: true, dryRun, night: night.date, command: null, commandsTonight, lastLanded: lastCommand?.landed ?? null });
+  if (!cmd) return json({ ok: true, dryRun, quiet: remote.quiet?.enabled !== false, night: night.date, command: null, commandsTonight, lastLanded: lastCommand?.landed ?? null });
   return await send(db, { acId, dryRun, cmd, nightDate: night.date, stateRow, commandsTonight });
 });
 

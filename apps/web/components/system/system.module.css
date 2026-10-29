@@ -58,9 +58,14 @@
 .asideBlock { display: grid; gap: var(--sp-3); align-content: start; min-width: 0; }
 .asideH { font-size: var(--t-body); font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; padding-bottom: var(--sp-3); border-bottom: 1px solid var(--hairline); }
 .sched { list-style: none; margin: 0; padding: 0; }
-.sched li { display: grid; grid-template-columns: 3.4em 2.6em minmax(0, 1fr); gap: var(--sp-3); align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--hairline); font-size: var(--t-sec); }
+.sched li { display: grid; grid-template-columns: 3.4em 2.6em minmax(0, 1fr) 16px; gap: var(--sp-3); align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--hairline); font-size: var(--t-sec); }
+.beep { align-self: center; display: flex; color: var(--text-2); }
+.quiet { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); padding: var(--sp-2) 0 var(--sp-1); }
+.quietLine { margin: 0; display: flex; align-items: center; gap: var(--sp-2); font-size: var(--t-body); color: var(--text); }
+.quietLine :global(svg) { flex: none; color: var(--text-2); }
+.quietLine b { font-weight: 560; }
 .sched b { font-weight: 560; color: var(--text); }
-.sched li > span:last-child { color: var(--text-2); }
+.sched li > span:nth-child(3) { color: var(--text-2); }
 .kv { margin: 0; display: grid; }
 .kv > div { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-4); padding: 10px 0; border-bottom: 1px solid var(--hairline); font-size: var(--t-sec); }
 .kv dt { color: var(--text-2); }

@@ -1,6 +1,7 @@
 import type { AcCommand, AcState, FanSpeed, Ms, RoomReading, TemperatureCurve } from '../types.ts';
 import { phaseAt, targetAt } from '../curve.ts';
-import type { RemoteProfile } from './remote.ts';
+import { remoteCommand, resolveQuiet, type RemoteProfile, type ResolvedQuiet } from './remote.ts';
+import { asleepFrom, carriedStepSuperseded, fanFor, quietSteps, recoverBias, setpointLimits, STEP_GRACE_MIN, stepDeadline, type QuietStep } from './quiet.ts';
 
 const MIN = 60_000;
 /** Assumed bed-minus-setpoint offset before the room has settled (bed sensor reads warmer than return air). */
@@ -9,6 +10,8 @@ const DEFAULT_OFFSET_C = 1;
 const DEADBAND_C = 0.6;
 const SETTLE_MIN = 45;
 const LANDING_MIN = 30;
+/** Quiet mode: a measured bias replaces the one in use only when it differs by more than this (no flip-flop around x.5). */
+const BIAS_HYSTERESIS_C = 0.75;
 /** Room this far above target and not cooling (before/around lights-out) = the AC probably isn't on. */
 const STALLED_ABOVE_C = 2.5;
 
@@ -25,6 +28,12 @@ export interface ControllerInput {
   recent: RoomReading[];
   /** Optional prior bias (setpoint − bed target), e.g. learned on earlier nights. Default −1. */
   biasC?: number;
+  /**
+   * Tonight's commands so far, ascending (should include lastCommand). Quiet mode needs it to count tonight's
+   * emergencies and resends while asleep; without it quiet mode sends no emergency or resend while asleep (only the
+   * planned steps), so the nightly budget can never be exceeded by a caller that cannot count.
+   */
+  tonight?: AcCommand[];
 }
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
@@ -36,21 +45,7 @@ function sameState(a: AcState, b: AcState): boolean {
 }
 
 function makeCommand(now: Ms, state: AcState, remote: RemoteProfile, reason: string): AcCommand | null {
-  if (remote.kind === 'setAll') return { ts: now, state, via: 'setAll', reason, landed: null };
-  const ladder = remote.ladder ?? [];
-  let best: { button: string; state: AcState } | undefined;
-  for (const step of ladder) {
-    if (step.state.power !== state.power) continue;
-    if (!state.power) {
-      best = step;
-      break;
-    }
-    if (!best || Math.abs(step.state.setpointC - state.setpointC) < Math.abs(best.state.setpointC - state.setpointC)) {
-      best = step;
-    }
-  }
-  if (!best) return null;
-  return { ts: now, state: { ...best.state }, via: 'customize', button: best.button, reason, landed: null };
+  return remoteCommand(now, state, remote, reason);
 }
 
 /** OFF in the remote's vocabulary (setAll or the learned OFF button). */
@@ -93,9 +88,13 @@ export function evaluateLanding(
   return Math.abs(mean(later) - expected) <= 1;
 }
 
+/** The whole-degree prior bias (setpoint − bed target): input.biasC rounded, default −1. */
+const priorBias = (input: ControllerInput) => clamp(Math.round(input.biasC ?? -DEFAULT_OFFSET_C), -2, 2);
+
 /**
  * Bed-minus-setpoint offset. Measured once the room has settled under the current setpoint; otherwise the
- * offset implied by the last command (target at that time − setpoint), so no state is needed between calls.
+ * offset implied by the last command (the whole-degree bias it was sent with, see recoverBias), so no state is
+ * needed between calls.
  */
 function offsetEstimate(input: ControllerInput): { offset: number; settledMean: number | null } {
   const { lastCommand, now, recent, curve, lightsOut } = input;
@@ -103,7 +102,7 @@ function offsetEstimate(input: ControllerInput): { offset: number; settledMean: 
   if (!lastCommand?.state.power) return { offset: prior, settledMean: null };
   const sp = lastCommand.state.setpointC;
   const tAtCmd = targetAt(curve, lightsOut, lastCommand.ts);
-  const implied = tAtCmd === null ? prior : clamp(tAtCmd - sp, -2, 2);
+  const implied = tAtCmd === null ? prior : -recoverBias(sp, tAtCmd, setpointLimits(curve), priorBias(input));
   if (now - lastCommand.ts < SETTLE_MIN * MIN) return { offset: implied, settledMean: null };
   const win = recent.filter((r) => r.ts > now - 30 * MIN && r.ts <= now);
   if (win.length < 20) return { offset: implied, settledMean: null };
@@ -132,6 +131,9 @@ export function decideAcCommand(input: ControllerInput): AcCommand | null {
   const lastOn = lastCommand?.state.power ?? false;
   const wantOn = now < offAt;
 
+  const quiet = resolveQuiet(remote);
+  if (quiet.enabled && wantOn && now >= asleepFrom(lightsOut, quiet)) return decideQuiet(input, quiet);
+
   const slotFree = !wantOn || commandsTonight < remote.maxCommandsPerNight - 1;
   if (lastCommand && lastCommand.landed === false && !lastCommand.reason.startsWith('resend') && lastOn === wantOn && slotFree) {
     return { ...lastCommand, ts: now, state: { ...lastCommand.state }, reason: `resend: no response to "${lastCommand.reason}"`, landed: null };
@@ -150,12 +152,11 @@ export function decideAcCommand(input: ControllerInput): AcCommand | null {
   const target = targetAt(curve, lightsOut, now);
   if (target === null) return null;
   const phase = phaseAt(curve, lightsOut, now)?.phase.name ?? 'precool';
-  const fan: FanSpeed = remote.kind === 'customize' ? 'auto' : phase === 'precool' ? 'high' : 'low';
+  const fan: FanSpeed = fanFor(remote, phase);
   const { offset, settledMean } = offsetEstimate(input);
   const bias = clamp(Math.round(-offset), -2, 2);
   // minC/maxC bound the setpoint itself (hard safety limits), not only the room target.
-  const lo = Math.max(16, Math.ceil(curve.minC));
-  const hi = Math.min(30, Math.floor(curve.maxC));
+  const { lo, hi } = setpointLimits(curve);
   const sp = clamp(Math.round(target + bias), lo, hi);
   const desired: AcState = { power: true, setpointC: sp, mode: 'cool', fan };
 
@@ -183,5 +184,154 @@ export function decideAcCommand(input: ControllerInput): AcCommand | null {
       : makeCommand(now, desired, remote, `curve: ${phase} phase ${target.toFixed(1)}°C (set ${sp})`);
   // A ladder may map to the same button we already pressed.
   if (!cmd || (lastCommand.button !== undefined && cmd.button === lastCommand.button) || sameState(cur, cmd.state)) return null;
+  return cmd;
+}
+
+/**
+ * The target quiet mode is holding at `ts`: the latest planned step's target (so a ramp reads as the staircase quiet
+ * mode actually executes), else the curve.
+ */
+function heldTarget(input: ControllerInput, steps: QuietStep[], ts: Ms): number | null {
+  const st = steps.filter((x) => x.ts <= ts).at(-1);
+  return st ? st.targetC : targetAt(input.curve, input.lightsOut, ts);
+}
+
+/**
+ * Bed-minus-setpoint offset measured over the 30 min before `at` (the step's time, so a step delayed by minInterval
+ * gets the same answer on every tick) once the setpoint had been unchanged for SETTLE_MIN and the room was steady
+ * (a fan-only change does not restart the clock); null when it can't be measured.
+ */
+function quietOffset(input: ControllerInput, tonight: AcCommand[], at: Ms): number | null {
+  const { recent, lastCommand } = input;
+  const now = at;
+  if (!lastCommand?.state.power) return null;
+  const sp = lastCommand.state.setpointC;
+  let since = lastCommand.ts;
+  for (let i = tonight.length - 1; i >= 0; i--) {
+    const c = tonight[i]!;
+    if (c.ts > lastCommand.ts || c.ts > at) continue;
+    if (!c.state.power || c.state.setpointC !== sp) break;
+    since = Math.min(since, c.ts);
+  }
+  if (now - since < SETTLE_MIN * MIN) return null;
+  const win = recent.filter((r) => r.ts > now - 30 * MIN && r.ts <= now);
+  if (win.length < 20) return null;
+  const head = mean(win.slice(0, 8).map((r) => r.tempC));
+  const tail = mean(win.slice(-8).map((r) => r.tempC));
+  if (Math.abs(tail - head) > 0.25) return null;
+  return mean(win.map((r) => r.tempC)) - sp;
+}
+
+/** Readings of the last `minutes` all ≥ threshold away from the held target on the same side; mean deviation, or null. */
+function sustainedDeviation(input: ControllerInput, quiet: ResolvedQuiet, steps: QuietStep[]): number | null {
+  const { now, recent } = input;
+  const win = recent.filter((r) => r.ts > now - quiet.emergencyMinMinutes * MIN && r.ts <= now);
+  // Need most of the window covered; a gap must not count as "deviating for 20 min".
+  if (win.length < Math.max(3, Math.ceil(quiet.emergencyMinMinutes * 0.75))) return null;
+  if (win[0]!.ts > now - (quiet.emergencyMinMinutes - 3) * MIN) return null;
+  const devs: number[] = [];
+  for (const r of win) {
+    const t = heldTarget(input, steps, r.ts);
+    if (t === null) return null;
+    devs.push(r.tempC - t);
+  }
+  const thr = quiet.emergencyThresholdC;
+  if (!(devs.every((d) => d >= thr) || devs.every((d) => d <= -thr))) return null;
+  // Still converging toward the target (e.g. pulling down after a step): give it time, don't beep.
+  const k = Math.min(5, Math.floor(devs.length / 3));
+  const early = Math.abs(mean(devs.slice(0, k)));
+  const late = Math.abs(mean(devs.slice(-k)));
+  if (early - late >= 0.3) return null;
+  return mean(devs);
+}
+
+/**
+ * Quiet mode from lights-out + settle until the OFF at wake + 30 min: the receiver beeps on every frame, so only
+ *  1. the planned steps from quietSteps (phase starts, one step per ramp, plus any step of the settle window the closed
+ *     loop could not send yet), skipped when the setpoint would not change under the bias in use;
+ *  2. at most maxExtraPerNight extra commands in total (default 1), each either
+ *     - a resend of a planned "curve: …" command that did not land (not of a fan-only change), or
+ *     - an emergency correction (at most maxEmergencyPerNight), when the bed-height room has been ≥ threshold off
+ *       target for ≥ emergencyMinMinutes (and the last command is older than the settle time, and no planned step
+ *       that fixes it is due within 30 min).
+ *     Extras need `tonight` to count them; without it none are sent while asleep.
+ * minInterval, the nightly cap and the curve's minC/maxC still apply.
+ *
+ * Bias: the one the last command was sent with (recoverBias; an emergency's setpoint carries its correction forward),
+ * replaced by the measured offset only when that differs by more than BIAS_HYSTERESIS_C (and by at most 1 °C). A
+ * re-measured bias never adds a beep by itself: a step whose setpoint would not change under the bias in use is skipped.
+ */
+function decideQuiet(input: ControllerInput, quiet: ResolvedQuiet): AcCommand | null {
+  const { now, lightsOut, wake, curve, remote, lastCommand, commandsTonight } = input;
+  // Keep the last slot for the morning OFF.
+  if (commandsTonight >= remote.maxCommandsPerNight - 1) return null;
+  const from = asleepFrom(lightsOut, quiet);
+  const tonight = input.tonight ?? (lastCommand ? [lastCommand] : []);
+  const asleep = tonight.filter((c) => c.ts >= from);
+  const emergencies = asleep.filter((c) => c.reason.startsWith('emergency')).length;
+  const extras = emergencies + asleep.filter((c) => c.reason.startsWith('resend')).length;
+  const extraLeft = input.tonight !== undefined && extras < quiet.maxExtraPerNight;
+  const limits = setpointLimits(curve);
+  const { lo, hi } = limits;
+  const phase = phaseAt(curve, lightsOut, now)?.phase.name ?? 'precool';
+  const fan = fanFor(remote, phase);
+  const steps = quietSteps(curve, lightsOut, wake, quiet);
+  const step = steps.filter((st) => st.ts <= now).at(-1);
+  const nextStep = steps.find((st) => st.ts > now);
+  const prior = priorBias(input);
+
+  // AC assumed off (controller enabled mid-night, or never commanded): one command brings it back on the curve.
+  if (!lastCommand || !lastCommand.state.power) {
+    const target = step && now < stepDeadline(step, from) ? step.targetC : targetAt(curve, lightsOut, now);
+    if (target === null) return null;
+    const sp = clamp(Math.round(target + prior), lo, hi);
+    return makeCommand(now, { power: true, setpointC: sp, mode: 'cool', fan }, remote, `curve: ${phase} (quiet), AC assumed off, ${target.toFixed(1)}°C (set ${sp})`);
+  }
+  const cur = lastCommand.state;
+
+  // A fan-only change (e.g. the onset command keeps the precool setpoint) can't be judged from the temperature, and a
+  // missed fan change is harmless: not worth a beep while asleep.
+  const prev = tonight.filter((c) => c.ts < lastCommand.ts).at(-1);
+  const fanOnly = prev !== undefined && prev.state.power && prev.state.setpointC === cur.setpointC;
+  if (lastCommand.landed === false && lastCommand.reason.startsWith('curve:') && !fanOnly && extraLeft) {
+    return { ...lastCommand, ts: now, state: { ...lastCommand.state }, reason: `resend: no response to "${lastCommand.reason}"`, landed: null };
+  }
+
+  if (step && lastCommand.ts < step.ts && now < stepDeadline(step, from) && !carriedStepSuperseded(step, nextStep, now, from)) {
+    const heldAtLast = heldTarget(input, steps, lastCommand.ts);
+    // Up to ±4: an emergency may have moved the setpoint past the ±2 a measurement allows; keep what it established.
+    const inUse = heldAtLast === null ? prior : recoverBias(cur.setpointC, heldAtLast, limits, prior, 4);
+    // Would the step change anything under the bias in use? If not, skip it: a re-measurement alone never beeps.
+    const plain = makeCommand(now, { power: true, setpointC: clamp(Math.round(step.targetC + inUse), lo, hi), mode: 'cool', fan }, remote, '');
+    const noChange = !plain || sameState(cur, plain.state) || (lastCommand.button !== undefined && plain.button === lastCommand.button);
+    const measured = noChange ? null : quietOffset(input, tonight, step.ts);
+    const bias =
+      measured === null || Math.abs(-measured - inUse) <= BIAS_HYSTERESIS_C ? inUse : clamp(Math.round(-measured), Math.max(-2, inUse - 1), Math.min(2, inUse + 1));
+    let sp = clamp(Math.round(step.targetC + bias), lo, hi);
+    // Never move the setpoint against the plan (a re-measured bias must not turn a warming step into a cooling one).
+    const dir = Math.sign(step.targetC - (heldTarget(input, steps, step.ts - MIN) ?? step.targetC));
+    if ((dir > 0 && sp < cur.setpointC) || (dir < 0 && sp > cur.setpointC)) sp = cur.setpointC;
+    const label = step.kind === 'ramp' ? `${step.phase} ramp (one step)` : `${step.phase} start`;
+    const cmd = makeCommand(now, { power: true, setpointC: sp, mode: 'cool', fan }, remote, `curve: ${label} (quiet), ${step.targetC.toFixed(1)}°C (set ${sp}, bias ${bias >= 0 ? '+' : ''}${bias})`);
+    const unchanged = noChange || !cmd || sameState(cur, cmd.state) || (lastCommand.button !== undefined && cmd.button === lastCommand.button);
+    if (!unchanged) return cmd;
+  }
+
+  if (!extraLeft || emergencies >= quiet.maxEmergencyPerNight) return null;
+  if (now - lastCommand.ts < Math.max(SETTLE_MIN, quiet.emergencyMinMinutes) * MIN) return null;
+  const dev = sustainedDeviation(input, quiet, steps);
+  if (dev === null) return null;
+  // A planned step due within the grace window that moves toward the room (cooler when it is too warm) will fix it:
+  // wait for it instead of beeping twice.
+  if (nextStep && nextStep.ts - now <= STEP_GRACE_MIN * MIN && Math.sign(nextStep.targetC - heldTarget(input, steps, now)!) === -Math.sign(dev)) return null;
+  const delta = clamp(-Math.round(dev), -2, 2);
+  const sp = clamp(cur.setpointC + delta, lo, hi);
+  const cmd = makeCommand(
+    now,
+    { power: true, setpointC: sp, mode: 'cool', fan: cur.fan },
+    remote,
+    `emergency: room ${Math.abs(dev).toFixed(1)}° ${dev > 0 ? 'above' : 'below'} target for ${quiet.emergencyMinMinutes}+ min (set ${sp})`,
+  );
+  if (!cmd || sameState(cur, cmd.state) || (lastCommand.button !== undefined && cmd.button === lastCommand.button)) return null;
   return cmd;
 }

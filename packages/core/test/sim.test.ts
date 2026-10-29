@@ -168,8 +168,9 @@ describe('room physics', () => {
 describe('AC log', () => {
   it('is realistic and respects the remote profile', () => {
     const counts = nights.map((n) => n.ac.length);
-    expect(median(counts)).toBeGreaterThanOrEqual(6);
-    expect(median(counts)).toBeLessThanOrEqual(15);
+    // Quiet mode (default): precool, onset, ~3 planned steps while asleep, OFF.
+    expect(median(counts)).toBeGreaterThanOrEqual(4);
+    expect(median(counts)).toBeLessThanOrEqual(8);
     let missed = 0;
     let flagged = 0;
     for (const n of nights) {
