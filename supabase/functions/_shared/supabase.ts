@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
-import { env } from './env.ts';
+import { env, serviceKey } from './env.ts';
 
 // Untyped client: row shapes live in rows.ts.
 // deno-lint-ignore no-explicit-any
@@ -9,7 +9,7 @@ let cached: Db | undefined;
 
 /** Service-role client (bypasses RLS). Never expose its key to the browser. */
 export function serviceClient(): Db {
-  cached ??= createClient(env('SUPABASE_URL'), env('SUPABASE_SERVICE_ROLE_KEY'), {
+  cached ??= createClient(env('SUPABASE_URL'), serviceKey(), {
     auth: { persistSession: false, autoRefreshToken: false },
   }) as Db;
   return cached;

@@ -2,7 +2,9 @@
 //   GET /google-oauth/start?person=a&key=<OAUTH_START_SECRET>[&login_hint=email]  → redirect to Google consent
 //   GET /google-oauth/callback?code=…&state=…                                       → store refresh token in Vault
 // Add <functions-url>/google-oauth/callback as an authorized redirect URI in the Google Cloud console.
-import { exchangeCode, GoogleHealthClient, googleAuthUrl, timingSafeEqual } from '../../../packages/core/src/index.ts';
+import { GoogleHealthClient } from '../../../packages/core/src/health/client.ts';
+import { exchangeCode, googleAuthUrl } from '../../../packages/core/src/health/oauth.ts';
+import { timingSafeEqual } from '../../../packages/core/src/health/signature.ts';
 import { env, functionsBaseUrl, optEnv } from '../_shared/env.ts';
 import { escapeHtml, html, serve } from '../_shared/http.ts';
 import { serviceClient } from '../_shared/supabase.ts';
@@ -26,8 +28,10 @@ serve(async (req) => {
   const db = serviceClient();
 
   if (action === 'start') {
+    const startSecret = optEnv('OAUTH_START_SECRET');
+    if (!startSecret) return page('Not configured', 'Google Health sign-in is not set up yet (OAUTH_START_SECRET is missing).', 503);
     const key = url.searchParams.get('key') ?? '';
-    if (!timingSafeEqual(key, env('OAUTH_START_SECRET'))) return page('Not allowed', 'Missing or wrong key.', 401);
+    if (!timingSafeEqual(key, startSecret)) return page('Not allowed', 'Missing or wrong key.', 401);
     const person = url.searchParams.get('person') ?? '';
     const { data: p } = await db.from('people').select('id').eq('id', person).maybeSingle();
     if (!p) return page('Unknown person', `No people row with id "${person}".`, 400);

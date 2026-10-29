@@ -1,5 +1,5 @@
 // Google Health sync helpers: raw archive rows, daily-type dates, token handling.
-import { dailyStepTotals, dataPointsOf, parseDailyHrv, parseDailyRestingHr, parseGoogleTime } from '../../../packages/core/src/index.ts';
+import { dailyStepTotals, dataPointsOf, parseDailyHrv, parseDailyRestingHr, parseGoogleTime } from '../../../packages/core/src/health/parse.ts';
 import { iso } from './time.ts';
 
 type Obj = Record<string, unknown>;

@@ -1,17 +1,19 @@
 // SwitchBot webhook receiver. Register https://<ref>.supabase.co/functions/v1/switchbot-webhook/<WEBHOOK_SECRET>
 // (SwitchBot doesn't sign deliveries, so the secret path is the authentication). Replies 200 at once and writes
 // in the background.
-import { normalizeMac, parseWebhookEvent } from '../../../packages/core/src/index.ts';
+import { normalizeMac, parseWebhookEvent } from '../../../packages/core/src/switchbot/parse.ts';
 import { urlSecretMatches } from '../_shared/auth.ts';
-import { env } from '../_shared/env.ts';
+import { optEnv } from '../_shared/env.ts';
 import { background, json, serve } from '../_shared/http.ts';
 import { readingToRow } from '../_shared/rows.ts';
 import { serviceClient } from '../_shared/supabase.ts';
 import { floorMinute } from '../_shared/time.ts';
 
 serve(async (req) => {
-  // 404 rather than 401 so the endpoint doesn't confirm it exists.
-  if (req.method !== 'POST' || !urlSecretMatches(req, env('WEBHOOK_SECRET'))) return json({ error: 'not found' }, 404);
+  // 404 rather than 401 so the endpoint doesn't confirm it exists. Without WEBHOOK_SECRET nothing can match.
+  const secret = optEnv('WEBHOOK_SECRET');
+  if (!secret) console.warn('switchbot-webhook: not configured (WEBHOOK_SECRET is not set); rejecting');
+  if (req.method !== 'POST' || !secret || !urlSecretMatches(req, secret)) return json({ error: 'not found' }, 404);
   const receivedAt = Date.now();
   let body: unknown;
   try {

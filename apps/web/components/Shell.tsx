@@ -17,11 +17,13 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, type ReactNode } from 'react';
-import { DataProvider } from '@/lib/data/context.tsx';
+import { AuthProvider } from '@/lib/auth.tsx';
+import { DataProvider, useData } from '@/lib/data/context.tsx';
 import { ThemeProvider } from '@/lib/theme.tsx';
+import { NotMember, Onboarding } from './account/Onboarding.tsx';
 import { Icon } from './icons.tsx';
 import { subscribeScroll, useNavTransitionDone } from './motion.tsx';
-import { SYSTEM_PAGES, TABS, activeTab, registerProgressEl, useChromeState, useNightNav } from './nav.tsx';
+import { SYSTEM_PAGES, TABS, activeTab, registerProgressEl, systemHref, useChromeState, useNightNav } from './nav.tsx';
 import { NightDateInput, Sidebar } from './Sidebar.tsx';
 import { TabBar } from './TabBar.tsx';
 
@@ -64,6 +66,7 @@ export function useStoryChrome({ topbar = false }: { topbar?: boolean } = {}) {
 function pageName(path: string): string {
   const sub = SYSTEM_PAGES.find((p) => path === `/settings/${p.slug}`);
   if (sub) return sub.label;
+  if (path === '/signin') return 'Sign in';
   return TABS[activeTab(path)]?.label ?? 'Sleep Lab';
 }
 
@@ -88,6 +91,7 @@ function TopBar() {
             </b>
             <span>{title ?? pageName(path)}</span>
           </div>
+          <SourceTag />
           <button type="button" className="icon-btn" aria-label="Previous night" disabled={!n.canPrev} onClick={n.prev}>
             <Icon name="chevron-left" size={20} />
           </button>
@@ -103,6 +107,30 @@ function TopBar() {
       )}
     </header>
   );
+}
+
+/** Phone top bar: a small, honest "Simulated" label whenever the nights are generated (desktop: the sidebar footer). */
+function SourceTag() {
+  const { sourceKind } = useData();
+  if (sourceKind !== 'sim') return null;
+  return (
+    <Link href={systemHref('data')} prefetch={false} className="topbar-src" title="Data & devices">
+      Simulated
+    </Link>
+  );
+}
+
+/**
+ * Real data chosen but nothing to chart: the tabs show the onboarding state (no nights yet) or the "not in the
+ * household yet" state instead of empty charts. System and sign-in pages always render.
+ */
+function TabGate({ children }: { children: ReactNode }) {
+  const path = usePathname();
+  const { empty, mode, realGate } = useData();
+  if (activeTab(path) < 0 || path.startsWith('/settings')) return <>{children}</>;
+  if (empty) return <Onboarding />;
+  if (mode === 'supabase' && realGate === 'not-member') return <NotMember />;
+  return <>{children}</>;
 }
 
 /** [ and ] move between nights (§10), unless typing. */
@@ -134,7 +162,7 @@ function Frame({ children }: { children: ReactNode }) {
         <TopBar />
         <main className="shell" id="main" tabIndex={-1}>
           <div className="page" key={path}>
-            {children}
+            <TabGate>{children}</TabGate>
           </div>
         </main>
       </div>
@@ -149,9 +177,11 @@ export function Shell({ children }: { children: ReactNode }) {
   useNavTransitionDone();
   return (
     <ThemeProvider>
-      <DataProvider>
-        <Frame>{children}</Frame>
-      </DataProvider>
+      <AuthProvider>
+        <DataProvider>
+          <Frame>{children}</Frame>
+        </DataProvider>
+      </AuthProvider>
     </ThemeProvider>
   );
 }

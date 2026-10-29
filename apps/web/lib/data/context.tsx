@@ -1,15 +1,34 @@
 'use client';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Night, PersonNightMetrics, RoomNightMetrics, RoomReading } from '@sleep-lab/core';
+import { hasRealData, useAuth } from '../auth.tsx';
 import { HOUR, tidyReport } from '../format.ts';
 import { usePref } from '../prefs.ts';
 import { createSimSource } from './sim.ts';
 import { createSupabaseSource, supabaseConfigured } from './supabase.ts';
 import type { Dataset, DataSource, NightDetail, SourceKind } from './types.ts';
 
+/** What the viewer asked for under System › Data & devices. 'auto' picks real data once it exists. */
+export type DataMode = 'auto' | 'supabase' | 'sim';
+
+/**
+ * Why real data isn't showing although it was asked for (or would be picked automatically):
+ *   'checking'   session / membership still being checked
+ *   'sign-in'    real data chosen, not signed in
+ *   'not-member' signed in, but the account is not in household_members (RLS returns nothing)
+ *   'no-data'    signed in, no real readings or Google Health data yet (auto keeps the simulator)
+ *   'unavailable' the env isn't configured, so only the simulator exists
+ */
+export type RealGate = 'checking' | 'sign-in' | 'not-member' | 'no-data' | 'unavailable' | null;
+
 interface DataCtx {
+  /** The source actually showing. */
   sourceKind: SourceKind;
-  setSourceKind: (k: SourceKind) => void;
+  mode: DataMode;
+  setMode: (m: DataMode) => void;
+  realGate: RealGate;
+  /** Real data is showing but there are no nights yet: screens show the onboarding state instead of charts. */
+  empty: boolean;
   source: DataSource;
   status: 'loading' | 'ready' | 'error';
   progress: string;
@@ -38,9 +57,31 @@ export const MAX_NAME_LENGTH = 24;
 const Ctx = createContext<DataCtx | null>(null);
 
 export function DataProvider({ children }: { children: ReactNode }) {
-  const [storedKind, setSourceKind] = usePref<SourceKind>('source', 'sim');
-  const sourceKind: SourceKind = storedKind === 'supabase' && supabaseConfigured() ? 'supabase' : 'sim';
-  const source = useMemo(() => (sourceKind === 'supabase' ? createSupabaseSource() : createSimSource()), [sourceKind]);
+  const [mode, setMode, modeLoaded] = usePref<DataMode>('dataMode', 'auto');
+  const auth = useAuth();
+  const configured = supabaseConfigured();
+  const member = Boolean(auth.status === 'signed-in' && auth.probe?.member);
+  const realGate: RealGate = !configured
+    ? 'unavailable'
+    : !auth.settled || !modeLoaded
+      ? 'checking'
+      : auth.status !== 'signed-in'
+        ? 'sign-in'
+        : !auth.probe?.member
+          ? 'not-member'
+          : !hasRealData(auth.probe)
+            ? 'no-data'
+            : null;
+  const sourceKind: SourceKind = member && (mode === 'supabase' || (mode === 'auto' && hasRealData(auth.probe))) ? 'supabase' : 'sim';
+  // Hold the first load until the session is known, so a signed-in household doesn't flash the simulator first.
+  const pending = configured && mode !== 'sim' && realGate === 'checking';
+  const userId = auth.session?.user.id ?? null;
+  const source = useMemo(
+    () => (sourceKind === 'supabase' ? createSupabaseSource() : createSimSource()),
+    // A new session (sign in as someone else) needs a fresh source; the sim ignores it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sourceKind, sourceKind === 'supabase' ? userId : null],
+  );
   const [state, setState] = useState<{ status: DataCtx['status']; dataset: Dataset | null; error: string | null; progress: string }>({
     status: 'loading',
     dataset: null,
@@ -56,6 +97,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
+    if (pending) return;
     let alive = true;
     setState((s) => ({ ...s, status: 'loading', error: null, progress: sourceKind === 'sim' ? 'Simulating 90 nights…' : 'Connecting…' }));
     setPreview(null);
@@ -85,7 +127,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     return () => {
       alive = false;
     };
-  }, [source, sourceKind]);
+  }, [source, sourceKind, pending]);
 
   // Names flow everywhere through dataset.people; an empty override falls back to the source's name.
   const applyNames = useCallback(
@@ -100,8 +142,23 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const latest = useMemo(() => dataset ?? applyNames(preview), [dataset, preview, applyNames]);
 
   const value = useMemo<DataCtx>(
-    () => ({ sourceKind, setSourceKind, source, ...state, dataset, latest, date, setDate, names, sourcePeople: state.dataset?.people ?? preview?.people ?? null, setPersonName }),
-    [sourceKind, setSourceKind, source, state, dataset, latest, preview, date, names, setPersonName],
+    () => ({
+      sourceKind,
+      mode,
+      setMode,
+      realGate,
+      empty: sourceKind === 'supabase' && state.status === 'ready' && !!state.dataset && state.dataset.nights.length === 0,
+      source,
+      ...state,
+      dataset,
+      latest,
+      date,
+      setDate,
+      names,
+      sourcePeople: state.dataset?.people ?? preview?.people ?? null,
+      setPersonName,
+    }),
+    [sourceKind, mode, setMode, realGate, source, state, dataset, latest, preview, date, names, setPersonName],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

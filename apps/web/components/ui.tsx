@@ -67,6 +67,7 @@ import {
   type KeyboardEvent as RKeyboardEvent,
   type PointerEvent as RPointerEvent,
   type ReactNode,
+  type Ref,
   type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
@@ -575,7 +576,7 @@ export function Field({ label, hint, htmlFor, children, className = '' }: { labe
   );
 }
 
-export function Input({ className = '', ...props }: InputHTMLAttributes<HTMLInputElement>) {
+export function Input({ className = '', ...props }: InputHTMLAttributes<HTMLInputElement> & { ref?: Ref<HTMLInputElement> }) {
   return <input className={cx('input', className)} {...props} />;
 }
 

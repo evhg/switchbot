@@ -14,8 +14,17 @@ major_version = 17
 
 [auth]
 enabled = true
-# The PWA signs in with email magic links; only household_members rows grant data access.
-enable_signup = true
+# The PWA signs in with an email code / magic link (shouldCreateUser = false); only household_members rows grant
+# data access, and accounts are bound with a one-time household code (migration 0005). Public sign-ups are off:
+# the owner invites both addresses. The hosted project is configured the same way in the dashboard (see
+# docs/BACKEND.md, "Household and sign-in"); the CLI does not push these settings.
+enable_signup = false
+site_url = "https://sleep-lab-lac.vercel.app"
+additional_redirect_urls = [
+  "https://sleep-lab-lac.vercel.app/**",
+  "https://sleep-lab-*-evhg.vercel.app/**",
+  "http://localhost:3000/**",
+]
 
 [edge_runtime]
 enabled = true

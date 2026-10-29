@@ -1,0 +1,32 @@
+/* Sign-in and onboarding (docs/DESIGN.md v2): one reading column, one large line, grouped lists, no boxes in boxes. */
+
+.col { max-width: 520px; margin-inline: auto; padding-top: var(--sp-6); }
+@media (min-width: 1024px) { .col { margin-inline: 0; padding-top: var(--sp-10); } }
+.wide { max-width: var(--measure); }
+
+.header { margin-bottom: var(--sp-8); }
+.header :global(.lede) { font-size: var(--t-body); color: var(--text-2); max-width: var(--measure-text); }
+
+.form { display: grid; gap: var(--sp-5); }
+.code { font-size: 28px; font-weight: 300; letter-spacing: 0.32em; text-align: center; height: 64px; }
+.actions { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; }
+.err { color: var(--signal); font-size: var(--t-sec); line-height: 1.45; }
+.note { font-size: var(--t-sec); color: var(--text-2); line-height: 1.5; max-width: var(--measure-text); }
+.after { margin-top: var(--sp-8); }
+.who { font-weight: 560; color: var(--text); overflow-wrap: anywhere; }
+
+/* Onboarding steps: a numbered list group with an honest state per step. */
+.steps { list-style: none; margin: 0; padding: 0; }
+.step { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: var(--sp-3) var(--sp-4); padding: var(--sp-4) var(--sp-5); }
+.step + .step::before { content: ''; position: absolute; top: 0; left: var(--sp-5); right: 0; height: 1px; background: var(--hairline); }
+.n { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--hairline-2); display: grid; place-items: center; font-size: var(--t-sec); color: var(--text-2); }
+.step[data-done] .n { background: var(--text); border-color: var(--text); color: var(--bg); }
+:global(:root[data-theme='night']) .step[data-done] .n { background: transparent; color: var(--text); }
+.stepT { display: grid; gap: 4px; min-width: 0; }
+.stepT b { font-weight: 560; font-size: var(--t-body); line-height: 1.35; }
+.stepT p { font-size: var(--t-sec); color: var(--text-2); line-height: 1.5; margin: 0; }
+.stepT a { color: var(--text); font-weight: 560; text-decoration: underline; text-decoration-color: var(--hairline-2); text-underline-offset: 3px; }
+.state { font-size: var(--t-sec); color: var(--muted); }
+.step[data-done] .state { color: var(--text-2); }
+
+.lead { font-size: var(--t-num); font-weight: 300; letter-spacing: -0.02em; line-height: 1.1; margin: 0 0 var(--sp-3); }

@@ -1,5 +1,5 @@
 // ICT (UTC+7, no DST) date helpers. A night is keyed by its wake-up date.
-import type { Ms } from '../../../packages/core/src/index.ts';
+import type { Ms } from '../../../packages/core/src/types.ts';
 
 export const MIN = 60_000;
 export const HOUR = 60 * MIN;

@@ -1,19 +1,14 @@
 // Temperature-curve controller. Called by pg_cron every 5 min, around the clock:
 // inside the night window, night row + curve + last command + recent readings → decideAcCommand → SwitchBot IR → log;
 // outside it (or with the night disabled), only an "ensure off" when the assumed state is still ON.
-// DRY_RUN=true (the default until the remote is verified) logs commands without sending them.
-import {
-  type AcCommand,
-  type AcState,
-  DEFAULT_REMOTE,
-  decideAcCommand,
-  evaluateLanding,
-  offCommand,
-  type RemoteProfile,
-  toSwitchBotCommand,
-} from '../../../packages/core/src/index.ts';
+// DRY_RUN (default true until the remote is verified; only an explicit false/0/no/off turns it off) logs commands
+// without sending them.
+import { decideAcCommand, evaluateLanding, offCommand } from '../../../packages/core/src/control/controller.ts';
+import { DEFAULT_REMOTE, type RemoteProfile } from '../../../packages/core/src/control/remote.ts';
+import { toSwitchBotCommand } from '../../../packages/core/src/switchbot/ac.ts';
+import type { AcCommand, AcState } from '../../../packages/core/src/types.ts';
 import { requireCron } from '../_shared/auth.ts';
-import { env, envFlag } from '../_shared/env.ts';
+import { env, envFlagSafe } from '../_shared/env.ts';
 import { json, readJson, serve } from '../_shared/http.ts';
 import { ensureNight, loadCurve, loadRoom } from '../_shared/load.ts';
 import { type AcCommandRow, commandToRow, eventToRow, rowToCommand } from '../_shared/rows.ts';
@@ -34,12 +29,14 @@ interface AcStateRow {
 type Db = ReturnType<typeof serviceClient>;
 
 serve(async (req) => {
-  requireCron(req);
-  const body = await readJson(req);
   const db = serviceClient();
+  await requireCron(req, db);
+  const body = await readJson(req);
   const acId = env('AC_DEVICE_ID');
   const meterId = env('METER_DEVICE_ID');
-  const dryRun = envFlag('DRY_RUN', true) || body.dryRun === true;
+  // Fail safe: only an explicit DRY_RUN=false|0|no|off sends IR commands; unset or anything else is a dry run.
+  // A request can force a dry run ({"dryRun":true}) but never force a live one.
+  const dryRun = envFlagSafe('DRY_RUN') || body.dryRun === true;
   const now = typeof body.now === 'number' ? body.now : Date.now();
 
   const night = await ensureNight(db, nightDateFor(now));

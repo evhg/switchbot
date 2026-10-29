@@ -1,5 +1,6 @@
 // Loads core-shaped data (curves, nights, room and body series) from Postgres.
-import { DEFAULT_CURVE, type Night, type PersonNight, type RoomReading, type TemperatureCurve } from '../../../packages/core/src/index.ts';
+import { DEFAULT_CURVE } from '../../../packages/core/src/curve.ts';
+import type { Night, PersonNight, RoomReading, TemperatureCurve } from '../../../packages/core/src/types.ts';
 import { optEnv } from './env.ts';
 import {
   bucketToReading,

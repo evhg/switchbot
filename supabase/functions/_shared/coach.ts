@@ -2,7 +2,7 @@
 // Raw HTTP (no SDK dependency in Edge Functions) to POST /v1/messages with structured output
 // (output_config.format = json_schema). The numbers always come from buildRuleReport; Claude only rewords,
 // and any sentence carrying a number not present in the facts is dropped.
-import type { NightReport, Person } from '../../../packages/core/src/index.ts';
+import type { NightReport, Person } from '../../../packages/core/src/types.ts';
 
 export const COACH_MODEL = 'claude-opus-5-5';
 export const ANTHROPIC_VERSION = '2026-10-21';

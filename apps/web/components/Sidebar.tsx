@@ -79,7 +79,7 @@ function LiveFooter() {
       {/* The time is only known in the browser (never prerendered: a build-time clock caused hydration error #418). */}
       <Link href={systemHref('data')} prefetch={false} className="side-src cap" title="Data & devices">
         <i className={`dot ${sourceKind === 'sim' ? '' : 'on'}`} aria-hidden />
-        {sourceKind === 'sim' ? 'Simulated data' : 'Live data'}
+        {sourceKind === 'sim' ? 'Simulated data' : 'Real data'}
         {reading ? ` · ${hm(reading.ts)}` : ''}
       </Link>
     </div>

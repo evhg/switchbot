@@ -1,20 +1,6 @@
 // Row shapes of supabase/migrations/0001_init.sql and mappers to/from the core types.
 // Runtime-neutral (no Deno globals): scripts/seed-supabase.ts imports it from Node too.
-import type {
-  AcCommand,
-  AcState,
-  CurvePhase,
-  HrSample,
-  HrvSample,
-  Ms,
-  OutdoorReading,
-  RoomEvent,
-  RoomReading,
-  SleepSession,
-  Spo2Sample,
-  StageSegment,
-  TemperatureCurve,
-} from '../../../packages/core/src/index.ts';
+import type { AcCommand, AcState, CurvePhase, HrSample, HrvSample, Ms, OutdoorReading, RoomEvent, RoomReading, SleepSession, Spo2Sample, StageSegment, TemperatureCurve } from '../../../packages/core/src/types.ts';
 
 const iso = (ms: Ms) => new Date(ms).toISOString();
 const ms = (s: string) => Date.parse(s);

@@ -1,5 +1,5 @@
 // SwitchBot client whose daily call counter is shared across invocations via api_quota.
-import { SwitchBotClient, SwitchBotError } from '../../../packages/core/src/index.ts';
+import { SwitchBotClient, SwitchBotError } from '../../../packages/core/src/switchbot/client.ts';
 import { env, envNumber } from './env.ts';
 import type { Db } from './supabase.ts';
 import { utcDay } from './time.ts';

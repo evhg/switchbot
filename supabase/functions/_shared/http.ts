@@ -36,7 +36,14 @@ export function serve(fn: (req: Request) => Promise<Response>): void {
     try {
       return await fn(req);
     } catch (e) {
-      if (e instanceof HttpError) return json({ error: e.message }, e.status);
+      if (e instanceof HttpError) {
+        const missing = (e as { missing?: unknown }).missing;
+        if (typeof missing === 'string') {
+          console.warn(`not configured: missing secret ${missing}`);
+          return json({ error: e.message, missing }, e.status);
+        }
+        return json({ error: e.message }, e.status);
+      }
       console.error(e);
       return json({ error: e instanceof Error ? e.message : String(e) }, 500);
     }

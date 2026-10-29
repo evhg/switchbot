@@ -1,6 +1,7 @@
 // Read-only Supabase source. Columns follow supabase/migrations/0001_init.sql (+ 0003 health_vitals_daily); RLS only lets signed-in
 // household members read, so the anon key alone returns nothing (see supabaseSignIn). The row → type
-// mapping is isolated in the to* functions below so a migration rename is a one-line fix here.
+// mapping is isolated in the to* functions below so a migration rename is a one-line fix here. Sign-in state lives in
+// lib/auth.tsx; this file only exposes the client and the auth calls.
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { AcCommand, AcMode, FanSpeed, Night, Person, PersonNight, RoomEvent, RoomEventKind, RoomReading, SleepSession, StageSegment, TagKey } from '@sleep-lab/core';
 import { addDays, DAY, HOUR, ictDate, ictMidnight } from '../format.ts';
@@ -64,12 +65,97 @@ async function pageAll(q: () => { range(a: number, b: number): PromiseLike<{ dat
 }
 
 let client: SupabaseClient | null = null;
-const db = () => (client ??= createClient(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '', process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ''));
+/**
+ * The one browser client. The session (Supabase Auth, email one-time code or magic link) persists in this browser
+ * and refreshes itself; RLS then lets household members read. detectSessionInUrl picks up a magic-link redirect.
+ */
+export function supabaseClient(): SupabaseClient {
+  return (client ??= createClient(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '', process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '', {
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, storageKey: 'sleeplab.auth' },
+  }));
+}
+const db = supabaseClient;
 
-/** Magic-link sign-in; the session persists in this browser so RLS lets the household read. */
-export async function supabaseSignIn(email: string): Promise<string | null> {
-  const { error } = await db().auth.signInWithOtp({ email, options: { emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined } });
-  return error ? error.message : null;
+/**
+ * Step 1 of sign-in: email a one-time code (and a magic link, depending on the project's email template).
+ * shouldCreateUser is false: only invited addresses can sign in, so a stranger can't create an account here.
+ */
+export async function supabaseSignIn(email: string, redirectPath = '/signin'): Promise<string | null> {
+  if (!supabaseConfigured()) return 'Supabase is not configured.';
+  const emailRedirectTo = typeof window !== 'undefined' ? `${window.location.origin}${redirectPath}` : undefined;
+  const { error } = await db().auth.signInWithOtp({ email: email.trim(), options: { shouldCreateUser: false, emailRedirectTo } });
+  return error ? friendlyAuthError(error.message) : null;
+}
+
+/** Step 2: the 6-digit code from the email. */
+export async function supabaseVerifyCode(email: string, code: string): Promise<string | null> {
+  if (!supabaseConfigured()) return 'Supabase is not configured.';
+  const { error } = await db().auth.verifyOtp({ email: email.trim(), token: code.replace(/\s+/g, ''), type: 'email' });
+  return error ? friendlyAuthError(error.message) : null;
+}
+
+export async function supabaseSignOut(): Promise<void> {
+  if (!supabaseConfigured()) return;
+  await db().auth.signOut({ scope: 'local' });
+}
+
+function friendlyAuthError(msg: string): string {
+  if (/signups? not allowed|user not found|otp_disabled/i.test(msg)) return 'This email isn’t on the household list. Ask the owner to invite it.';
+  if (/expired|invalid/i.test(msg)) return 'That code has expired or doesn’t match. Request a new one.';
+  if (/rate|security purposes|too many/i.test(msg)) return 'Too many tries. Wait a minute, then request a new code.';
+  return msg;
+}
+
+/** What a signed-in user can see: membership (RLS hides other rows) and whether any real data has arrived. */
+export interface BackendProbe {
+  member: boolean;
+  personId: string | null;
+  role: string | null;
+  /** Readings from a real sensor (source other than 'sim'). */
+  realReadings: number;
+  /** Google Health payloads archived (the seed never writes these). */
+  healthRows: number;
+  /** Any nights at all (simulated seed included). */
+  nights: number;
+  devices: { id: string; kind: string; name: string }[];
+}
+
+export async function probeBackend(userId: string): Promise<BackendProbe> {
+  const c = db();
+  const head = { count: 'exact' as const, head: true };
+  const [m, rr, hr, ni, dv] = await Promise.all([
+    c.from('household_members').select('person_id,role').eq('user_id', userId).maybeSingle(),
+    c.from('readings').select('ts', head).neq('source', 'sim'),
+    c.from('raw_health').select('id', head),
+    c.from('nights').select('date', head),
+    c.from('devices').select('device_id,kind,name'),
+  ]);
+  if (m.error) throw new Error(m.error.message);
+  const row = m.data as Row | null;
+  return {
+    member: Boolean(row),
+    personId: row ? (typeof row.person_id === 'string' ? row.person_id : null) : null,
+    role: row ? str(row.role) : null,
+    realReadings: rr.count ?? 0,
+    healthRows: hr.count ?? 0,
+    nights: ni.count ?? 0,
+    devices: ((dv.data ?? []) as Row[]).map((d) => ({ id: str(d.device_id), kind: str(d.kind), name: str(d.name) })),
+  };
+}
+
+/**
+ * Binds the signed-in account to its person with a one-time household code (migration 0005: the owner creates it
+ * with private.create_household_claim in the SQL editor). Returns an error message, or null on success.
+ */
+export async function claimHousehold(code: string): Promise<string | null> {
+  if (!supabaseConfigured()) return 'Supabase is not configured.';
+  const clean = code.replace(/[^0-9a-z]/gi, '');
+  if (clean.length < 24) return 'The code has 24 characters (letters A–F and digits), e.g. 1A2B-3C4D-….';
+  const { error } = await db().rpc('claim_household', { p_code: clean });
+  if (!error) return null;
+  if (/invalid or expired/i.test(error.message)) return 'That code doesn’t match, was already used, or has expired. Ask the owner for a new one.';
+  if (/already linked/i.test(error.message)) return 'This person is already linked to another account.';
+  return error.message;
 }
 
 /** Stores this browser's push subscription for the signed-in member (RPC checks household membership). */
@@ -85,6 +171,13 @@ export async function supabaseUserEmail(): Promise<string | null> {
   if (!supabaseConfigured()) return null;
   const { data } = await db().auth.getSession();
   return data.session?.user.email ?? null;
+}
+
+/** Edge Functions base URL (NEXT_PUBLIC_FUNCTIONS_URL overrides, e.g. behind a custom domain). */
+export function functionsUrl(): string {
+  const o = process.env.NEXT_PUBLIC_FUNCTIONS_URL;
+  if (o) return o.replace(/\/$/, '');
+  return `${(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/$/, '')}/functions/v1`;
 }
 
 /** First finite number under any of `keys`, depth-first (Google daily payloads are nested; mirrors the backend's findNumber). */
@@ -175,6 +268,12 @@ export function createSupabaseSource(days = 90): DataSource {
     const nightsRes = await db().from('nights').select('*').gte('date', fromDate).order('date');
     if (nightsRes.error) throw new Error(nightsRes.error.message);
     const nightRows = (nightsRes.data ?? []) as Row[];
+    // Signed in, but nothing has arrived yet: an empty dataset (the shell shows the onboarding state instead of charts).
+    if (!nightRows.length) {
+      const { data: ppl } = await db().from('people').select('id,name,color_key').order('id');
+      const people: Person[] = ((ppl ?? []) as Row[]).map((r) => ({ id: str(r.id), name: str(r.name, str(r.id)), colorKey: str(r.color_key, 'personA') }));
+      return { source: 'supabase', people, nights: [], room: [], person: {}, generatedAt: now, computeMs: 0, clipTs: now + DAY };
+    }
     const from = ictMidnight(fromDate) - 6 * HOUR;
     onProgress?.('Loading room readings…');
     meter ??= await meterDeviceId();

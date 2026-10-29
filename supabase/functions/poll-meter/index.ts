@@ -1,5 +1,6 @@
 // Minute poll of the Meter Pro CO2 (backstop for the change-based webhook). Called by pg_cron.
-import { parseMeterStatus, SwitchBotError } from '../../../packages/core/src/index.ts';
+import { SwitchBotError } from '../../../packages/core/src/switchbot/client.ts';
+import { parseMeterStatus } from '../../../packages/core/src/switchbot/parse.ts';
 import { requireCron } from '../_shared/auth.ts';
 import { env, envNumber } from '../_shared/env.ts';
 import { json, serve } from '../_shared/http.ts';
@@ -9,8 +10,8 @@ import { errorStatus, switchBotSession } from '../_shared/switchbot.ts';
 import { floorMinute, iso } from '../_shared/time.ts';
 
 serve(async (req) => {
-  requireCron(req);
   const db = serviceClient();
+  await requireCron(req, db);
   const deviceId = env('METER_DEVICE_ID');
   const now = Date.now();
 

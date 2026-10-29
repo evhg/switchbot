@@ -2,14 +2,10 @@
 // Claude reword it (grounded in the computed numbers; rules on any failure), store it in reports and send Web Push.
 // Body: {date?: 'YYYY-MM-DD', push?: boolean, coach?: boolean} for an explicit run, or {auto: true} from pg_cron
 // (every 15 min, 06:00-14:45 ICT), where shouldRun() decides whether anything is due.
-import {
-  buildRuleReport,
-  DEFAULT_PEOPLE,
-  detectEvents,
-  type Night,
-  type NightReport,
-  type Person,
-} from '../../../packages/core/src/index.ts';
+import { detectEvents } from '../../../packages/core/src/metrics/events.ts';
+import { buildRuleReport } from '../../../packages/core/src/metrics/report.ts';
+import { DEFAULT_PEOPLE } from '../../../packages/core/src/sim/people.ts';
+import type { Night, NightReport, Person } from '../../../packages/core/src/types.ts';
 import { requireCronOrMember } from '../_shared/auth.ts';
 import { applyCoach, coachFacts, COACH_MODEL, requestCoachText } from '../_shared/coach.ts';
 import { env, optEnv } from '../_shared/env.ts';

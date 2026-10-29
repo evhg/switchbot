@@ -5,19 +5,9 @@
 // daily resting HR and daily HRV also land in health_vitals_daily for the Today dashboard.
 // Body: {mode?: 'full' | 'queue', personId?, hours?, sleepDays?}. Called by pg_cron, by the webhook, or by a
 // household member ("sync now").
-import {
-  GoogleHealthClient,
-  GoogleHealthError,
-  GoogleOAuthError,
-  type ListDataPointsOptions,
-  parseHeartRate,
-  parseHrv,
-  parseSleep,
-  parseSpo2,
-  refreshAccessToken,
-  intervalFilter,
-  sampleTimeFilter,
-} from '../../../packages/core/src/index.ts';
+import { GoogleHealthClient, GoogleHealthError, type ListDataPointsOptions, intervalFilter, sampleTimeFilter } from '../../../packages/core/src/health/client.ts';
+import { GoogleOAuthError, refreshAccessToken } from '../../../packages/core/src/health/oauth.ts';
+import { parseHeartRate, parseHrv, parseSleep, parseSpo2 } from '../../../packages/core/src/health/parse.ts';
 import { requireCronOrMember } from '../_shared/auth.ts';
 import { env } from '../_shared/env.ts';
 import { DAILY_TYPES, dailyRows, dailyVitalsRows, rawRows, SAMPLE_TYPES, sessionEndTime, stepsVitalsRows } from '../_shared/health.ts';

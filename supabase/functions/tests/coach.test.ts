@@ -1,4 +1,7 @@
-import { buildRuleReport, DEFAULT_CURVE, DEFAULT_PEOPLE, simulateNights } from '../../../packages/core/src/index.ts';
+import { DEFAULT_CURVE } from '../../../packages/core/src/curve.ts';
+import { buildRuleReport } from '../../../packages/core/src/metrics/report.ts';
+import { DEFAULT_PEOPLE } from '../../../packages/core/src/sim/people.ts';
+import { simulateNights } from '../../../packages/core/src/sim/simulate.ts';
 import { ANTHROPIC_VERSION, applyCoach, COACH_MODEL, coachFacts, requestCoachText, ungroundedNumbers } from '../_shared/coach.ts';
 
 function assert(cond: unknown, msg: string): asserts cond {

@@ -107,6 +107,9 @@
 .topbar-t { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; white-space: nowrap; overflow: hidden; }
 .topbar-t b { font-size: var(--t-body); font-weight: 600; }
 .topbar-t span { font-size: var(--t-sec); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; }
+.topbar-src { flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 6px; font-size: var(--t-cap); color: var(--text-2); border-radius: var(--r-s); text-decoration: none; }
+.topbar-src::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+.topbar-src:hover { color: var(--text); }
 .topbar-back { display: inline-flex; align-items: center; gap: 2px; min-height: 44px; margin-left: -8px; padding: 0 8px 0 2px; font-size: var(--t-body); font-weight: 500; color: var(--text); border-radius: var(--r-s); }
 .topbar-progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; pointer-events: none; }
 .topbar-progress i { display: block; height: 100%; background: var(--text-2); transform: scaleX(0); transform-origin: left; }

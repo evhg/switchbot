@@ -6,17 +6,20 @@
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
+import { useRouter } from 'next/navigation';
 import { DEFAULT_PEOPLE } from '@sleep-lab/core';
-import { MAX_NAME_LENGTH, useData, useLive } from '@/lib/data/context.tsx';
+import { MAX_NAME_LENGTH, useData, useLive, type DataMode } from '@/lib/data/context.tsx';
 import { SIM_NIGHTS, SIM_SEED } from '@/lib/data/sim.ts';
-import { supabaseConfigured, supabaseSignIn, supabaseUserEmail } from '@/lib/data/supabase.ts';
+import { hasRealData, useAuth } from '@/lib/auth.tsx';
+import { functionsUrl, supabaseClient, supabaseConfigured, supabaseUserEmail } from '@/lib/data/supabase.ts';
 import { usePlannedCurve } from '@/lib/curve-store.ts';
 import { dayLabel, fmt, hm, ictDate, MIN, shortDate } from '@/lib/format.ts';
 import { enablePush, pushSupported } from '@/lib/push.ts';
 import { isNightHour, useTheme, type ResolvedTheme, type ThemeMode } from '@/lib/theme.tsx';
+import { NotMember, OnboardingSteps } from '../account/Onboarding.tsx';
 import { CurveEditor } from '../CurveEditor.tsx';
 import { withViewTransition } from '../motion.tsx';
-import { useChrome, type SystemSlug } from '../nav.tsx';
+import { systemHref, useChrome, type SystemSlug } from '../nav.tsx';
 import { Button, Chip, Chips, Field, Group, Input, PageHeader, PersonField, Readout, Readouts, Row, Segmented, Skeleton, Status, Switch, ThemeThumbs } from '../ui.tsx';
 import {
   CAMERA_LATER,
@@ -214,9 +217,48 @@ function Appearance() {
   );
 }
 
+/** General › Account: who is signed in, and sign out (only when real data is configured on this deployment). */
+function Account() {
+  const auth = useAuth();
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  if (!auth.configured) return null;
+  if (auth.status !== 'signed-in')
+    return (
+      <Group label="Account" footer="Signing in is only needed for real data. The simulator works without an account.">
+        <Row title="Not signed in" value={auth.status === 'loading' ? <Skel /> : undefined} href={auth.status === 'loading' ? undefined : '/signin?next=/settings/general'} />
+      </Group>
+    );
+  const p = auth.probe;
+  return (
+    <Group
+      label="Account"
+      footer={auth.settled && !p?.member ? 'This account isn’t in the household yet, so it can’t read any data.' : 'Signing out only affects this device. The app falls back to the simulator.'}
+    >
+      <Row
+        title={<span style={{ overflowWrap: 'anywhere' }}>{auth.email ?? 'Signed in'}</span>}
+        sub={!auth.settled ? 'Checking household…' : p?.member ? `Household ${p.role ?? 'member'}${p.personId ? ` · person ${p.personId}` : ''}` : 'Not in the household yet'}
+      />
+      <Row
+        title={busy ? 'Signing out…' : 'Sign out'}
+        chevron={false}
+        onClick={() => {
+          if (busy) return;
+          setBusy(true);
+          auth.signOut().finally(() => {
+            setBusy(false);
+            router.refresh();
+          });
+        }}
+      />
+    </Group>
+  );
+}
+
 export function GeneralPage() {
   const { dataset, latest, names, sourcePeople, setPersonName } = useData();
-  const people = (dataset ?? latest)?.people ?? DEFAULT_PEOPLE;
+  const shown = (dataset ?? latest)?.people;
+  const people = shown?.length ? shown : DEFAULT_PEOPLE;
   return (
     <SubPage title="General" lede="How the app looks and who it’s for.">
       <Group label="Appearance" footer={`Auto follows your device’s light or dark setting, then turns red on black from ${NIGHT_MODE_HOURS} so it won’t wake your eyes.`}>
@@ -246,6 +288,7 @@ export function GeneralPage() {
         <Row title="Time zone" value={TIME_ZONE} />
         <Row title="Night mode hours" value={NIGHT_MODE_HOURS} />
       </Group>
+      <Account />
     </SubPage>
   );
 }
@@ -266,7 +309,8 @@ export function MorningPage() {
   const [on, setOn] = useMorningReport();
   const [msg, setMsg] = useState<string | null>(null);
   const perm = usePermission();
-  const ready = supabaseConfigured();
+  const auth = useAuth();
+  const ready = supabaseConfigured() && auth.status === 'signed-in' && Boolean(auth.probe?.member);
   const toggle = (v: boolean) => {
     setOn(v);
     if (v) enablePush().then(setMsg, (e: unknown) => setMsg(e instanceof Error ? e.message : String(e)));
@@ -274,8 +318,8 @@ export function MorningPage() {
   };
   return (
     <SubPage title="Morning report" lede="A notification on this device when last night’s report is ready.">
-      <Group footer={msg ?? (ready ? 'iPhone allows notifications only in the Home Screen app.' : 'Delivery needs Supabase. See Diagnostics for the two settings.')}>
-        <Row title="Send the morning report" sub={ready ? undefined : 'Needs Supabase'} trailing={<Switch checked={on && ready} disabled={!ready} onChange={toggle} label={<span className="sr-only">Send the morning report</span>} />} />
+      <Group footer={msg ?? (ready ? 'iPhone allows notifications only in the Home Screen app.' : supabaseConfigured() ? 'Sign in as a household member to get the report on this device.' : 'Delivery needs Supabase. See Diagnostics for the two settings.')}>
+        <Row title="Send the morning report" sub={ready ? undefined : supabaseConfigured() ? 'Needs sign-in' : 'Needs Supabase'} trailing={<Switch checked={on && ready} disabled={!ready} onChange={toggle} label={<span className="sr-only">Send the morning report</span>} />} />
         <Row title="Notifications on this device" value={perm} />
       </Group>
     </SubPage>
@@ -286,7 +330,7 @@ export function MorningPage() {
 
 function Freshness() {
   const live = useLive(24);
-  const { sourceKind } = useData();
+  const { sourceKind, status } = useData();
   const lagSec = live.reading ? Math.max(0, (live.now - live.reading.ts) / 1000) : NaN;
   const ago = !Number.isFinite(lagSec) ? '' : lagSec < 90 ? `${fmt(lagSec)} s ago` : `${fmt(lagSec / 60)} min ago`;
   const gaps = useMemo(() => {
@@ -298,55 +342,98 @@ function Freshness() {
   }, [live.history]);
   return (
     <Group label="Freshness">
-      <Row title="Last room reading" sub={sourceKind === 'sim' ? 'Simulated' : undefined} value={live.reading ? <span className="num">{`${hm(live.reading.ts)} · ${ago}`}</span> : <Skel />} />
+      <Row title="Last room reading" sub={sourceKind === 'sim' ? 'Simulated' : undefined} value={live.reading ? <span className="num">{`${hm(live.reading.ts)} · ${ago}`}</span> : sourceKind === 'supabase' && status !== 'loading' ? 'None yet' : <Skel />} />
       <Row title="Gaps in the last 24 h" value={gaps === null ? '–' : gaps === 0 ? 'None' : `${gaps}`} />
       <Row title="Google Health last sync" value={<Status tone="off">Not linked</Status>} />
     </Group>
   );
 }
 
+const MODE_COPY: Record<DataMode, string> = {
+  auto: 'Real data once your sensors or bands have sent anything; until then, the simulator.',
+  supabase: 'Always your household’s data, even before anything has arrived.',
+  sim: 'Always the simulator, 90 generated nights. Nothing is read from the backend.',
+};
+
+/** The one switch between real and simulated nights. Real data is offered only when the deployment has Supabase. */
 function SourceBlock() {
-  const { status, sourceKind, setSourceKind } = useData();
-  const [email, setEmail] = useState('');
-  const [signInMsg, setSignInMsg] = useState<string | null>(null);
-  const ready = supabaseConfigured();
+  const { status, mode, setMode, realGate } = useData();
+  const auth = useAuth();
+  const router = useRouter();
+  if (!auth.configured)
+    return (
+      <Group label="Source" footer="Real data needs NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY on this deployment (see Diagnostics).">
+        <Row title="Simulated" sub="The only source on this deployment" value={<Status tone="sim">On</Status>} />
+      </Group>
+    );
+  const choose = (m: DataMode) => {
+    // Real data needs an account: go through sign-in first and come back with Real data selected.
+    if (m === 'supabase' && auth.status === 'signed-out') return router.push('/signin?next=/settings/data&mode=real');
+    setMode(m);
+  };
+  const gateMsg =
+    mode === 'sim'
+      ? null
+      : realGate === 'sign-in'
+        ? 'Sign in to see real data. Until then this device shows the simulator.'
+        : realGate === 'not-member'
+          ? 'Signed in, but not in the household yet, so the simulator is showing.'
+          : realGate === 'no-data' && mode === 'auto'
+            ? 'Nothing real has arrived yet, so the simulator is showing. It switches by itself.'
+            : null;
   return (
     <div className={s.block}>
       <h3 className="label group-label">Source</h3>
       <Segmented
-        value={sourceKind}
-        onChange={(k) => setSourceKind(k)}
+        value={mode}
+        onChange={choose}
         label="Data source"
         block
         options={[
-          { value: 'sim', label: 'Simulator' },
-          { value: 'supabase', label: ready ? 'Supabase' : 'Supabase · not set up' },
+          { value: 'auto', label: 'Automatic' },
+          { value: 'supabase', label: 'Real data' },
+          { value: 'sim', label: 'Simulated' },
         ]}
       />
-      {status === 'error' && <p className={cx('sec', s.alert)}>Loading failed. Switch back to the simulator, or sign in below.</p>}
-      {!ready && <p className="group-foot">Supabase isn’t set up yet. The two settings it needs are in Diagnostics.</p>}
-      {ready && sourceKind === 'supabase' && (
-        <form
-          className={s.inline}
-          onSubmit={(e) => {
-            e.preventDefault();
-            supabaseSignIn(email).then((err) => setSignInMsg(err ?? 'Check your email for the sign-in link.'));
-          }}
-        >
-          <Field label="Sign in with email" htmlFor="sb-email" hint={signInMsg ?? undefined}>
-            <div className={s.inlineRow}>
-              <Input id="sb-email" type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-              <Button type="submit">Email link</Button>
-            </div>
-          </Field>
-        </form>
+      <p className="group-foot">{MODE_COPY[mode]}</p>
+      {gateMsg && <p className={cx('sec', s.after)}>{gateMsg}</p>}
+      {status === 'error' && mode !== 'sim' && <p className={cx('sec', s.alert)}>Loading real data failed. Choose Simulated, or try again later.</p>}
+      {realGate === 'sign-in' && mode !== 'sim' && (
+        <div className={s.inline}>
+          <Button variant="primary" href={`/signin?next=/settings/data${mode === 'supabase' ? '&mode=real' : ''}`}>
+            Sign in
+          </Button>
+        </div>
       )}
     </div>
   );
 }
 
+/** Signed in, member, nothing real yet: what to set up next (the same list as the tabs' onboarding state). */
+function NextSteps() {
+  const auth = useAuth();
+  if (auth.status !== 'signed-in' || !auth.settled) return null;
+  if (!auth.probe?.member)
+    return (
+      <div className={s.block}>
+        <h3 className="label group-label">Household</h3>
+        <NotMember variant="inline" />
+      </div>
+    );
+  if (hasRealData(auth.probe) && auth.probe.healthRows > 0) return null;
+  return (
+    <div className={s.block}>
+      <h3 className="label group-label">Set up next</h3>
+      <OnboardingSteps probe={auth.probe} />
+    </div>
+  );
+}
+
 export function DataPage() {
-  const { dataset, sourceKind, source } = useData();
+  const { dataset, sourceKind, source, status } = useData();
+  const auth = useAuth();
+  const none = status === 'ready' && !!dataset && dataset.nights.length === 0;
+  const linked = (auth.probe?.devices ?? []).filter((d) => d.kind !== 'sim').length;
   const nc = nightCounts(dataset);
   const left = nc ? [nc.sick && `${nc.sick} sick`, nc.away && `${nc.away} away`, nc.gaps && `${nc.gaps} with sensor gaps`].filter(Boolean).join(' · ') : '';
   return (
@@ -354,17 +441,18 @@ export function DataPage() {
       {/* One answer to "is anything connected?" before any detail. */}
       <div className={cx('card', s.dataSummary)}>
         <Status tone={sourceKind === 'sim' ? 'sim' : 'on'}>
-          <b>{sourceKind === 'sim' ? 'Running on simulated data' : `Live data · ${source.label}`}</b>
+          <b>{sourceKind === 'sim' ? 'Showing simulated data' : `Showing real data · ${source.label}`}</b>
         </Status>
         <p className="sec">
-          0 of {DEVICES.length} devices linked.
+          {Math.min(linked, DEVICES.length)} of {DEVICES.length} devices linked.
           {sourceKind === 'sim' ? ` Every reading below comes from the simulator (seed ${SIM_SEED}), not from your bedroom.` : ''}
         </p>
       </div>
       <SourceBlock />
+      <NextSteps />
       <Group label="Nights" footer="Sick and away nights, and nights where a sensor or band dropped out, are left out of the Lab.">
-        <Row title="Nights" sub={nc ? `${shortDate(nc.first)} – ${shortDate(nc.last)}` : undefined} value={nc ? <span className="num">{nc.total}</span> : <Skel w={40} />} />
-        <Row title="With complete data" sub="The Lab uses only these" value={nc ? <span className="num">{nc.complete}</span> : <Skel w={40} />} />
+        <Row title="Nights" sub={nc ? `${shortDate(nc.first)} – ${shortDate(nc.last)}` : undefined} value={nc ? <span className="num">{nc.total}</span> : none ? <span className="num">0</span> : <Skel w={40} />} />
+        <Row title="With complete data" sub="The Lab uses only these" value={nc ? <span className="num">{nc.complete}</span> : none ? <span className="num">0</span> : <Skel w={40} />} />
         {nc && left && <Row title="Left out" value={left} />}
       </Group>
       <Freshness />
@@ -387,21 +475,101 @@ export function DataPage() {
 
 const HEALTH_READS = ['Sleep stages', 'Heart rate and resting heart rate', 'Heart-rate variability', 'Blood oxygen', 'Breathing rate', 'Skin temperature', 'Steps'];
 
+/**
+ * Google consent starts at the google-oauth Edge Function. The browser navigates there (a redirect chain can't carry
+ * an Authorization header), so the signed-in user's access token goes in the query; the function verifies it, looks
+ * up that user's household person and binds the callback's refresh token to it. The token is short-lived (1 h).
+ */
+export function googleConnectUrl(accessToken: string, email: string | null): string {
+  const q = new URLSearchParams({ access_token: accessToken });
+  if (email) q.set('login_hint', email);
+  return `${functionsUrl()}/google-oauth/start?${q.toString()}`;
+}
+
+/** people.google_health_user_id is set by the OAuth callback; members may read it. */
+function useHealthLinks(enabled: boolean): Record<string, boolean> | null {
+  const [links, setLinks] = useState<Record<string, boolean> | null>(null);
+  useEffect(() => {
+    if (!enabled) return setLinks(null);
+    let alive = true;
+    supabaseClient()
+      .from('people')
+      .select('id,google_health_user_id')
+      .then(({ data }) => {
+        if (!alive || !data) return;
+        setLinks(Object.fromEntries((data as { id: string; google_health_user_id: string | null }[]).map((r) => [r.id, Boolean(r.google_health_user_id)])));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [enabled]);
+  return links;
+}
+
 export function HealthPage() {
   const { dataset, latest } = useData();
-  const people = (dataset ?? latest)?.people ?? DEFAULT_PEOPLE;
+  const auth = useAuth();
+  const member = auth.status === 'signed-in' && Boolean(auth.probe?.member);
+  const me = member ? auth.probe?.personId ?? null : null;
+  const links = useHealthLinks(member);
+  const shown = (dataset ?? latest)?.people;
+  const people = shown?.length ? shown : DEFAULT_PEOPLE;
+  const token = auth.session?.access_token ?? null;
+  const connected = me ? Boolean(links?.[me]) : false;
+
+  let action: ReactNode;
+  let foot: ReactNode;
+  if (!auth.configured) {
+    action = (
+      <Button variant="primary" disabled>
+        Connect Google Health
+      </Button>
+    );
+    foot = 'Needs the Supabase backend on this deployment. Until then the bands below are simulated.';
+  } else if (auth.status !== 'signed-in') {
+    action = (
+      <Button variant="primary" href="/signin?next=/settings/health">
+        Sign in to connect
+      </Button>
+    );
+    foot = 'Each person signs in with their own account first, so the band is linked to the right person.';
+  } else if (!auth.settled) {
+    action = <Skel w={180} />;
+    foot = null;
+  } else if (!member || !me) {
+    action = (
+      <Button variant="primary" disabled>
+        Connect Google Health
+      </Button>
+    );
+    foot = !member ? 'This account isn’t in the household yet.' : 'This account isn’t linked to a person yet. Ask the owner to set person_id in household_members.';
+  } else {
+    action = (
+      <a className="btn primary" href={token ? googleConnectUrl(token, auth.email) : undefined} aria-disabled={!token || undefined} rel="noopener">
+        {connected ? 'Reconnect Google Health' : 'Connect Google Health'}
+      </a>
+    );
+    foot = `Read-only. Connects your band to ${people.find((p) => p.id === me)?.name ?? `person ${me}`}. The other person connects from their own phone.`;
+  }
+
   return (
     <SubPage title="Google Health" lede="Sleep and overnight vitals from both Fitbit Air bands.">
       <Group label="Bands">
-        {people.map((p) => (
-          <Row key={p.id} title={p.name} sub="Fitbit Air · last sync –" value={<Status>Not connected</Status>} />
-        ))}
+        {people.map((p) => {
+          const linked = links ? links[p.id] : undefined;
+          return (
+            <Row
+              key={p.id}
+              title={p.id === me && p.name !== 'You' ? `${p.name} (you)` : p.name}
+              sub="Fitbit Air"
+              value={linked === undefined ? <Status>Not connected</Status> : linked ? <Status tone="on">Connected</Status> : <Status>Not connected</Status>}
+            />
+          );
+        })}
       </Group>
       <div className={s.block}>
-        <Button variant="primary" disabled>
-          Connect Google Health
-        </Button>
-        <p className="group-foot">Read-only. Each person signs in with their own Google account once the backend is running.</p>
+        {action}
+        {foot && <p className="group-foot">{foot}</p>}
       </div>
       <Group label="What is read">
         {HEALTH_READS.map((x) => (
@@ -547,7 +715,7 @@ export function DiagnosticsPage() {
   return (
     <SubPage title="Diagnostics" lede="For troubleshooting. Nothing here needs changing day to day.">
       <Group label="Data">
-        <Row title="Source" value={sourceKind === 'sim' ? 'Simulator' : 'Supabase'} />
+        <Row title="Source" value={sourceKind === 'sim' ? 'Simulator' : 'Supabase (real data)'} />
         {sourceKind === 'sim' && <Row title="Seed / window" value={<span className="num">{`${SIM_SEED} / ${SIM_NIGHTS} nights`}</span>} />}
         <Row title="Metrics computed in" value={dataset ? <span className="num">{`${fmt(dataset.computeMs)} ms${dataset.cached ? ' · cached' : ''}`}</span> : <Skel />} />
         <Row title="App version" value={<span className="num">{`0.1.0 · built ${builtAt()}`}</span>} />

@@ -46,7 +46,7 @@ function PlanMini({ curve }: { curve: TemperatureCurve }) {
 const MODE: Record<string, string> = { auto: 'Auto', light: 'Light', dark: 'Dark', night: 'Night' };
 
 export function SystemRoot() {
-  const { dataset, latest, sourceKind } = useData();
+  const { dataset, latest, sourceKind, mode: dataMode } = useData();
   const { mode } = useTheme();
   const [curve] = usePlannedCurve();
   const pc = usePlanClock();
@@ -63,7 +63,7 @@ export function SystemRoot() {
     tags: tags.length ? (tags.length > 2 ? `${tags.length} tags` : tags.map(tagLabel).join(', ')) : 'None',
     general: `${MODE[mode]}${people ? ` · ${people.map((p) => p.name).join(', ')}` : ''}`,
     morning: morning ? 'On' : 'Off',
-    data: sourceKind === 'sim' ? 'Simulator' : 'Supabase',
+    data: sourceKind === 'sim' ? (dataMode === 'sim' ? 'Simulated' : 'Simulated for now') : 'Real data',
     health: 'Not connected',
     co2: drift === null ? <Skeleton w={52} h={14} r="text" inline /> : drift ? <span className="sig">{drift === 1 ? '1 alert' : `${drift} alerts`}</span> : 'No alerts',
     setup: `${setup.count} of ${setup.total}`,

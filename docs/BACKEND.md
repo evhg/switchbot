@@ -2,7 +2,7 @@
 
 Supabase is the always-on part of Sleep Lab. It stores everything in Postgres, runs `pg_cron` schedules, and hosts the Edge Functions that talk to SwitchBot, Google Health, Claude and Web Push. The PWA on Vercel only reads, under row-level security.
 
-Everything in this document can be deployed with the Supabase CLI. No project exists yet. Until the devices are unboxed (Phase 0), the database runs on simulated nights and the aircon controller runs in `DRY_RUN`.
+Everything in this document can be deployed with the Supabase CLI or the Supabase MCP tools. The live project is `sleep-lab` (ref `vaelokyqjdsxveqvdtbo`, `ap-southeast-1`); see [Deployment status](#deployment-status). Until the devices are unboxed (Phase 0), the database runs on simulated nights and the aircon controller runs in `DRY_RUN`.
 
 ## Layout
 
@@ -12,6 +12,9 @@ supabase/
   migrations/0001_init.sql    tables, views, RLS, grants, security-definer RPCs
   migrations/0002_cron.sql    pg_cron + pg_net schedules (secrets read from Vault)
   migrations/0003_health_vitals.sql  health_vitals_daily: steps, resting HR, daily HRV per person and ICT date
+  migrations/0004_security_hardening.sql  advisor fixes: definer RPCs moved to `private`, deny-all policies, FK indexes
+  migrations/0005_household_claims.sql    people rows 'a' (You) / 'b' (Erik) + one-time household claim codes
+  migrations/0006_household_claims_policy.sql  deny-all policy on private.household_claims (advisor 0008)
   functions/
     deno.json                 strict TS settings for `deno check` / `deno lint`
     .env.example              every secret the functions read
@@ -28,7 +31,7 @@ supabase/
 scripts/seed-supabase.ts      simulated nights → Supabase (Node)
 ```
 
-The functions import the shared core directly (`../../../packages/core/src/index.ts`). The Supabase CLI bundles static imports from outside `supabase/functions`, so no copy is needed. The only third-party import is `npm:@supabase/supabase-js@2`.
+The functions import the shared core by relative path, one module at a time (`../../../packages/core/src/switchbot/client.ts`, not the `index.ts` barrel), so each function bundles only the core modules it uses (the barrel pulls in the whole simulator). Imports that only carry types use `import type`, so `types.ts` never has to be shipped. The Supabase CLI bundles static imports from outside `supabase/functions`, so no copy is needed; with the MCP `deploy_edge_function` tool, send every file of the function's module graph under its repo path (entrypoint `supabase/functions/<name>/index.ts`), e.g. from `npx deno info --json supabase/functions/<name>/index.ts`. The only third-party import is `npm:@supabase/supabase-js@2`.
 
 ## Data model
 
@@ -37,7 +40,7 @@ All timestamps are `timestamptz` (UTC). A night is keyed by the **ICT wake-up da
 | Table | What | Written by |
 |---|---|---|
 | `people` | Person ids (`a`, `b`), names, `google_health_user_id` | seed / SQL / OAuth |
-| `household_members` | `auth.users` → person; membership gives read access | SQL (manual) |
+| `household_members` | `auth.users` → person; membership gives read access | `claim_household()` RPC (one-time code), or SQL |
 | `devices` | SwitchBot device ids (meter, AC, sim) | functions / seed |
 | `readings` | Room temp/RH/CO₂ per device per **minute**, PK `(device_id, ts)`, BRIN on `ts` | webhook, poll, seed |
 | `raw_switchbot` | Every webhook body unchanged, for measuring cadence and lag | webhook |
@@ -66,24 +69,48 @@ Views and functions:
 - RLS is on for every table.
 - An authenticated user who has a row in `household_members` can `select` everything except the OAuth tables and the sync queue. Push subscriptions are visible only to their owner.
 - Only the service role (Edge Functions, seed script) writes to tables.
-- The PWA writes through three security-definer RPCs that check membership:
+- A signed-in account that isn't a member yet can call exactly one thing: `claim_household(p_code)` (see [Household and sign-in](#household-and-sign-in)).
+- The PWA writes through three RPCs that check membership:
   - `set_night(p_date, p_lights_out, p_wake, p_tags, p_curve_id, p_ac_enabled)`
   - `register_push_subscription(endpoint, p256dh, auth, user_agent)`
   - `unregister_push_subscription(endpoint)`
+  - Since migration 0004 the `public` functions are `SECURITY INVOKER` wrappers; the security-definer bodies and the membership helpers (`private.is_household_member()`, `private.is_household_writer()`, used by every RLS policy) live in the `private` schema, which the Data API doesn't expose. `authenticated` has `USAGE` on `private` and `EXECUTE` on exactly those five functions.
+- `oauth_tokens`, `oauth_states` and `health_sync_jobs` have an explicit deny-all policy for `anon` and `authenticated`; only the service role (which bypasses RLS) touches them.
 - **Grants are explicit.** Supabase stops auto-granting Data API access to new tables from 2026-10-30, so the migration grants `select` to `authenticated`, `all` to `service_role` and nothing to `anon`.
 
 **Secrets at rest.**
 - Google refresh tokens live in **Supabase Vault** (`vault.secrets`, encrypted). `oauth_tokens` stores only the secret's id.
 - `store_google_refresh_token()` and `get_google_refresh_token()` are the only way in or out, and only `service_role` may execute them.
+- `cron_secret` and `project_url` (cron → Edge Function calls) are in Vault too; see [Cron authentication](#cron-authentication).
 - Everything else is in Edge Function secrets.
+
+### Cron authentication
+
+pg_cron calls the functions over HTTP with `pg_net` and must prove it's the scheduler, without any API key stored in SQL:
+
+1. Migration 0002 generates `cron_secret` in Vault once (`encode(extensions.gen_random_bytes(32), 'hex')`). Nobody ever needs to see it.
+2. `private.invoke_edge_function(name, body, timeout)` (security definer, not executable by API roles) reads `project_url` and `cron_secret` from `vault.decrypted_secrets` at call time and sends `x-cron-secret: <cron_secret>`. Nothing secret is stored in `cron.job`.
+3. Each scheduled function (`_shared/auth.ts` → `isCronRequest`) accepts the header when it matches:
+   - the `CRON_SECRET` Edge Function secret, if one is set (optional; useful for calling functions by hand), or
+   - Vault, via `public.verify_cron_secret(p_secret)`: a security-definer RPC executable **only by `service_role`** that compares SHA-256 digests and returns a boolean, so the secret never leaves the database. Positive results are cached per worker for 5 minutes, so the every-minute poll costs one extra query at most every 5 minutes.
+4. The project's own service key also works, as `Authorization: Bearer` or `apikey` (legacy service-role JWT or `sb_secret_…` from `SUPABASE_SECRET_KEYS`). `google-health-webhook` uses this to kick `google-health-sync`.
+
+The only per-project value is `project_url`, which Postgres can't discover by itself. It was created once in the live project with
+`select vault.create_secret('https://vaelokyqjdsxveqvdtbo.supabase.co', 'project_url');` (repeat that for any new project; until it exists the jobs only log a warning). To call a cron-protected function by hand, either set a `CRON_SECRET` function secret and send that, or use the service key.
+
+**Key migration.** Supabase retires the legacy JWT keys at the end of 2026. The functions prefer `SUPABASE_SERVICE_ROLE_KEY` while it exists and fall back to `SUPABASE_SECRET_KEYS.default`, and they accept either as a service credential, so switching keys needs no code change. `scripts/seed-supabase.ts` still takes the key in `SUPABASE_SERVICE_ROLE_KEY` (an `sb_secret_…` value works there).
+
+**Missing configuration.** A required secret that isn't set makes a function answer `503 {"error":"not configured","missing":"<NAME>"}` after authentication (never before it). The webhooks answer 404 (`switchbot-webhook`) or 401 (`google-health-webhook`) while their secret is unset, and `google-oauth/start` shows a "Not configured" page. `ac-curve` is a dry run unless `DRY_RUN` is explicitly `false`/`0`/`no`/`off`; an unset or unrecognised value keeps it dry, and a request can force a dry run but never a live one.
 
 ## Secrets
 
-Set them with `supabase secrets set NAME=value …` or `supabase secrets set --env-file supabase/functions/.env`. Never commit them. `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected automatically.
+Enter them in the dashboard under **Edge Functions → Secrets** (https://supabase.com/dashboard/project/vaelokyqjdsxveqvdtbo/functions/secrets): one row per name, exactly as spelled below. The CLI equivalent is `supabase secrets set NAME=value …` or `supabase secrets set --env-file supabase/functions/.env`. Never commit them. `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_SECRET_KEYS` are injected automatically. New secrets apply to the next invocation; no redeploy is needed.
+
+Until a function's required secrets are set it answers `503 {"error":"not configured","missing":"<NAME>"}` (after authentication), so nothing breaks while they're missing.
 
 | Secret | Used by | Notes |
 |---|---|---|
-| `CRON_SECRET` | all scheduled functions | Long random string. The same value goes into Vault as `cron_secret` |
+| `CRON_SECRET` | all scheduled functions | **Optional.** pg_cron is verified against Vault (see Cron authentication). Set it only to call functions by hand with a secret you know |
 | `SWITCHBOT_TOKEN`, `SWITCHBOT_SECRET` | poll-meter, ac-curve | App → Profile → Preferences → Developer Options |
 | `METER_DEVICE_ID` | poll-meter, ac-curve, nightly-report | Meter Pro CO2 `deviceId` (MAC without colons). Use `SIM-METER` in Phase 0 |
 | `AC_DEVICE_ID` | ac-curve | The IR remote's `deviceId` from `listDevices().infraredRemoteList` |
@@ -97,7 +124,7 @@ Set them with `supabase secrets set NAME=value …` or `supabase secrets set --e
 | `GOOGLE_HEALTH_WEBHOOK_SECRET` | google-health-webhook | The subscriber's `endpointAuthorization.secret` |
 | `GOOGLE_HEALTH_SIGNATURE` | google-health-webhook | `off` / `log` (default) / `enforce`. The ECDSA verifier is best effort |
 | `OAUTH_START_SECRET` | google-oauth | Guards `/google-oauth/start` |
-| `APP_URL` | nightly-report, google-oauth | The PWA origin, e.g. `https://sleep-lab.vercel.app` (push tap target) |
+| `APP_URL` | nightly-report, google-oauth | The PWA origin, for the live app `https://sleep-lab-lac.vercel.app` (push tap target) |
 | `ANTHROPIC_API_KEY` | nightly-report | Optional. Without it, reports are rule-only |
 | `ANTHROPIC_MODEL` | nightly-report | Default `claude-opus-5-5` |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | nightly-report | Base64url raw keys. The PWA uses the same public key as `applicationServerKey` |
@@ -115,12 +142,11 @@ npx deno eval "import('./supabase/functions/_shared/webpush.ts').then(async (m) 
    - In the Supabase dashboard, create a new project in the Singapore region (`ap-southeast-1`), the closest to Phuket.
    - Note the project ref.
    - Then run `npx supabase login` and `npx supabase link --project-ref <ref>`. The CLI isn't a repo dependency; `npx` fetches it.
-2. **Push the schema:** `npx supabase db push`. This applies `0001_init.sql`, `0002_cron.sql` and `0003_health_vitals.sql`.
-   - The cron jobs are created straight away. Until step 3 is done they only log a warning (`vault secrets project_url / cron_secret are not set`).
-3. **Vault secrets for cron.** In the dashboard SQL editor, run:
+2. **Push the schema:** `npx supabase db push`. This applies `0001_init.sql` to `0004_security_hardening.sql`.
+   - 0002 enables `pg_cron`, `pg_net` and `pgcrypto`, generates the `cron_secret` Vault secret and creates the jobs. Until step 3 is done they only log a warning (`vault secrets project_url / cron_secret are not set`).
+3. **Project URL for cron.** In the dashboard SQL editor, run once:
    ```sql
    select vault.create_secret('https://<ref>.supabase.co', 'project_url');
-   select vault.create_secret('<CRON_SECRET>', 'cron_secret');
    ```
 4. **Function secrets.**
    - Copy `supabase/functions/.env.example` to `supabase/functions/.env` and fill it in.
@@ -128,14 +154,8 @@ npx deno eval "import('./supabase/functions/_shared/webpush.ts').then(async (m) 
    - Then run `npx supabase secrets set --env-file supabase/functions/.env`.
 5. **Deploy the functions:** `npx supabase functions deploy`. `verify_jwt = false` comes from `config.toml`; each function checks its own secret.
    - Upgrading an existing project: run `npx supabase db push` first. `google-health-sync` writes `health_vitals_daily` (migration 0003), and without it the `steps` and `*:vitals` steps fail on every sync.
-6. **Household.** In Auth → Users, invite both email addresses; the PWA signs in with magic links. Then run:
-   ```sql
-   insert into people (id, name, color_key) values ('a', 'You', 'personA'), ('b', 'Erik', 'personB')
-     on conflict (id) do update set name = excluded.name;
-   insert into household_members (user_id, person_id, role)
-   select id, case email when '<email A>' then 'a' else 'b' end, 'owner' from auth.users;
-   ```
-7. **Seed simulated data (Phase 0):**
+6. **Household.** Migration 0005 creates the two person rows; then follow [Household and sign-in](#household-and-sign-in) (invite both addresses, create one claim code per person, each person enters theirs in the app).
+7. **Seed simulated data (Phase 0, optional; never on the live project once real data flows):**
    ```sh
    SUPABASE_URL=https://<ref>.supabase.co SUPABASE_SERVICE_ROLE_KEY=<service role key> \
      node --experimental-strip-types scripts/seed-supabase.ts --nights 60
@@ -150,6 +170,41 @@ npx deno eval "import('./supabase/functions/_shared/webpush.ts').then(async (m) 
    select id, status_code, content::text from net._http_response order by id desc limit 20;
    ```
    In Phase 0, `poll-meter` returns SwitchBot errors (there's no device) and `ac-curve` logs dry-run decisions against simulated readings only if the seed covers tonight. To pause polling, use `select cron.unschedule('sleeplab-poll-meter');`.
+
+## Household and sign-in
+
+The PWA (`/signin`) signs in with a 6-digit email code or the magic link in the same email, with `shouldCreateUser: false`, so only addresses that already exist in Auth can sign in. Data access comes only from a `household_members` row; a signed-in non-member sees "Almost there" and can read nothing (RLS).
+
+**Binding the two accounts (claim codes, migration 0005).** `people` already holds `a` = You and `b` = Erik.
+
+1. **Invite both addresses:** Dashboard → Authentication → Users → *Add user* → *Send invitation*.
+2. **Create one code per person** in the SQL editor (Dashboard → SQL Editor, which runs as `postgres`). Each call returns the code once; only its SHA-256 is stored:
+   ```sql
+   select private.create_household_claim('a', 'owner');   -- You
+   select private.create_household_claim('b', 'member');  -- Erik ('owner' also works; 'viewer' is read-only)
+   ```
+   Codes are 24 hex digits (shown as `XXXX-XXXX-…`, 96 random bits), single use, valid 7 days (third argument, e.g. `interval '1 day'`). Creating a new code for a person revokes their unused older ones; a person already linked to an account can't get a code.
+3. **Each person signs in** at `<app>/signin`, lands on "Almost there", enters their code under *Household code* → *Join the household*. `public.claim_household(p_code)` (SECURITY INVOKER wrapper of `private.claim_household`, `authenticated` only) inserts their `household_members` row and burns the code. Calling it again as a member just returns the existing row.
+
+Check or undo:
+```sql
+select person_id, role, created_at, expires_at, claimed_at, revoked_at from private.household_claims order by created_at desc;
+select m.person_id, m.role, u.email from household_members m join auth.users u on u.id = m.user_id;
+delete from household_members where person_id = 'b';   -- unlink, then issue a new code
+```
+The SQL alternative still works: `insert into household_members (user_id, person_id, role) select id, 'a', 'owner' from auth.users where email = '<email>';`.
+
+**Auth settings for the live project** (dashboard only; the MCP tools and the CLI's `config.toml` don't change hosted Auth settings. `config.toml` mirrors them for a local stack):
+
+| Where | Setting |
+|---|---|
+| Authentication → Sign In / Providers → *User Signups* | **Allow new users to sign up: off.** Invites still work. (Email provider stays on.) |
+| Authentication → URL Configuration → *Site URL* | `https://sleep-lab-lac.vercel.app` |
+| Authentication → URL Configuration → *Redirect URLs* | `https://sleep-lab-lac.vercel.app/**`, `https://sleep-lab-git-claude-determined-ride-59txro-evhg.vercel.app/**`, `https://sleep-lab-*-evhg.vercel.app/**` (all previews), `http://localhost:3000/**` |
+| Authentication → Emails → Templates → *Magic Link* | Add the code so the email works on another device, e.g. `<p>Your code: <strong>{{ .Token }}</strong></p>` next to the existing `{{ .ConfirmationURL }}` link |
+| Authentication → Emails → SMTP (optional) | The built-in sender is rate-limited (a few emails per hour) and meant for testing; add custom SMTP if codes stop arriving |
+
+**Vercel env** (project `sleep-lab`, all three environments; already set): `NEXT_PUBLIC_SUPABASE_URL=https://vaelokyqjdsxveqvdtbo.supabase.co` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` = the project's publishable key (`sb_publishable_…`, public by design; RLS protects the data). They take effect on the next deployment. Optional: `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (= `VAPID_PUBLIC_KEY`), `NEXT_PUBLIC_FUNCTIONS_URL`, `NEXT_PUBLIC_METER_DEVICE_ID`.
 
 ## Schedules (pg_cron runs in UTC; ICT = UTC+7)
 
@@ -166,9 +221,10 @@ npx deno eval "import('./supabase/functions/_shared/webpush.ts').then(async (m) 
 
 - **The report regenerates after late data** automatically (see `sleeplab-nightly-report`). To regenerate by hand, call `nightly-report` with `{"date": "YYYY-MM-DD"}` (no push unless `"push": true`). Owners and members can do it with their JWT for the last 7 days; `viewer` members are read-only everywhere (also in `set_night`). Scheduled callers use `x-cron-secret`.
 - **Dry run vs live.** Dry-run commands never touch `ac_state` (the live assumed state) and don't count against the live nightly cap; the dry-run controller follows its own newest dry-run row. Reports and the PWA hide failed sends, and hide dry-run rows on nights that have live commands.
-- **Each function can be run by hand:**
+- **Each function can be run by hand** with a `CRON_SECRET` function secret you set yourself, or with the service key:
   ```sh
   curl -X POST https://<ref>.supabase.co/functions/v1/ac-curve -H "x-cron-secret: $CRON_SECRET" -d '{"dryRun":true}'
+  curl -X POST https://<ref>.supabase.co/functions/v1/ac-curve -H "apikey: $SERVICE_KEY" -d '{"dryRun":true}'
   ```
 
 ## Unboxing day: switching to the real devices
@@ -190,11 +246,12 @@ Follow [SETUP.md](SETUP.md) for the hardware order (Hub Mini → Meter Pro CO2 �
    … npx deno eval "
    import { SwitchBotClient } from './packages/core/src/index.ts';
    const c = new SwitchBotClient({ token: Deno.env.get('SWITCHBOT_TOKEN')!, secret: Deno.env.get('SWITCHBOT_SECRET')! });
-   console.log(await c.setupWebhook('https://<ref>.supabase.co/functions/v1/switchbot-webhook/<WEBHOOK_SECRET>'));
+   console.log(await c.setupWebhook('https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/switchbot-webhook/<WEBHOOK_SECRET>'));
    console.log(await c.queryWebhook());"
    ```
    - The first delivery is a `TESTMAC` placeholder, which is ignored.
    - Real events show up in `raw_switchbot` and `readings` (source `webhook`).
+   - Set the `WEBHOOK_SECRET` function secret **before** registering (a long random string, e.g. `openssl rand -hex 24`); the URL's last path segment must equal it. While the secret is unset the function answers 404 to everything.
 3. **Aircon remote.**
    - If Smart Matching worked (all of temperature, mode and fan respond), the default `setAll` profile applies and nothing needs configuring.
    - If you fell back to learned buttons, store the ladder:
@@ -222,7 +279,10 @@ Follow [SETUP.md](SETUP.md) for the hardware order (Hub Mini → Meter Pro CO2 �
    - Enable the Google Health API.
    - Set the OAuth consent screen to **External** and publish it **"In production" (unverified)**. In Testing mode, refresh tokens die after 7 days.
    - Add the three `googlehealth.*.readonly` scopes.
-   - Create a Web OAuth client with the redirect URI `https://<ref>.supabase.co/functions/v1/google-oauth/callback`.
+   - Create a Web OAuth client with this exact authorized redirect URI (live project):
+     `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/google-oauth/callback`
+     (in general `https://<ref>.supabase.co/functions/v1/google-oauth/callback`, or `<PUBLIC_FUNCTIONS_URL>/google-oauth/callback`).
+   - Put its id and secret into the `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` function secrets.
 2. **Connect each person.** Each person opens `https://<ref>.supabase.co/functions/v1/google-oauth/start?person=a&key=<OAUTH_START_SECRET>` (then `person=b`) and clicks through the unverified-app warning once.
    - The callback stores the refresh token in Vault and records `healthUserId`.
    - It also queues a 14-day backfill, which the 10-minute queue job picks up.
@@ -293,8 +353,40 @@ With Docker available, `npx supabase start` followed by `npx supabase db reset` 
 
 ## Known gaps
 
-- The SQL migrations have only been reviewed by reading, not executed against Postgres. Run `supabase db reset` locally or check the first `db push` output.
+- Migrations 0001 and 0005 have run against Postgres 17 on the live project. 0002–0004 are written but were not yet applied when this was last updated; see [Deployment status](#deployment-status).
+- The real email-code / magic-link round trip hasn't been exercised end to end (only the refusal of an uninvited address against the live project, and the signed-in screens with a mocked session).
 - The Google Health filters for `daily-*` (`<type>.date >= "YYYY-MM-DD"`) and `respiratory-rate-sleep-summary` aren't confirmed. On a 400 the sync falls back to the newest page without a filter. `respRate` and `tempDeviationC` are read from the stored payloads by field name (`breathsPerMinute`, `nightlyTemperatureCelsius` − `baselineTemperatureCelsius`).
 - Webhook signature verification is best effort, so the default is `log`. The `Authorization` secret is always enforced.
 - `ac-curve` uses the night's scheduled lights-out and wake times (or the defaults). Detected in-bed times don't move the curve yet.
 - Edge Functions have a 2 s CPU limit. A 14-day Google backfill at 1 Hz heart rate parses tens of thousands of points in one invocation. If it hits the limit, call `google-health-sync` with smaller `hours` windows.
+
+## Deployment status
+
+Live project `sleep-lab` (ref `vaelokyqjdsxveqvdtbo`, region `ap-southeast-1`, URL `https://vaelokyqjdsxveqvdtbo.supabase.co`), as of 2026-10-29:
+
+| Item | State |
+|---|---|
+| `0001_init` | Applied |
+| `0005_household_claims`, `0006_household_claims_policy` | Applied (people `a` = You, `b` = Erik; claim codes). Independent of 0002–0004, so it was applied first; claim → membership → RLS verified in a rolled-back transaction |
+| `0002_cron`, `0003_health_vitals`, `0004_security_hardening` | **Pending.** The MCP `apply_migration` call for 0002 needs an interactive confirmation (its housekeeping job contains `delete` statements) that wasn't answered. Apply them in order with `apply_migration` (names = file names) or paste each file into the SQL editor |
+| Vault `project_url` | Created |
+| Vault `cron_secret` | Created by 0002 when it runs |
+| pg_cron jobs | None until 0002 runs; then the eight `sleeplab-*` jobs in [Schedules](#schedules-pg_cron-runs-in-utc-ict--utc7) |
+| Edge Functions | All 7 deployed with `verify_jwt = false`: `switchbot-webhook`, `poll-meter`, `ac-curve`, `google-health-sync`, `google-health-webhook`, `google-oauth`, `nightly-report`. They reject unauthenticated calls and answer "not configured" until their secrets exist; `ac-curve` stays in dry run unless `DRY_RUN=false` |
+| Function secrets | None set yet (see [Secrets](#secrets)) |
+| Auth settings | **Manual** (see [Household and sign-in](#household-and-sign-in)) |
+| Vercel env | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` set for production, preview and development |
+| Data | No readings, nights or simulated rows in the live database; the PWA shows the simulator until real data arrives (Automatic mode) |
+
+Until 0002 is applied, cron isn't scheduled and `x-cron-secret` requests are rejected (the `verify_cron_secret` RPC doesn't exist yet), so the functions only accept the service key.
+
+**Public endpoints of the live project**
+
+| What | URL |
+|---|---|
+| Google OAuth redirect URI (Google Cloud console) | `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/google-oauth/callback` |
+| Google OAuth start (per person) | `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/google-oauth/start?person=a&key=<OAUTH_START_SECRET>` |
+| SwitchBot webhook (register with `setupWebhook`) | `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/switchbot-webhook/<WEBHOOK_SECRET>` |
+| Google Health subscriber endpoint | `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/google-health-webhook` |
+
+**Known mismatch.** The PWA's "Connect Google Health" button opens `google-oauth/start?access_token=<user JWT>&login_hint=<email>`, but the deployed function only accepts `?person=…&key=<OAUTH_START_SECRET>`. Until `/start` also accepts a member's JWT (verify with `auth.getUser`, map to `household_members.person_id`, 403 otherwise), connect with the `key` URL above.

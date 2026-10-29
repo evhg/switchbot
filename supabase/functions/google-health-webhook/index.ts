@@ -2,16 +2,8 @@
 // header (GOOGLE_HEALTH_WEBHOOK_SECRET) and signs bodies with ECDSA P-256 (GOOGLE-HEALTH-API-SIGNATURE).
 // Verification POSTs get 200 (authorized) / 401; notifications get 204 at once, then sync jobs are queued
 // and google-health-sync is kicked in the background.
-import {
-  checkGoogleHealthAuthorization,
-  fetchGoogleHealthKeyset,
-  GOOGLE_HEALTH_SIGNATURE_HEADER,
-  isGoogleHealthVerification,
-  parseGoogleHealthNotifications,
-  type TinkKeyset,
-  verifyGoogleHealthSignature,
-} from '../../../packages/core/src/index.ts';
-import { env, functionsBaseUrl, optEnv } from '../_shared/env.ts';
+import { checkGoogleHealthAuthorization, fetchGoogleHealthKeyset, GOOGLE_HEALTH_SIGNATURE_HEADER, isGoogleHealthVerification, parseGoogleHealthNotifications, type TinkKeyset, verifyGoogleHealthSignature } from '../../../packages/core/src/health/signature.ts';
+import { functionsBaseUrl, optEnv, serviceKey } from '../_shared/env.ts';
 import { background, json, serve } from '../_shared/http.ts';
 import { serviceClient } from '../_shared/supabase.ts';
 
@@ -25,7 +17,12 @@ async function signatureOk(raw: string, header: string | null): Promise<boolean>
 serve(async (req) => {
   if (req.method !== 'POST') return json({ error: 'method not allowed' }, 405);
   const raw = await req.text();
-  if (!checkGoogleHealthAuthorization(req.headers.get('authorization'), env('GOOGLE_HEALTH_WEBHOOK_SECRET'))) {
+  const secret = optEnv('GOOGLE_HEALTH_WEBHOOK_SECRET');
+  if (!secret) {
+    console.warn('google-health-webhook: not configured (GOOGLE_HEALTH_WEBHOOK_SECRET is not set); rejecting');
+    return json({ error: 'unauthorized' }, 401);
+  }
+  if (!checkGoogleHealthAuthorization(req.headers.get('authorization'), secret)) {
     return json({ error: 'unauthorized' }, 401);
   }
   let body: unknown;
@@ -76,7 +73,8 @@ async function enqueue(body: unknown) {
   // Kick the queue now; pg_cron drains it every 10 min if this call fails.
   const res = await fetch(`${functionsBaseUrl()}/google-health-sync`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env('SUPABASE_SERVICE_ROLE_KEY')}` },
+    // `apikey` works for both the legacy service-role JWT and the new sb_secret_ keys (see _shared/auth.ts).
+    headers: { 'Content-Type': 'application/json', apikey: serviceKey() },
     body: JSON.stringify({ mode: 'queue' }),
   });
   await res.body?.cancel();
