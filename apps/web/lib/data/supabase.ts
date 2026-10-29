@@ -71,7 +71,17 @@ let client: SupabaseClient | null = null;
  */
 export function supabaseClient(): SupabaseClient {
   return (client ??= createClient(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '', process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '', {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, storageKey: 'sleeplab.auth' },
+    auth: {
+      // Stay signed in on the home-screen app: the session lives in localStorage and refreshes itself.
+      persistSession: true,
+      autoRefreshToken: true,
+      storage: typeof window !== 'undefined' ? window.localStorage : undefined,
+      storageKey: 'sleeplab.auth',
+      // Implicit flow: email links and admin-generated links (auth-admin) return #access_token, which works on any
+      // device (PKCE would need the verifier from the browser that asked). ?token_hash links go through supabaseVerifyLink.
+      flowType: 'implicit',
+      detectSessionInUrl: true,
+    },
   }));
 }
 const db = supabaseClient;
@@ -94,6 +104,40 @@ export async function supabaseVerifyCode(email: string, code: string): Promise<s
   return error ? friendlyAuthError(error.message) : null;
 }
 
+/** Email + password (set once from System › General › Account, or on the signed-in /signin page). */
+export async function supabaseSignInWithPassword(email: string, password: string): Promise<string | null> {
+  if (!supabaseConfigured()) return 'Supabase is not configured.';
+  const { error } = await db().auth.signInWithPassword({ email: email.trim(), password });
+  if (!error) return null;
+  if (/invalid login credentials/i.test(error.message)) return 'That email and password don’t match. If you haven’t set a password yet, sign in with an email code first.';
+  if (/email not confirmed/i.test(error.message)) return 'This address isn’t confirmed yet. Sign in once with an email code or link, then set a password.';
+  return friendlyAuthError(error.message);
+}
+
+export const MIN_PASSWORD = 8;
+
+/** Sets (or changes) the signed-in user's password. */
+export async function supabaseSetPassword(password: string): Promise<string | null> {
+  if (!supabaseConfigured()) return 'Supabase is not configured.';
+  if (password.length < MIN_PASSWORD) return `Use at least ${MIN_PASSWORD} characters.`;
+  const { error } = await db().auth.updateUser({ password });
+  if (!error) return null;
+  if (/same.*password|different from the old/i.test(error.message)) return 'That’s already your password.';
+  if (/weak|pwned|leaked/i.test(error.message)) return 'Supabase rejected that password as too weak. Try a longer one.';
+  if (/reauthentication|recent/i.test(error.message)) return 'For safety, sign in again (email code or link), then set the password.';
+  return friendlyAuthError(error.message);
+}
+
+/** Links of the form /signin?token_hash=…&type=magiclink (custom email templates / admin links). */
+export async function supabaseVerifyLink(tokenHash: string, type: string): Promise<string | null> {
+  if (!supabaseConfigured()) return 'Supabase is not configured.';
+  // Sign-in links only: a recovery/invite/email_change hash in someone else's link must not change this session.
+  if (type !== 'magiclink' && type !== 'email') return 'This link is not a sign-in link.';
+  const t = type as 'magiclink' | 'email';
+  const { error } = await db().auth.verifyOtp({ token_hash: tokenHash, type: t });
+  return error ? friendlyAuthError(error.message) : null;
+}
+
 export async function supabaseSignOut(): Promise<void> {
   if (!supabaseConfigured()) return;
   await db().auth.signOut({ scope: 'local' });
@@ -102,7 +146,8 @@ export async function supabaseSignOut(): Promise<void> {
 function friendlyAuthError(msg: string): string {
   if (/signups? not allowed|user not found|otp_disabled/i.test(msg)) return 'This email isn’t on the household list. Ask the owner to invite it.';
   if (/expired|invalid/i.test(msg)) return 'That code has expired or doesn’t match. Request a new one.';
-  if (/rate|security purposes|too many/i.test(msg)) return 'Too many tries. Wait a minute, then request a new code.';
+  if (/email rate limit|over_email_send_rate_limit/i.test(msg)) return 'The email limit for this hour is used up. Sign in with your password instead, or try a code again later.';
+  if (/rate|security purposes|too many/i.test(msg)) return 'Too many tries. Wait a minute, then try again.';
   return msg;
 }
 

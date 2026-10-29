@@ -38,6 +38,9 @@ deno_version = 2
 [functions.switchbot-webhook]
 verify_jwt = false
 
+[functions.switchbot-admin]
+verify_jwt = false
+
 [functions.google-health-webhook]
 verify_jwt = false
 
@@ -50,8 +53,15 @@ verify_jwt = false
 [functions.ac-curve]
 verify_jwt = false
 
+# iPhone Shortcuts presence events; authenticated by a per-person token (X-Presence-Token).
+[functions.presence]
+verify_jwt = false
+
 [functions.google-health-sync]
 verify_jwt = false
 
 [functions.nightly-report]
+verify_jwt = false
+
+[functions.auth-admin]
 verify_jwt = false
