@@ -1,5 +1,5 @@
 import type { AcCommand, AcState, FanSpeed, Ms, RoomReading, TemperatureCurve } from '../types.ts';
-import { phaseAt, targetAt } from '../curve.ts';
+import { phaseAt, resolveCurve, targetAt, usesSleepOnset } from '../curve.ts';
 import { remoteCommand, resolveQuiet, type RemoteProfile, type ResolvedQuiet } from './remote.ts';
 import { asleepFrom, carriedStepSuperseded, fanFor, quietSteps, recoverBias, setpointLimits, STEP_GRACE_MIN, stepDeadline, type QuietStep } from './quiet.ts';
 
@@ -34,6 +34,11 @@ export interface ControllerInput {
    * planned steps), so the nightly budget can never be exceeded by a caller that cannot count.
    */
   tonight?: AcCommand[];
+  /**
+   * Expected sleep onset (Night.sleepOnset). Only curves with phases anchored to 'sleepOnset' use it; default
+   * lights-out + 60 min. planAcSchedule must get the same value to plan the same steps.
+   */
+  sleepOnset?: Ms;
 }
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
@@ -116,6 +121,8 @@ function offsetEstimate(input: ControllerInput): { offset: number; settledMean: 
 }
 
 export function decideAcCommand(input: ControllerInput): AcCommand | null {
+  // Onset-anchored curve: resolve it for this night once, so everything below counts from lights-out.
+  if (usesSleepOnset(input.curve)) return decideAcCommand({ ...input, curve: resolveCurve(input.curve, input.lightsOut, input.sleepOnset) });
   const { now, lightsOut, wake, curve, remote, lastCommand, commandsTonight, recent } = input;
   const firstStart = Math.min(0, curve.phases[0]?.startMin ?? 0);
   const onFrom = lightsOut + firstStart * MIN;

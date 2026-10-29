@@ -99,7 +99,7 @@ export function buildRuleReport(night: Night, history: Night[], curve: Temperatu
   }
   const early: number[] = [];
   for (let ts = night.lightsOut; ts < night.lightsOut + 4 * HOUR; ts += 10 * MIN) {
-    const t = targetAt(curve, night.lightsOut, ts);
+    const t = targetAt(curve, night.lightsOut, ts, night.sleepOnset);
     if (t !== null) early.push(t);
   }
   const earlyTarget = mean(early);

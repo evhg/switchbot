@@ -4,3 +4,4 @@ export { detectEvents } from './events.ts';
 export { roomNightMetrics, roomNightBreakdown, SLEEP_AIR_WEIGHTS, type RoomScoreParts } from './room.ts';
 export { personNightMetrics, personNightBreakdown, SLEEP_SCORE_WEIGHTS, RECOVERY_WEIGHTS, RECOVERY_NEUTRAL, type PersonScoreParts } from './person.ts';
 export { buildRuleReport } from './report.ts';
+export { personSleepOnset, typicalSleepOnset, sessionOnset, minuteToHhmm, type SleepOnsetOptions, type PersonOnset, type TypicalSleepOnset } from './onset.ts';

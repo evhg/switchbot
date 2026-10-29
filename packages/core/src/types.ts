@@ -69,7 +69,16 @@ export interface CurvePhase {
    * command at lights-out gives every phase the same fan, so the precool → onset boundary is not a fan-only change.
    */
   fan?: FanSpeed;
+  /**
+   * What `startMin` is relative to. 'lightsOut' (default, every curve before one-beep-v2): minutes from lights-out.
+   * 'sleepOnset': minutes from the night's expected sleep onset (Night.sleepOnset, default lights-out + 60 min), so the
+   * deep window and the warming step follow when people actually fall asleep, not when they get into bed. Resolve a
+   * curve for a night with resolveCurve() (curve.ts); phaseAt / targetAt do it for you.
+   */
+  anchor?: PhaseAnchor;
 }
+
+export type PhaseAnchor = 'lightsOut' | 'sleepOnset';
 
 export interface TemperatureCurve {
   id: string;
@@ -183,6 +192,11 @@ export interface Night {
   date: string;
   lightsOut: Ms;
   wake: Ms;
+  /**
+   * Expected sleep onset (when the household is asleep; lights-out is getting into bed). Curves whose phases are
+   * anchored to 'sleepOnset' count from it. Undefined = lights-out + DEFAULT_SLEEP_ONSET_MIN (60 min).
+   */
+  sleepOnset?: Ms;
   /** Room data for a window around the night (typically 18:00 → 12:00 next day), 1-min resolution when available. */
   room: RoomReading[];
   outdoor: OutdoorReading[];

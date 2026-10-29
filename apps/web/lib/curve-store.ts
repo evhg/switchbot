@@ -21,10 +21,17 @@ function valid(c: unknown): c is TemperatureCurve {
   );
 }
 
-/** Keep phases ordered and inside the safety limits. */
+/**
+ * Keep phases ordered and inside the safety limits. Phases count from lights out or (anchor 'sleepOnset') from sleep
+ * onset; order is only enforced between phases that count from the same anchor (the editor works on the resolved
+ * curve, where every phase counts from lights out, and orders it there).
+ */
 export function sanitizeCurve(c: TemperatureCurve): TemperatureCurve {
   const phases = c.phases.map((p) => ({ ...p, targetC: Math.round(Math.min(c.maxC, Math.max(c.minC, p.targetC)) * 2) / 2 }));
-  for (let i = 1; i < phases.length; i++) phases[i]!.startMin = Math.max(phases[i]!.startMin, phases[i - 1]!.startMin + 10);
+  for (let i = 1; i < phases.length; i++) {
+    const prev = phases[i - 1]!;
+    if ((prev.anchor ?? 'lightsOut') === (phases[i]!.anchor ?? 'lightsOut')) phases[i]!.startMin = Math.max(phases[i]!.startMin, prev.startMin + 10);
+  }
   return { ...c, phases };
 }
 

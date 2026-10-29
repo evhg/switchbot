@@ -46,6 +46,8 @@
 .planGrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-16) var(--sp-16); }
 @media (min-width: 1760px) { .planGrid { grid-template-columns: minmax(0, var(--measure-plan)) 300px; align-items: start; } }
 .planMain { min-width: 0; display: grid; gap: var(--sp-8); }
+/* Grid items default to min-width: auto; the Tonight card's three-way switch must not widen the column on a phone. */
+.planMain > * { min-width: 0; }
 .summary { border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); padding: var(--sp-4) 0; }
 .summary :global(.readouts) { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; }
 .summary :global(.readout) { padding: 0 var(--sp-4); border-left: 1px solid var(--hairline); }
@@ -131,6 +133,7 @@
 /* ── Tonight (top of Tonight's plan) and Presence ── */
 .time.time { width: 8.5em; flex: none; text-align: center; }
 .segLi { list-style: none; padding: var(--sp-2) var(--sp-5) var(--sp-3); }
+@media (max-width: 420px) { .segLi :global(.seg) button { padding: 0 10px; } }
 .hint { align-items: center; flex-wrap: wrap; }
 .hint :global(.btn) { flex: none; }
 .btnLi { list-style: none; padding: var(--sp-3) var(--sp-5) var(--sp-4); }

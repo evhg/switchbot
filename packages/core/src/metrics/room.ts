@@ -52,7 +52,7 @@ export function roomNightBreakdown(night: Night, curve: TemperatureCurve): { met
     if (r.rh > 60) rhOver60 += w;
     if (r.rh >= 45 && r.rh <= 55) rhBand += w;
     if (r.ts < night.lightsOut + 4 * HOUR) { earlySum += r.tempC * w; earlyW += w; }
-    const target = targetAt(curve, night.lightsOut, r.ts);
+    const target = targetAt(curve, night.lightsOut, r.ts, night.sleepOnset);
     if (target !== null) {
       errs.push(r.tempC - target);
       const err = Math.abs(r.tempC - target);

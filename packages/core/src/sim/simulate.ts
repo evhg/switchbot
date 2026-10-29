@@ -100,6 +100,7 @@ function simulateFull(date: string, r: Resolved): FullNight {
     date,
     lightsOut: plan.t0 + plan.lightsOut * MIN,
     wake: plan.t0 + plan.wake * MIN,
+    sleepOnset: plan.t0 + plan.expectedOnset * MIN,
     room: room.readings.slice(WINDOW_START),
     outdoor: room.outdoor.filter((o) => o.ts >= winStart),
     ac: room.ac,

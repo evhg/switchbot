@@ -174,10 +174,16 @@ describe('integration: simulator truth → detectors and metrics', () => {
       expect(n.ac.length, n.date).toBeLessThanOrEqual(6);
       // Hard bound by design: the planned steps (1 for the default curve: the warming step; a re-measured bias never
       // adds one) plus one extra command (a resend or an emergency, shared budget) → at most 2 beeps while asleep.
-      const plan = planAcSchedule({ curve: DEFAULT_CURVE, lightsOut: n.lightsOut, wake: n.wake, remote: DEFAULT_REMOTE });
+      // The simulator's nights carry an expected sleep onset (lights-out + 30 / 60 / 90 min) that the controller got too.
+      expect(n.sleepOnset, n.date).toBeDefined();
+      const plan = planAcSchedule({ curve: DEFAULT_CURVE, lightsOut: n.lightsOut, wake: n.wake, remote: DEFAULT_REMOTE, sleepOnset: n.sleepOnset! });
       expect(plan.asleepCount, n.date).toBe(1);
+      // The one planned command while asleep is the warming step at sleep onset + 4 h 30 (not lights-out + 4 h 30).
+      const warm = plan.commands.find((c) => c.asleep)!;
+      expect(warm.ts, n.date).toBe(n.sleepOnset! + 270 * MIN);
       const planned = asleep.filter((c) => c.reason.startsWith('curve:'));
       const extra = asleep.filter((c) => !c.reason.startsWith('curve:'));
+      expect(Math.abs((planned[0]?.ts ?? Infinity) - warm.ts), `${n.date} warming step time`).toBeLessThanOrEqual(remoteGap);
       expect(planned.length, `${n.date} planned steps while asleep`).toBe(plan.asleepCount);
       expect(extra.length, `${n.date} extras while asleep`).toBeLessThanOrEqual(quiet.maxExtraPerNight);
       expect(asleep.length, `${n.date} while asleep`).toBeLessThanOrEqual(2);

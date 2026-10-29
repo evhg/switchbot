@@ -1,6 +1,7 @@
 'use client';
 /**
- * Tonight and presence (decided 2026-10-29): bedtime 22:00 every day, wake editable, and the 21:30 pre-cool only when
+ * Tonight and presence (decided 2026-10-29): bedtime 22:00 every day, asleep by ~23:00 and wake 08:30 (both
+ * editable; the warming step comes 4 h 30 after falling asleep), and the 21:30 pre-cool only when
  * someone is home. `TonightBlock` sits on top of System › Tonight's plan; `PresencePage` (System › Presence) explains the
  * iPhone Shortcuts setup and creates/rotates each person's token. Data and rules: lib/tonight.ts.
  */
@@ -10,7 +11,7 @@ import { useAuth } from '@/lib/auth.tsx';
 import { useData } from '@/lib/data/context.tsx';
 import { supabaseConfigured } from '@/lib/data/supabase.ts';
 import { dayLabel, hm, MIN } from '@/lib/format.ts';
-import { hhmm, parseHhmm, presenceUrl, rotatePresenceToken, usePresenceTokens, type Override, type Tonight } from '@/lib/tonight.ts';
+import { hhmm, onsetAfterLightsOut, parseHhmm, presenceUrl, rotatePresenceToken, usePresenceTokens, validSleepOnset, type Override, type Tonight } from '@/lib/tonight.ts';
 import { systemHref, useChrome } from '../nav.tsx';
 import { Button, Group, PageHeader, Row, Segmented, Skeleton, Status } from '../ui.tsx';
 import s from './system.module.css';
@@ -30,6 +31,8 @@ export function TonightBlock({ t }: { t: Tonight }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [wakeText, setWakeText] = useState(hhmm(t.wakeMin));
   useEffect(() => setWakeText(hhmm(t.wakeMin)), [t.wakeMin]);
+  const [onsetText, setOnsetText] = useState(hhmm(t.sleepOnsetMin));
+  useEffect(() => setOnsetText(hhmm(t.sleepOnsetMin)), [t.sleepOnsetMin]);
   const ready = t.date !== null;
   const run = (p: Promise<string | null>) => p.then((e) => setMsg(e));
   const commitWake = () => {
@@ -41,8 +44,19 @@ export function TonightBlock({ t }: { t: Tonight }) {
     }
     if (m !== t.wakeMin) run(t.setWake(m));
   };
+  const commitOnset = () => {
+    const m = parseHhmm(onsetText);
+    if (m === null || !validSleepOnset(t.lightsOutMin, m)) {
+      setMsg(`Asleep by must be between ${hhmm(t.lightsOutMin)} and ${hhmm(t.lightsOutMin + 180)}.`);
+      setOnsetText(hhmm(t.sleepOnsetMin));
+      return;
+    }
+    if (m !== t.sleepOnsetMin) run(t.setSleepOnset(m));
+  };
   const choice: Choice = t.override ?? 'auto';
   const offAt = hhmm(t.wakeMin + 30);
+  const warmAt = hhmm(t.lightsOutMin + onsetAfterLightsOut(t.lightsOutMin, t.sleepOnsetMin) + 270);
+  const locked = !ready || (t.live && !t.canWrite);
 
   return (
     <section aria-label="Tonight">
@@ -58,6 +72,25 @@ export function TonightBlock({ t }: { t: Tonight }) {
         <Row title="Lights out" value={<span className="num">{hhmm(t.lightsOutMin)} · every day</span>} />
         <li>
           <div className="list-row">
+            <label className="list-row-t" htmlFor="onset-time">
+              <b>Asleep by</b>
+              <span>Usually an hour after lights out. The one warming step comes 4&nbsp;h&nbsp;30 later, at {warmAt}</span>
+            </label>
+            <input
+              id="onset-time"
+              className={cx('input num', s.time)}
+              type="time"
+              step={300}
+              value={onsetText}
+              disabled={locked}
+              onChange={(e) => setOnsetText(e.target.value)}
+              onBlur={commitOnset}
+              onKeyDown={(e) => e.key === 'Enter' && (e.currentTarget as HTMLInputElement).blur()}
+            />
+          </div>
+        </li>
+        <li>
+          <div className="list-row">
             <label className="list-row-t" htmlFor="wake-time">
               <b>Wake</b>
               <span>Aircon off 30 min later, at {offAt}</span>
@@ -68,7 +101,7 @@ export function TonightBlock({ t }: { t: Tonight }) {
               type="time"
               step={300}
               value={wakeText}
-              disabled={!ready || (t.live && !t.canWrite)}
+              disabled={locked}
               onChange={(e) => setWakeText(e.target.value)}
               onBlur={commitWake}
               onKeyDown={(e) => e.key === 'Enter' && (e.currentTarget as HTMLInputElement).blur()}

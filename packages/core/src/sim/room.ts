@@ -175,6 +175,7 @@ export function simulateRoom(
         commandsTonight: log.length,
         recent,
         tonight: log,
+        sleepOnset: plan.t0 + plan.expectedOnset * MIN,
       });
       if (cmd) {
         log.push(cmd);

@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import { DEFAULT_CURVE, DEFAULT_PEOPLE, DEFAULT_REMOTE, planAcSchedule, withQuiet, type CurvePhaseName, type TagKey, type TemperatureCurve } from '@sleep-lab/core';
 import { useData } from '@/lib/data/context.tsx';
-import { useTonight, type Tonight } from '@/lib/tonight.ts';
+import { onsetAfterLightsOut, useTonight, type Tonight } from '@/lib/tonight.ts';
 import type { Dataset } from '@/lib/data/types.ts';
 import { addDays, ictDate, ictHour, MIN } from '@/lib/format.ts';
 import { usePref } from '@/lib/prefs.ts';
@@ -64,8 +64,8 @@ export const PHASE_NAME: Record<CurvePhaseName, string> = {
 export const PHASE_ABOUT: Record<CurvePhaseName, string> = {
   precool: 'Cools the room before you get into bed.',
   onset: 'Comfortable while you fall asleep. Always starts at lights out.',
-  deep: 'Coolest stretch, timed for the first sleep cycles.',
-  middle: 'The middle of the night. In the default plan this is the one warming step, the only command while you sleep.',
+  deep: 'Coolest stretch, timed for the first sleep cycles: in the default plan from 30 min after you fall asleep.',
+  middle: 'The middle of the night. In the default plan this is the one warming step, 4 h 30 after you fall asleep, the only command while you sleep.',
   late: 'A little warmer for the REM-rich last hours.',
   wake: 'A warm room to wake up into.',
 };
@@ -90,6 +90,15 @@ export function relWords(m: number): string {
   const d = h ? (r ? `${h} h ${r} min` : `${h} h`) : `${r} min`;
   return `${d} ${m < 0 ? 'before' : 'after'} lights out`;
 }
+/** Minutes relative to sleep onset → "4 h 30 min after you fall asleep". */
+export function relSleepWords(m: number): string {
+  if (m === 0) return 'when you fall asleep';
+  const a = Math.abs(m);
+  const h = Math.floor(a / 60);
+  const r = a % 60;
+  const d = h ? (r ? `${h} h ${r} min` : `${h} h`) : `${r} min`;
+  return `${d} ${m < 0 ? 'before' : 'after'} you fall asleep`;
+}
 
 
 // ───────────────────────────── selectors ─────────────────────────────
@@ -97,8 +106,10 @@ export function relWords(m: number): string {
 export interface PlanClock {
   /** Tonight's lights out, minute of day: 22:00 every day unless tonight's night says otherwise. */
   lightsOut: number;
-  /** Tonight's wake, minute of day: 06:30 until you set it (Tonight's plan). */
+  /** Tonight's wake, minute of day: 08:30 until you set it (Tonight's plan). */
   wake: number;
+  /** Tonight's expected sleep onset, minute of day: lights out + 60 min (23:00) until set. */
+  sleepOnset: number;
   ready: boolean;
   tonight: Tonight;
 }
@@ -108,7 +119,7 @@ export function usePlanClock(): PlanClock {
   const { dataset, latest } = useData();
   const people = (dataset ?? latest)?.people ?? DEFAULT_PEOPLE;
   const tonight = useTonight(people);
-  return { lightsOut: tonight.lightsOutMin, wake: tonight.wakeMin, ready: tonight.date !== null, tonight };
+  return { lightsOut: tonight.lightsOutMin, wake: tonight.wakeMin, sleepOnset: tonight.sleepOnsetMin, ready: tonight.date !== null, tonight };
 }
 
 export interface PlanTimes {
@@ -164,11 +175,20 @@ const PLAN_DAY = Date.UTC(2026, 0, 1);
  * (the bed reads about 1° above the aircon's sensor). The backend sends the same number of steps while asleep; a set
  * point may differ by 1° once it has measured the room's offset.
  */
-export function aircon(curve: TemperatureCurve, lightsOut: number, quiet = true, biasC?: number, wakeMin?: number): AirconPlan {
+export function aircon(curve: TemperatureCurve, lightsOut: number, quiet = true, biasC?: number, wakeMin?: number, sleepOnsetMin?: number): AirconPlan {
   const t = planTimes(curve, lightsOut, wakeMin);
   const lo = PLAN_DAY + lightsOut * MIN;
   const wake = lo + (t.wake - lightsOut) * MIN;
-  const plan = planAcSchedule({ curve, lightsOut: lo, wake, remote: withQuiet(DEFAULT_REMOTE, quiet), ...(biasC !== undefined ? { biasC } : {}) });
+  // Onset-anchored curves (the default) count the deep window and the warming step from the expected sleep onset.
+  const sleepOnset = sleepOnsetMin === undefined ? undefined : lo + onsetAfterLightsOut(lightsOut, sleepOnsetMin) * MIN;
+  const plan = planAcSchedule({
+    curve,
+    lightsOut: lo,
+    wake,
+    remote: withQuiet(DEFAULT_REMOTE, quiet),
+    ...(biasC !== undefined ? { biasC } : {}),
+    ...(sleepOnset !== undefined ? { sleepOnset } : {}),
+  });
   const glide = (name: CurvePhaseName) => {
     const i = curve.phases.findIndex((p) => p.name === name);
     return curve.phases[i + 1]?.targetC;

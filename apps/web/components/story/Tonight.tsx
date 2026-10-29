@@ -78,7 +78,7 @@ export function Tonight({ plan, night, room, onLatest }: { plan: TemperatureCurv
                   secondary={{ label: armed ? 'Armed for tonight ✓' : 'Arm tonight', onClick: () => setArmedFor(armed ? '' : today) }}
                 />
                 <p className="cap">
-                  Tonight starts {clock(times.starts)} · coolest {fmt(times.coolest, 1)}° · wake {clock(times.wake)}{armed ? ' · saved on this device, the controller picks it up then' : ''}
+                  Tonight starts {clock(times.starts)} · asleep by {clock(pc.sleepOnset)} · coolest {fmt(times.coolest, 1)}° · wake {clock(times.wake)}{armed ? ' · saved on this device, the controller picks it up then' : ''}
                 </p>
               </Reveal>
             </SceneText>

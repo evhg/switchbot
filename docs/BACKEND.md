@@ -121,7 +121,7 @@ Until a function's required secrets are set it answers `503 {"error":"not config
 | `SWITCHBOT_DAILY_BUDGET` | all SwitchBot calls | Default 5000; the server limit is 10,000 |
 | `SWITCHBOT_AC_RESERVE` | poll-meter | Default 300. Polling stops when fewer calls are left, keeping room for aircon commands |
 | `POLL_SKIP_IF_FRESH_S` | poll-meter | Default 0 (off). For example, 50 skips the poll when a webhook reading is that fresh |
-| `DEFAULT_LIGHTS_OUT`, `DEFAULT_WAKE` | ac-curve, nightly-report | ICT `HH:MM` used when a night has no row yet. Defaults are 22:00 (every day) and 06:30 |
+| `DEFAULT_LIGHTS_OUT`, `DEFAULT_WAKE` | ac-curve, nightly-report | ICT `HH:MM` used when a night has no row yet. Defaults are 22:00 (every day) and 08:30 |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | google-oauth, google-health-sync | OAuth client of type "Web application" |
 | `GOOGLE_HEALTH_WEBHOOK_SECRET` | google-health-webhook | The subscriber's `endpointAuthorization.secret` |
 | `GOOGLE_HEALTH_SIGNATURE` | google-health-webhook | `off` / `log` (default) / `enforce`. The ECDSA verifier is best effort |
@@ -250,8 +250,27 @@ Decided 2026-10-29: bedtime 22:00 every day, pre-cool at 21:30 **only if someone
   / precool_at` and returned as `{"skipped":"precool: …"}`. Times older than today show a weekday ("since Mon 18:42").
 - **Push**: when a presence signal (not "Home tonight") starts a live pre-cool, every push subscription gets "Aircon
   pre-cool started", tapping opens Tonight's plan where "Away tonight" switches it off (no push in dry run).
-- **App**: Tonight's plan shows lights out, an editable wake (`set_night`), Home / Away / Unknown with who and since when,
-  the one-tap override (`set_presence_override`) and the pre-cool line.
+- **App**: Tonight's plan shows lights out, an editable "Asleep by" (`set_sleep_onset`) and wake (`set_night`), Home / Away /
+  Unknown with who and since when, the one-tap override (`set_presence_override`) and the pre-cool line.
+
+## Sleep onset (migration 0011)
+
+Decided 2026-10-29: in bed at 22:00 every day, asleep around 23:00, up around 08:30.
+
+- **Curve** `one-beep-v2` (`DEFAULT_CURVE`, the default since 0011): like one-beep-v1, but the sleep phases (deep, middle =
+  the warming step, late, wake) carry `"anchor":"sleepOnset"` and count from the night's expected sleep onset. Tonight:
+  ON 18 at 21:30, nothing at 22:00 or 23:00, the one command while asleep at onset + 4 h 30 = 03:30 (set 20), OFF at
+  wake + 30 = 09:00. Nights stored with `one-beep-v1` / `default-v1` keep their curve and behave as before; 0011 moved
+  upcoming nights still on one-beep-v1 (before their warming step) to v2.
+- **`nights.sleep_onset`** (nullable; null = lights-out + 60 min; check: lights-out … +3 h). ac-curve passes it to the
+  controller (`ControllerInput.sleepOnset`) and returns it (`"sleepOnset"`) with the curve id. `set_sleep_onset(date, ts|null)`
+  (owner/member) sets it from the app.
+- **Learning from the watches**: when ac-curve creates a night (`ensureNight`), `learnedSleepOnset` reads the last 30 days
+  of real `sleep_sessions` and core `typicalSleepOnset`: per person the median onset (first non-awake stage) of the last
+  14 main sleeps (≥ 3 h, starting 18:00–04:00; naps ignored; ≥ 3 nights needed), household = the **later** of the two
+  medians (the room must stay cool until both are asleep), rounded to 5 min and clamped to lights-out … +3 h. No data →
+  null → 23:00.
+- **Default wake 08:30** everywhere a night is created (ac-curve, `set_presence_override`, `set_sleep_onset`, the PWA).
 
 ## Schedules (pg_cron runs in UTC; ICT = UTC+7)
 

@@ -128,6 +128,14 @@ export interface NightRow {
   /** 0009: the ac-curve presence gate's last decision (see _shared/presence.ts). */
   precool_status?: string | null;
   precool_reason?: string | null;
+  /** 0011: expected sleep onset; null = lights-out + 60 min (DEFAULT_SLEEP_ONSET_MIN). Anchors one-beep-v2's sleep phases. */
+  sleep_onset?: string | null;
+}
+
+/** The night's stored expected sleep onset (epoch ms), or undefined (= the default, lights-out + 60 min). */
+export function rowSleepOnset(r: Pick<NightRow, 'sleep_onset'>): Ms | undefined {
+  const t = r.sleep_onset ? ms(r.sleep_onset) : NaN;
+  return Number.isFinite(t) ? t : undefined;
 }
 
 /** 1-minute means (the stored resolution of health_hr). */

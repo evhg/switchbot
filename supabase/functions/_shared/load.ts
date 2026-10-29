@@ -1,5 +1,6 @@
 // Loads core-shaped data (curves, nights, room and body series) from Postgres.
-import { DEFAULT_CURVE } from '../../../packages/core/src/curve.ts';
+import { DEFAULT_CURVE, expectedSleepOnset } from '../../../packages/core/src/curve.ts';
+import { typicalSleepOnset } from '../../../packages/core/src/metrics/onset.ts';
 import type { Night, PersonNight, RoomReading, TemperatureCurve } from '../../../packages/core/src/types.ts';
 import { optEnv } from './env.ts';
 import {
@@ -14,6 +15,7 @@ import {
   rowToHrv,
   rowToOutdoor,
   rowToReading,
+  rowSleepOnset,
   rowToSleep,
   rowToSpo2,
   type AcCommandRow,
@@ -28,16 +30,61 @@ export async function loadCurve(db: Db, id: string | null): Promise<TemperatureC
   return data ? rowToCurve(data as CurveRow) : DEFAULT_CURVE;
 }
 
-/** The nights row for `date`, created from DEFAULT_LIGHTS_OUT / DEFAULT_WAKE (ICT; default 22:00 → 06:30 every day) when missing. */
+/** Default wake (ICT HH:MM) when a night has no row yet: 08:30 every day, unless DEFAULT_WAKE says otherwise. */
+export const DEFAULT_WAKE_HHMM = '08:30';
+
+/**
+ * The nights row for `date`, created from DEFAULT_LIGHTS_OUT / DEFAULT_WAKE (ICT; default 22:00 → 08:30 every day)
+ * when missing. A new night also gets its expected sleep onset from the watches (learnedSleepOnset) when there is
+ * enough sleep data; otherwise sleep_onset stays null, which means lights-out + 60 min (23:00).
+ */
 export async function ensureNight(db: Db, date: string): Promise<NightRow> {
   const existing = must(await db.from('nights').select('*').eq('date', date).maybeSingle(), 'nights');
   if (existing) return existing as NightRow;
-  const { lightsOut, wake } = defaultSchedule(date, optEnv('DEFAULT_LIGHTS_OUT') ?? '22:00', optEnv('DEFAULT_WAKE') ?? '06:30');
-  const { data: def } = await db.from('curves').select('id').eq('is_default', true).maybeSingle();
-  const row = { date, lights_out: iso(lightsOut), wake: iso(wake), curve_id: (def as { id?: string } | null)?.id ?? null };
+  const { lightsOut, wake } = defaultSchedule(date, optEnv('DEFAULT_LIGHTS_OUT') ?? '22:00', optEnv('DEFAULT_WAKE') ?? DEFAULT_WAKE_HHMM);
+  const [{ data: def }, onset] = await Promise.all([
+    db.from('curves').select('id').eq('is_default', true).maybeSingle(),
+    learnedSleepOnset(db, lightsOut).catch((e) => {
+      console.error('learnedSleepOnset', e instanceof Error ? e.message : String(e));
+      return null;
+    }),
+  ]);
+  const row = {
+    date,
+    lights_out: iso(lightsOut),
+    wake: iso(wake),
+    curve_id: (def as { id?: string } | null)?.id ?? null,
+    sleep_onset: onset === null ? null : iso(onset),
+  };
   const ins = await db.from('nights').upsert(row, { onConflict: 'date', ignoreDuplicates: true });
   if (ins.error) throw new Error(`nights: ${ins.error.message}`);
   return must(await db.from('nights').select('*').eq('date', date).single(), 'nights') as NightRow;
+}
+
+/**
+ * Expected sleep onset for the night whose lights-out is `lightsOut`, learned from the household's recent main sleeps
+ * (sleep_sessions, real data only, the 30 days before lights-out): core typicalSleepOnset = the later of the two
+ * people's median onset over their last 14 main sleeps. Placed on this night's clock and clamped to lights-out …
+ * lights-out + 3 h. null when there is not enough data (the night then uses lights-out + 60 min).
+ */
+export async function learnedSleepOnset(db: Db, lightsOut: number): Promise<number | null> {
+  const { data, error } = await db.from('sleep_sessions').select('*')
+    .neq('source', 'sim').gte('start_ts', iso(lightsOut - 30 * 24 * 60 * MIN)).lt('end_ts', iso(lightsOut)).order('start_ts').limit(1000);
+  if (error) throw new Error(`sleep_sessions: ${error.message}`);
+  const typical = typicalSleepOnset(((data ?? []) as SleepRow[]).map(rowToSleep), { before: lightsOut });
+  if (!typical) return null;
+  return expectedSleepOnset(lightsOut, onsetOnNight(lightsOut, typical.minuteOfDay));
+}
+
+/** Epoch ms of minute-of-day `minuteOfDay` (ICT) on the night of `lightsOut`: the first such moment after lights-out − 12 h. */
+export function onsetOnNight(lightsOut: number, minuteOfDay: number): number {
+  const ICT = 7 * 60 * MIN;
+  const day = 24 * 60 * MIN;
+  const from = lightsOut - 12 * 60 * MIN;
+  const midnight = Math.floor((from + ICT) / day) * day - ICT;
+  let t = midnight + minuteOfDay * MIN;
+  while (t < from) t += day;
+  return t;
 }
 
 export async function loadRoom(db: Db, deviceId: string, from: number, to: number, bucketMin = 0): Promise<RoomReading[]> {
@@ -175,6 +222,7 @@ export async function loadNight(db: Db, row: NightRow, opts: LoadNightOptions): 
     date: row.date,
     lightsOut: Date.parse(row.lights_out),
     wake: Date.parse(row.wake),
+    ...(rowSleepOnset(row) !== undefined ? { sleepOnset: rowSleepOnset(row)! } : {}),
     room,
     outdoor: (must(outdoor, 'outdoor_readings') as { ts: string; temp_c: number; rh: number }[]).map(rowToOutdoor),
     ac: effectiveCommands(must(ac, 'ac_commands') as AcCommandRow[]).map(rowToCommand),

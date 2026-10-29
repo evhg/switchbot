@@ -21,12 +21,13 @@ import { DEFAULT_CURVE, type TemperatureCurve } from '@sleep-lab/core';
 import { sanitizeCurve } from '@/lib/curve-store.ts';
 import { fmt } from '@/lib/format.ts';
 import { linePath, scale, useSvgId } from './charts/common.tsx';
-import { PHASE_ABOUT, PHASE_NAME, clock, relWords } from './system/model.ts';
+import { PHASE_ABOUT, PHASE_NAME, clock, relSleepWords, relWords } from './system/model.ts';
 import { Button, Dial, InstrumentKeys, Switch, useWidth } from './ui.tsx';
 import s from './CurveEditor.module.css';
 
 const M0 = -120;
-const M1 = 540;
+/** Lights out + 11 h: 09:00 for a 22:00 lights out, the OFF after an 08:30 wake. */
+const M1 = 660;
 type Phase = TemperatureCurve['phases'][number];
 type PhaseName = Phase['name'];
 
@@ -54,9 +55,16 @@ export interface CurveEditorProps {
   lightsOut: number;
   /** Last night's room temperature, minutes relative to that night's lights out. */
   actual?: readonly { m: number; t: number }[];
+  /**
+   * The curve is shown resolved (every phase from lights out); phases in `anchored` count from sleep onset, which is
+   * `offsetMin` after lights out, and say so ("4 h 30 min after you fall asleep").
+   */
+  sleepOnset?: { offsetMin: number; anchored: readonly PhaseName[] };
+  /** Disables "Reset to default". Default: `curve === DEFAULT_CURVE`. */
+  isDefault?: boolean;
 }
 
-export function CurveEditor({ curve, onChange, onReset, lightsOut, actual }: CurveEditorProps) {
+export function CurveEditor({ curve, onChange, onReset, lightsOut, actual, sleepOnset, isDefault }: CurveEditorProps) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [draft, setDraft] = useState<TemperatureCurve | null>(null);
   const [drag, setDrag] = useState<number | null>(null);
@@ -300,7 +308,7 @@ export function CurveEditor({ curve, onChange, onReset, lightsOut, actual }: Cur
           <Dial
             label="Starts"
             value={<span className="num">{at(sp.startMin)}</span>}
-            meaning={isOnset ? 'Always at lights out' : relWords(sp.startMin)}
+            meaning={isOnset ? 'Always at lights out' : sleepOnset?.anchored.includes(sp.name) ? relSleepWords(sp.startMin - sleepOnset.offsetMin) : relWords(sp.startMin)}
             onDec={() => update(sel, { startMin: Math.max(lo, sp.startMin - 5) })}
             onInc={() => update(sel, { startMin: Math.min(hi, sp.startMin + 5) })}
             decLabel="Earlier"
@@ -340,7 +348,7 @@ export function CurveEditor({ curve, onChange, onReset, lightsOut, actual }: Cur
         </div>
         <div className={s.foot}>
           <span className="cap">Saved on this phone</span>
-          <Button variant="text" icon="refresh" onClick={onReset} disabled={curve === DEFAULT_CURVE}>
+          <Button variant="text" icon="refresh" onClick={onReset} disabled={isDefault ?? curve === DEFAULT_CURVE}>
             Reset to default
           </Button>
         </div>

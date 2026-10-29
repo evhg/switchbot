@@ -1,12 +1,13 @@
 'use client';
 /**
- * Tonight: schedule, presence and the pre-cool decision (decided 2026-10-29: bedtime 22:00 every day, pre-cool at 21:30
- * only when someone is home). One hook for System › Tonight's plan, System › Presence and the System root.
+ * Tonight: schedule, presence and the pre-cool decision (decided 2026-10-29: bedtime 22:00 every day, asleep around
+ * 23:00, up at 08:30, pre-cool at 21:30 only when someone is home). One hook for System › Tonight's plan, System ›
+ * Presence and the System root.
  *
  * Signed in as a household member: reads tonight's `nights` row (lights out, wake, presence_override, precool_status /
  * precool_reason written by the ac-curve function), `presence_latest` (iPhone Shortcuts events) and the last hour of CO₂;
- * writes the wake time with the existing set_night RPC and "Home tonight / Away tonight" with set_presence_override
- * (migration 0009). Otherwise (simulator, signed out) the same values live on this device.
+ * writes the wake time with the existing set_night RPC, the expected sleep onset with set_sleep_onset (migration 0011)
+ * and "Home tonight / Away tonight" with set_presence_override (migration 0009). Otherwise (simulator, signed out) the same values live on this device.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from './auth.tsx';
@@ -16,8 +17,15 @@ import { usePref } from './prefs.ts';
 
 /** Lights out every day, weekends included (minute of day, ICT). */
 export const DEFAULT_LIGHTS_OUT = 22 * 60;
-/** Wake until set: 06:30. */
-export const DEFAULT_WAKE = 6 * 60 + 30;
+/** Wake until set: 08:30 every day. */
+export const DEFAULT_WAKE = 8 * 60 + 30;
+/**
+ * Expected sleep onset until set: lights out + 60 min (23:00). The default curve counts the deep window and the one
+ * warming step from it (onset + 4 h 30 = 03:30). The backend learns it from the watches for new nights when it can.
+ */
+export const DEFAULT_SLEEP_ONSET = DEFAULT_LIGHTS_OUT + 60;
+/** Sleep onset can be set from lights out to lights out + 3 h (the backend clamps to the same range). */
+export const SLEEP_ONSET_MAX_AFTER = 180;
 /** The pre-cool starts this long before lights out (the default curve's first phase). */
 export const PRECOOL_BEFORE_MIN = 30;
 /** A late arrival still starts the aircon until lights out + 3 h (supabase/functions/_shared/presence.ts). */
@@ -39,6 +47,8 @@ export interface TonightNight {
   date: string;
   lightsOut: number;
   wake: number;
+  /** Stored expected sleep onset; null = lights out + 60 min. */
+  sleepOnset: number | null;
   override: Override;
   acEnabled: boolean;
   tags: string[];
@@ -58,6 +68,8 @@ export interface Tonight {
   /** Minute of day. */
   lightsOutMin: number;
   wakeMin: number;
+  /** Expected sleep onset, minute of day (lights out + 60 min until set). */
+  sleepOnsetMin: number;
   override: Override;
   presence: PersonPresence[];
   /** Home / Away / Unknown for tonight, with a sentence ("Erik home since 18:42"). */
@@ -67,6 +79,8 @@ export interface Tonight {
   /** CO₂ rising in the evening while nobody is marked home: a hint only, it never starts the aircon. */
   co2Hint: { rise: number; ppm: number } | null;
   setWake: (min: number) => Promise<string | null>;
+  /** Minute of day, or null for the default (lights out + 60 min). */
+  setSleepOnset: (min: number | null) => Promise<string | null>;
   setOverride: (o: Override) => Promise<string | null>;
   refresh: () => void;
 }
@@ -95,6 +109,11 @@ export function nightTimes(date: string, lightsOutMin: number, wakeMin: number) 
   const lo = lightsOutMin >= 12 * 60 ? ictAt(addDays(date, -1), lightsOutMin) : ictAt(date, lightsOutMin);
   return { lightsOut: lo, wake: ictAt(date, wakeMin) };
 }
+
+/** Minutes from lights out to a sleep onset given as minute of day (wraps past midnight): 22:00 → 23:00 = 60. */
+export const onsetAfterLightsOut = (lightsOutMin: number, onsetMin: number) => (((onsetMin - lightsOutMin) % 1440) + 1440) % 1440;
+/** Is `onsetMin` (minute of day) inside lights out … lights out + 3 h? */
+export const validSleepOnset = (lightsOutMin: number, onsetMin: number) => onsetAfterLightsOut(lightsOutMin, onsetMin) <= SLEEP_ONSET_MAX_AFTER;
 
 const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 /** "18:42" for today (ICT) or the last 12 h, else "Mon 18:42": an old signal must never look current. */
@@ -183,6 +202,7 @@ export function useTonight(people: readonly { id: string; name: string }[]): Ton
 
   // This device (simulator / signed out).
   const [localWake, setLocalWake] = usePref<number>('wakeMin', DEFAULT_WAKE);
+  const [localOnset, setLocalOnset] = usePref<number | null>('sleepOnsetMin', null);
   const [localOverride, setLocalOverride] = usePref<Record<string, Override>>('presenceOverride', {});
 
   const [night, setNight] = useState<TonightNight | null>(null);
@@ -199,7 +219,7 @@ export function useTonight(people: readonly { id: string; name: string }[]): Ton
     const db = supabaseClient();
     setLoading(true);
     Promise.all([
-      db.from('nights').select('date,lights_out,wake,tags,ac_enabled,presence_override,precool_status,precool_reason,precool_at').eq('date', date).maybeSingle(),
+      db.from('nights').select('date,lights_out,wake,sleep_onset,tags,ac_enabled,presence_override,precool_status,precool_reason,precool_at').eq('date', date).maybeSingle(),
       db.from('presence_latest').select('person_id,state,at'),
       db.from('readings').select('ts,co2').neq('source', 'sim').gte('ts', new Date(Date.now() - 70 * MIN).toISOString()).order('ts').limit(200),
     ])
@@ -213,6 +233,7 @@ export function useTonight(people: readonly { id: string; name: string }[]): Ton
                 date,
                 lightsOut: ms(row.lights_out),
                 wake: ms(row.wake),
+                sleepOnset: typeof row.sleep_onset === 'string' ? ms(row.sleep_onset) : null,
                 override: row.presence_override === 'home' || row.presence_override === 'away' ? row.presence_override : null,
                 acEnabled: row.ac_enabled !== false,
                 tags: Array.isArray(row.tags) ? (row.tags as string[]) : [],
@@ -250,6 +271,8 @@ export function useTonight(people: readonly { id: string; name: string }[]): Ton
 
   const lightsOutMin = live && night ? minuteOf(night.lightsOut) : DEFAULT_LIGHTS_OUT;
   const wakeMin = live && night ? minuteOf(night.wake) : live ? DEFAULT_WAKE : localWake;
+  const storedOnset = live ? (night?.sleepOnset != null ? minuteOf(night.sleepOnset) : null) : localOnset;
+  const sleepOnsetMin = storedOnset !== null && validSleepOnset(lightsOutMin, storedOnset) ? storedOnset : (lightsOutMin + 60) % 1440;
   const override: Override = live ? night?.override ?? null : date ? localOverride[date] ?? null : null;
   const tags = live ? night?.tags ?? [] : [];
   const status = tonightStatus(override, tags, presence, now);
@@ -283,6 +306,24 @@ export function useTonight(people: readonly { id: string; name: string }[]): Ton
     [date, live, canWrite, lightsOutMin, setLocalWake, refresh],
   );
 
+  const setSleepOnset = useCallback(
+    async (min: number | null): Promise<string | null> => {
+      if (!date) return 'Not ready yet.';
+      if (min !== null && !validSleepOnset(lightsOutMin, min)) return `Asleep by must be between lights out (${hhmm(lightsOutMin)}) and 3 h later.`;
+      if (!live) {
+        setLocalOnset(min);
+        return null;
+      }
+      if (!canWrite) return 'Your household role is read-only.';
+      const at = min === null ? null : nightTimes(date, lightsOutMin, wakeMin).lightsOut + onsetAfterLightsOut(lightsOutMin, min) * MIN;
+      const { error: e } = await supabaseClient().rpc('set_sleep_onset', { p_date: date, p_sleep_onset: at === null ? null : new Date(at).toISOString() });
+      if (e) return e.message;
+      refresh();
+      return null;
+    },
+    [date, live, canWrite, lightsOutMin, wakeMin, setLocalOnset, refresh],
+  );
+
   const setOverride = useCallback(
     async (o: Override): Promise<string | null> => {
       if (!date) return 'Not ready yet.';
@@ -299,7 +340,7 @@ export function useTonight(people: readonly { id: string; name: string }[]): Ton
     [date, live, canWrite, setLocalOverride, refresh],
   );
 
-  return { date, live, canWrite, loading, error, lightsOutMin, wakeMin, override, presence, status, precool, co2Hint, setWake, setOverride, refresh };
+  return { date, live, canWrite, loading, error, lightsOutMin, wakeMin, sleepOnsetMin, override, presence, status, precool, co2Hint, setWake, setSleepOnset, setOverride, refresh };
 }
 
 // ───────────────────────────── presence tokens (System › Presence) ─────────────────────────────

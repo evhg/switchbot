@@ -21,7 +21,8 @@ import { knownDeviceId } from '../_shared/devices.ts';
 import { envFlagSafe } from '../_shared/env.ts';
 import { background, json, readJson, serve } from '../_shared/http.ts';
 import { ensureNight, loadCurve, loadRoom } from '../_shared/load.ts';
-import { type AcCommandRow, commandToRow, eventToRow, rowToCommand } from '../_shared/rows.ts';
+import { type AcCommandRow, commandToRow, eventToRow, rowSleepOnset, rowToCommand } from '../_shared/rows.ts';
+import { expectedSleepOnset } from '../../../packages/core/src/curve.ts';
 import { co2Rising, isAway, loadLatestPresence, needsPresenceGate, presenceGate, recordGate, START_UNTIL_MIN } from '../_shared/presence.ts';
 import { precoolNotice, pushToAll } from '../_shared/push.ts';
 import { must, serviceClient } from '../_shared/supabase.ts';
@@ -55,6 +56,8 @@ serve(async (req) => {
   const night = await ensureNight(db, nightDateFor(now));
   const lightsOut = Date.parse(night.lights_out);
   const wake = Date.parse(night.wake);
+  // Expected sleep onset (nights.sleep_onset, else lights-out + 60 min): one-beep-v2 counts its sleep phases from it.
+  const sleepOnset = expectedSleepOnset(lightsOut, rowSleepOnset(night));
   const curve = await loadCurve(db, night.curve_id);
   const onFrom = lightsOut + Math.min(0, curve.phases[0]?.startMin ?? 0) * MIN;
   // Controller window: precool → an hour past the scheduled OFF (wake + 30), room for one OFF resend.
@@ -83,7 +86,7 @@ serve(async (req) => {
       await recordGate(db, night, { status: 'away', reason: 'away tonight (marked in the app)' }, now);
     }
     if (!lastCommand?.state.power) {
-      return json({ skipped: !night.ac_enabled ? 'ac disabled for this night' : away ? 'away tonight' : 'outside night window', night: night.date });
+      return json({ skipped: !night.ac_enabled ? 'ac disabled for this night' : away ? 'away tonight' : 'outside night window', night: night.date, curve: curve.id, sleepOnset: iso(sleepOnset) });
     }
     if (now - lastCommand.ts < remote.minIntervalMin * MIN) return json({ skipped: 'ensure off: waiting for minInterval', night: night.date });
     const reason = !night.ac_enabled
@@ -125,6 +128,7 @@ serve(async (req) => {
     now,
     lightsOut,
     wake,
+    sleepOnset,
     curve,
     remote,
     commandsTonight,
@@ -156,7 +160,7 @@ serve(async (req) => {
         const off = offCommand(now, remote, lastCommand.state, `ensure off: pre-cool gate closed (${gate.reason})`);
         if (off) return await send(db, { acId, dryRun, cmd: off, nightDate: night.date, stateRow, commandsTonight });
       }
-      return json({ skipped: `precool: ${gate.reason}`, precool: gate.status, dryRun, night: night.date });
+      return json({ skipped: `precool: ${gate.reason}`, precool: gate.status, dryRun, night: night.date, curve: curve.id, sleepOnset: iso(sleepOnset) });
     }
     const res = await send(db, { acId, dryRun, cmd: cmd!, nightDate: night.date, stateRow, commandsTonight });
     // Tell the household when a presence signal (not "Home tonight") started a real pre-cool, once per night.
@@ -166,7 +170,7 @@ serve(async (req) => {
     }
     return res;
   }
-  if (!cmd) return json({ ok: true, dryRun, quiet: remote.quiet?.enabled !== false, night: night.date, command: null, commandsTonight, lastLanded: lastCommand?.landed ?? null });
+  if (!cmd) return json({ ok: true, dryRun, quiet: remote.quiet?.enabled !== false, night: night.date, curve: curve.id, sleepOnset: iso(sleepOnset), command: null, commandsTonight, lastLanded: lastCommand?.landed ?? null });
   return await send(db, { acId, dryRun, cmd, nightDate: night.date, stateRow, commandsTonight });
 });
 

@@ -7,12 +7,13 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { useRouter } from 'next/navigation';
-import { DEFAULT_PEOPLE } from '@sleep-lab/core';
+import { DEFAULT_PEOPLE, anchorCurve, resolveCurve } from '@sleep-lab/core';
 import { MAX_NAME_LENGTH, useData, useLive, type DataMode } from '@/lib/data/context.tsx';
 import { SIM_NIGHTS, SIM_SEED } from '@/lib/data/sim.ts';
 import { hasRealData, useAuth } from '@/lib/auth.tsx';
 import { functionsUrl, supabaseClient, supabaseConfigured, supabaseUserEmail } from '@/lib/data/supabase.ts';
 import { usePlannedCurve } from '@/lib/curve-store.ts';
+import { onsetAfterLightsOut } from '@/lib/tonight.ts';
 import { dayLabel, fmt, hm, ictDate, MIN, shortDate } from '@/lib/format.ts';
 import { enablePush, pushSupported } from '@/lib/push.ts';
 import { isNightHour, useTheme, type ResolvedTheme, type ThemeMode } from '@/lib/theme.tsx';
@@ -34,6 +35,7 @@ import {
   clock,
   planTimes,
   driftAlerts,
+  isDefaultCurve,
   lastNightOnPlan,
   nightCounts,
   useCalibrations,
@@ -70,7 +72,11 @@ export function PlanPage({ back = true }: { back?: boolean }) {
   const ph = curve.phases;
   const times = planTimes(curve, pc.lightsOut, pc.wake);
   const [quiet, setQuiet] = useQuietMode();
-  const plan = aircon(curve, pc.lightsOut, quiet, undefined, pc.wake);
+  const plan = aircon(curve, pc.lightsOut, quiet, undefined, pc.wake, pc.sleepOnset);
+  // The editor shows the curve on tonight's clock: phases that count from sleep onset are placed at tonight's onset.
+  const onsetOffset = onsetAfterLightsOut(pc.lightsOut, pc.sleepOnset);
+  const shown = useMemo(() => resolveCurve(curve, 0, onsetOffset * MIN), [curve, onsetOffset]);
+  const anchored = useMemo(() => curve.phases.filter((p) => p.anchor === 'sleepOnset').map((p) => p.name), [curve]);
   const last = useMemo(() => lastNightOnPlan(dataset ?? latest), [dataset, latest]);
   const actual = useMemo(() => {
     const n = (dataset ?? latest)?.nights.at(-1);
@@ -79,7 +85,7 @@ export function PlanPage({ back = true }: { back?: boolean }) {
     for (const r of n.room) {
       const m = (r.ts - n.lightsOut) / MIN;
       // From lights out: the pre-cool start is often far above the 17–24° scale (stated in the summary instead).
-      if (m < 0 || m > 540 || !Number.isFinite(r.tempC)) continue;
+      if (m < 0 || m > 660 || !Number.isFinite(r.tempC)) continue;
       if (out.length && m - out.at(-1)!.m < 3) continue;
       out.push({ m, t: r.tempC });
     }
@@ -108,7 +114,15 @@ export function PlanPage({ back = true }: { back?: boolean }) {
               <Readout label="Wake" value={<span className="num">{clock(times.wake)}</span>} />
             </Readouts>
           </div>
-          <CurveEditor curve={curve} onChange={setCurve} onReset={resetCurve} lightsOut={pc.lightsOut} actual={actual} />
+          <CurveEditor
+            curve={shown}
+            onChange={(c) => setCurve(anchorCurve(c, curve, onsetOffset))}
+            onReset={resetCurve}
+            lightsOut={pc.lightsOut}
+            actual={actual}
+            sleepOnset={{ offsetMin: onsetOffset, anchored }}
+            isDefault={isDefaultCurve(curve)}
+          />
         </div>
 
         <aside className={s.planAside} aria-label="Tonight in detail">

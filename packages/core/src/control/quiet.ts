@@ -1,5 +1,5 @@
 import type { AcState, CurvePhaseName, FanSpeed, Ms, TemperatureCurve } from '../types.ts';
-import { phaseAt, targetAt } from '../curve.ts';
+import { expectedSleepOnset, phaseAt, resolveCurve, targetAt } from '../curve.ts';
 import { remoteCommand, resolveQuiet, type RemoteProfile, type ResolvedQuiet } from './remote.ts';
 
 const MIN = 60_000;
@@ -117,6 +117,8 @@ export interface AcPlan {
   /** Extra commands quiet mode may still send while asleep (an emergency or a resend, shared budget); null when quiet is off. */
   maxExtraAsleep: number | null;
   asleepFrom: Ms;
+  /** Expected sleep onset the sleep phases were anchored to (onset-anchored curves; lights-out + 60 min by default). */
+  sleepOnset: Ms;
 }
 
 export interface PlanInput {
@@ -126,6 +128,8 @@ export interface PlanInput {
   remote: RemoteProfile;
   /** Setpoint − bed target; default −1 (bed reads ~1 °C above return air). */
   biasC?: number;
+  /** Expected sleep onset (onset-anchored curves only); default lights-out + 60 min. Pass the controller the same. */
+  sleepOnset?: Ms;
 }
 
 /**
@@ -138,7 +142,8 @@ export interface PlanInput {
  * by 1 °C but never adds a step the plan skips (see decideAcCommand).
  */
 export function planAcSchedule(input: PlanInput): AcPlan {
-  const { curve, lightsOut, wake, remote } = input;
+  const { lightsOut, wake, remote } = input;
+  const curve = resolveCurve(input.curve, lightsOut, input.sleepOnset);
   const quiet = resolveQuiet(remote);
   const bias = clamp(Math.round(input.biasC ?? DEFAULT_BIAS_C), -2, 2);
   const { lo, hi } = setpointLimits(curve);
@@ -229,10 +234,11 @@ export function planAcSchedule(input: PlanInput): AcPlan {
     total: out.length,
     maxExtraAsleep: quiet.enabled ? quiet.maxExtraPerNight : null,
     asleepFrom: from,
+    sleepOnset: expectedSleepOnset(lightsOut, input.sleepOnset),
   };
 }
 
 /** Phase at `ts`, or 'precool' before the curve starts. */
-export function phaseNameAt(curve: TemperatureCurve, lightsOut: Ms, ts: Ms): CurvePhaseName {
-  return phaseAt(curve, lightsOut, ts)?.phase.name ?? 'precool';
+export function phaseNameAt(curve: TemperatureCurve, lightsOut: Ms, ts: Ms, sleepOnset?: Ms): CurvePhaseName {
+  return phaseAt(curve, lightsOut, ts, sleepOnset)?.phase.name ?? 'precool';
 }

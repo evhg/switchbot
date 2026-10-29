@@ -50,6 +50,11 @@ export interface NightPlan {
   tags: TagKey[];
   lightsOut: number;
   wake: number;
+  /**
+   * The expected sleep onset the controller plans with (plan minutes), not the truth: lights-out + 30, 60 or 90 min by
+   * date (deterministic, no rng draw), so the tests see onset-anchored curves move with it.
+   */
+  expectedOnset: number;
   ach: number;
   cOut: number;
   cHouse: number;
@@ -239,6 +244,7 @@ export function planNight(seed: number, date: string, people: Person[]): NightPl
     tags: [...tags],
     lightsOut,
     wake,
+    expectedOnset: lightsOut + [30, 60, 90][Number(date.slice(8, 10)) % 3]!,
     ach,
     cOut: Math.round(u(rng, 418, 432)),
     cHouse: Math.round(u(rng, 460, 560)),
