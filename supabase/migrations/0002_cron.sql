@@ -105,10 +105,5 @@ select cron.schedule('sleeplab-health-sync-queue', '*/10 * * * *',
 select cron.schedule('sleeplab-nightly-report', '*/15 0-7,23 * * *',
   $$select private.invoke_edge_function('nightly-report', '{"auto":true}', 120000)$$);
 
--- Housekeeping at 03:17 ICT (20:17 UTC): the 1-min jobs add ~1,700 cron.job_run_details rows per day.
-select cron.schedule('sleeplab-housekeeping', '17 20 * * *', $$
-  delete from cron.job_run_details where end_time < now() - interval '7 days';
-  delete from public.oauth_states where created_at < now() - interval '1 day';
-  delete from public.api_quota_log where ts < now() - interval '60 days';
-  delete from public.health_sync_jobs where done_at < now() - interval '14 days';
-$$);
+-- Housekeeping lives in 0007_housekeeping.sql: its DELETEs need an interactive confirmation when applied
+-- through the Supabase MCP, so it is run once from the dashboard SQL editor instead.
