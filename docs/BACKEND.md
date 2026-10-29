@@ -21,6 +21,7 @@ supabase/
     _shared/                  env, http, auth, supabase client, row mappers, loaders, SwitchBot quota,
                               Google Health helpers, Claude coach, Web Push (RFC 8291 / 8292)
     switchbot-webhook/        SwitchBot webhook → readings (secret URL path)
+    switchbot-admin/          Registers / inspects the SwitchBot webhook (cron-secret or service key)
     poll-meter/               minute poll of the Meter Pro CO2 (quota-aware)
     ac-curve/                 temperature curve → IR command (every 5 min overnight)
     google-health-sync/       Google Health API v4 pull → raw_health + derived tables
@@ -100,7 +101,7 @@ The only per-project value is `project_url`, which Postgres can't discover by it
 
 **Key migration.** Supabase retires the legacy JWT keys at the end of 2026. The functions prefer `SUPABASE_SERVICE_ROLE_KEY` while it exists and fall back to `SUPABASE_SECRET_KEYS.default`, and they accept either as a service credential, so switching keys needs no code change. `scripts/seed-supabase.ts` still takes the key in `SUPABASE_SERVICE_ROLE_KEY` (an `sb_secret_…` value works there).
 
-**Missing configuration.** A required secret that isn't set makes a function answer `503 {"error":"not configured","missing":"<NAME>"}` after authentication (never before it). The webhooks answer 404 (`switchbot-webhook`) or 401 (`google-health-webhook`) while their secret is unset, and `google-oauth/start` shows a "Not configured" page. `ac-curve` is a dry run unless `DRY_RUN` is explicitly `false`/`0`/`no`/`off`; an unset or unrecognised value keeps it dry, and a request can force a dry run but never a live one.
+**Missing configuration.** A required secret that isn't set makes a function answer `503 {"error":"not configured","missing":"<NAME>"}` after authentication (never before it). `switchbot-webhook` answers 404 to any path that matches neither `WEBHOOK_SECRET` nor the Vault secret, `google-health-webhook` 401 while its secret is unset, and `google-oauth/start` shows a "Not configured" page. `ac-curve` is a dry run unless `DRY_RUN` is explicitly `false`/`0`/`no`/`off`; an unset or unrecognised value keeps it dry, and a request can force a dry run but never a live one.
 
 ## Secrets
 
@@ -114,7 +115,7 @@ Until a function's required secrets are set it answers `503 {"error":"not config
 | `SWITCHBOT_TOKEN`, `SWITCHBOT_SECRET` | poll-meter, ac-curve | App → Profile → Preferences → Developer Options |
 | `METER_DEVICE_ID` | poll-meter, ac-curve, nightly-report | Meter Pro CO2 `deviceId` (MAC without colons). Use `SIM-METER` in Phase 0 |
 | `AC_DEVICE_ID` | ac-curve | The IR remote's `deviceId` from `listDevices().infraredRemoteList` |
-| `WEBHOOK_SECRET` | switchbot-webhook | Long random string; it becomes the last URL path segment |
+| `WEBHOOK_SECRET` | switchbot-webhook | **Optional.** The path secret lives in Vault (`switchbot_webhook_secret`, migration 0008). Set this only to also accept a URL with a secret you chose |
 | `DRY_RUN` | ac-curve | Defaults to **true**. Set `false` only after the remote is verified |
 | `SWITCHBOT_DAILY_BUDGET` | all SwitchBot calls | Default 5000; the server limit is 10,000 |
 | `SWITCHBOT_AC_RESERVE` | poll-meter | Default 300. Polling stops when fewer calls are left, keeping room for aircon commands |
@@ -206,6 +207,27 @@ The SQL alternative still works: `insert into household_members (user_id, person
 
 **Vercel env** (project `sleep-lab`, all three environments; already set): `NEXT_PUBLIC_SUPABASE_URL=https://vaelokyqjdsxveqvdtbo.supabase.co` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` = the project's publishable key (`sb_publishable_…`, public by design; RLS protects the data). They take effect on the next deployment. Optional: `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (= `VAPID_PUBLIC_KEY`), `NEXT_PUBLIC_FUNCTIONS_URL`, `NEXT_PUBLIC_METER_DEVICE_ID`.
 
+## SwitchBot webhook
+
+SwitchBot doesn't sign deliveries, so the URL's last path segment is the credential:
+`https://<ref>.supabase.co/functions/v1/switchbot-webhook/<secret>`.
+
+- **Secret.** Migration `0008_switchbot_webhook_secret` generates `switchbot_webhook_secret` in Vault (32 random bytes, hex) and adds two security-definer functions that only `service_role` can execute: `verify_switchbot_webhook_secret(text)` (SHA-256 digest compare, like `verify_cron_secret`) and `switchbot_webhook_secret()` (returns the value so `switchbot-admin` can build the URL). Nobody has to see or paste it.
+- **Receiver.** `switchbot-webhook` accepts the path segment (or `?token=`) if it equals the optional `WEBHOOK_SECRET` function secret or verifies against Vault through the RPC; a verified value is cached per worker for 5 minutes. Anything else gets 404.
+- **Registration.** `switchbot-admin` (`verify_jwt = false`, x-cron-secret or service key, same as `poll-meter`):
+  - `{"action":"status"}` returns the registered URL(s) with `enable`, `deviceList`, create/update times. URLs are always masked (`…/switchbot-webhook/9d3a…(64)`).
+  - `{"action":"register-webhook"}` reads `queryUrl` (statusCode 190 there means "none registered"), removes any older `…/switchbot-webhook/…` URL of this project (one URL per account in practice; `updateWebhook` only toggles `enable`), calls `setupWebhook` with `deviceList: "ALL"` (or `updateWebhook enable=true` if ours is registered but disabled), then confirms with `queryDetails`. It is a no-op when ours is already registered and enabled. A URL that belongs to another integration (e.g. Home Assistant) is left alone and the call answers 409, unless the body has `"replace": true`.
+  - Every SwitchBot call goes through the quota session (`api_quota`, `api_quota_log` with `fn = 'switchbot-admin'`); a registration costs 3 calls.
+- **Re-register** (e.g. SwitchBot dropped the URL, or it shows `enable: false`): run the `register-webhook` SQL above again. It is idempotent.
+- **Rotate the secret:**
+  ```sql
+  select vault.update_secret(id, encode(extensions.gen_random_bytes(32), 'hex'))
+  from vault.secrets where name = 'switchbot_webhook_secret';
+  select private.invoke_edge_function('switchbot-admin', '{"action":"register-webhook"}', 30000);
+  ```
+  The second call removes the old URL and registers the new one. Workers may accept the old value for up to 5 more minutes (positive cache), after which it is 404.
+- **Delivery vs poll.** The webhook is change-based; the minute poll (`poll-meter`) stays as the reconciler. Compare `readings.source` and `raw_switchbot.received_at` against the poll rows.
+
 ## Schedules (pg_cron runs in UTC; ICT = UTC+7)
 
 | Job | Cron (UTC) | ICT | What |
@@ -241,17 +263,14 @@ Follow [SETUP.md](SETUP.md) for the hardware order (Hub Mini → Meter Pro CO2 �
    - Copy the Meter Pro CO2 `deviceId` into `METER_DEVICE_ID`.
    - Copy the aircon remote's id (under `infraredRemoteList`) into `AC_DEVICE_ID`.
    - Run `supabase secrets set …`.
-2. **Register the webhook.** Only one URL per account in practice, and SwitchBot doesn't sign deliveries:
-   ```sh
-   … npx deno eval "
-   import { SwitchBotClient } from './packages/core/src/index.ts';
-   const c = new SwitchBotClient({ token: Deno.env.get('SWITCHBOT_TOKEN')!, secret: Deno.env.get('SWITCHBOT_SECRET')! });
-   console.log(await c.setupWebhook('https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/switchbot-webhook/<WEBHOOK_SECRET>'));
-   console.log(await c.queryWebhook());"
+2. **Register the webhook** (zero-touch; see [SwitchBot webhook](#switchbot-webhook)):
+   ```sql
+   select private.invoke_edge_function('switchbot-admin', '{"action":"register-webhook"}', 30000);
+   -- a few seconds later:
+   select status_code, content from net._http_response order by id desc limit 1;
    ```
    - The first delivery is a `TESTMAC` placeholder, which is ignored.
    - Real events show up in `raw_switchbot` and `readings` (source `webhook`).
-   - Set the `WEBHOOK_SECRET` function secret **before** registering (a long random string, e.g. `openssl rand -hex 24`); the URL's last path segment must equal it. While the secret is unset the function answers 404 to everything.
 3. **Aircon remote.**
    - If Smart Matching worked (all of temperature, mode and fan respond), the default `setAll` profile applies and nothing needs configuring.
    - If you fell back to learned buttons, store the ladder:
@@ -372,7 +391,8 @@ Live project `sleep-lab` (ref `vaelokyqjdsxveqvdtbo`, region `ap-southeast-1`, U
 | Vault `project_url` | Created |
 | Vault `cron_secret` | Created by 0002 when it runs |
 | pg_cron jobs | None until 0002 runs; then the eight `sleeplab-*` jobs in [Schedules](#schedules-pg_cron-runs-in-utc-ict--utc7) |
-| Edge Functions | All 7 deployed with `verify_jwt = false`: `switchbot-webhook`, `poll-meter`, `ac-curve`, `google-health-sync`, `google-health-webhook`, `google-oauth`, `nightly-report`. They reject unauthenticated calls and answer "not configured" until their secrets exist; `ac-curve` stays in dry run unless `DRY_RUN=false` |
+| `0008_switchbot_webhook_secret` | Applied 2026-10-29: Vault `switchbot_webhook_secret` + the two service_role-only RPCs. The SwitchBot webhook was registered by `switchbot-admin` the same day (enabled, `deviceList: ALL`) |
+| Edge Functions | All 8 deployed with `verify_jwt = false`: `switchbot-webhook`, `switchbot-admin`, `poll-meter`, `ac-curve`, `google-health-sync`, `google-health-webhook`, `google-oauth`, `nightly-report`. They reject unauthenticated calls and answer "not configured" until their secrets exist; `ac-curve` stays in dry run unless `DRY_RUN=false` |
 | Function secrets | None set yet (see [Secrets](#secrets)) |
 | Auth settings | **Manual** (see [Household and sign-in](#household-and-sign-in)) |
 | Vercel env | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` set for production, preview and development |
@@ -386,7 +406,7 @@ Until 0002 is applied, cron isn't scheduled and `x-cron-secret` requests are rej
 |---|---|
 | Google OAuth redirect URI (Google Cloud console) | `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/google-oauth/callback` |
 | Google OAuth start (per person) | `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/google-oauth/start?person=a&key=<OAUTH_START_SECRET>` |
-| SwitchBot webhook (register with `setupWebhook`) | `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/switchbot-webhook/<WEBHOOK_SECRET>` |
+| SwitchBot webhook (registered by `switchbot-admin`) | `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/switchbot-webhook/<vault switchbot_webhook_secret>` |
 | Google Health subscriber endpoint | `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/google-health-webhook` |
 
 **Known mismatch.** The PWA's "Connect Google Health" button opens `google-oauth/start?access_token=<user JWT>&login_hint=<email>`, but the deployed function only accepts `?person=…&key=<OAUTH_START_SECRET>`. Until `/start` also accepts a member's JWT (verify with `auth.getUser`, map to `household_members.person_id`, 403 otherwise), connect with the `key` URL above.
