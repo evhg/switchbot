@@ -1,13 +1,18 @@
 'use client';
-// Today → Vitals: one card per person with last night's daily values vs that person's own 30-night baseline.
+// Today → 05 · Your bodies: last night's daily vitals for everyone, side by side, each vs that person's own 30-night
+// baseline (docs/DESIGN.md §10.05). Rows reveal with a stagger, values count up, sparklines draw in. Every cell
+// opens the Body tab for that person at that metric; a per-person table keeps every value reachable.
 import Link from 'next/link';
+import { useState } from 'react';
 import { baselineBand, type Person, type PersonNightMetrics } from '@sleep-lab/core';
 import { personColor } from '@/lib/data/context.tsx';
 import type { Dataset } from '@/lib/data/types.ts';
 import { addDays, dur, fmt, shortDate, shortDay } from '@/lib/format.ts';
 import { writePref } from '@/lib/prefs.ts';
 import { VitalSpark } from './charts/VitalSpark.tsx';
-import { Card, TableView } from './ui.tsx';
+import { CountUp, Reveal } from './motion.tsx';
+import { Icon } from './icons.tsx';
+import s from './story/story.module.css';
 
 const BASELINE_NIGHTS = 30;
 const MIN_BASELINE = 7;
@@ -23,8 +28,8 @@ type Tone = 'good' | 'bad' | 'neutral';
 interface MetricDef {
   key: string;
   label: string;
-  /** Short context after the label, e.g. which day the steps are from. */
-  context?: (date: string) => string;
+  /** Mono line under the label (unit / what it is). */
+  hint: (date: string) => string;
   /** Column header in the table view, when the label alone would be ambiguous. */
   column?: string;
   unit: string;
@@ -36,7 +41,7 @@ interface MetricDef {
   delta: (d: number) => string;
   /** Smallest SD used for z-scores, so a very steady baseline doesn't turn noise into a red arrow. */
   sdFloor: number;
-  /** Secondary line under the label. */
+  /** Short secondary fact for the cell. */
   sub?: (m: PersonNightMetrics) => string | null;
 }
 
@@ -49,7 +54,7 @@ const METRICS: MetricDef[] = [
   {
     key: 'steps',
     label: 'Steps',
-    context: (date) => shortDay(addDays(date, -1)),
+    hint: (date) => `${shortDay(addDays(date, -1))} · day before`,
     column: 'Steps (day before)',
     unit: '',
     get: (m) => m.steps,
@@ -61,39 +66,43 @@ const METRICS: MetricDef[] = [
   {
     key: 'hrv',
     label: 'HRV',
+    hint: () => 'RMSSD · ms',
     unit: 'ms',
     get: (m) => m.rmssdMean,
     better: 'up',
     value: (v) => fmt(v),
     delta: signedFixed(0),
     sdFloor: 2,
-    sub: (m) => (Number.isFinite(m.deepRmssd ?? NaN) ? `deep sleep ${fmt(m.deepRmssd)} ms` : null),
+    sub: (m) => (Number.isFinite(m.deepRmssd ?? NaN) ? `deep ${fmt(m.deepRmssd)} ms` : null),
   },
   {
     key: 'rhr',
     label: 'Resting HR',
+    hint: () => 'bpm',
     unit: 'bpm',
     get: (m) => m.restingHr,
     better: 'down',
     value: (v) => fmt(v),
     delta: signedFixed(0),
     sdFloor: 1,
-    sub: (m) => (Number.isFinite(m.hrNadir) ? `sleeping low ${fmt(m.hrNadir)} bpm` : null),
+    sub: (m) => (Number.isFinite(m.hrNadir) ? `asleep low ${fmt(m.hrNadir)}` : null),
   },
   {
     key: 'sleep',
     label: 'Sleep',
+    hint: () => 'asleep',
     unit: '',
     get: (m) => m.totalSleepMin,
     better: 'up',
     value: (v) => dur(v),
     delta: durDelta,
     sdFloor: 15,
-    sub: (m) => `deep ${dur(m.deepMin)} · REM ${dur(m.remMin)} · ${fmt(m.efficiencyPct)}% eff.`,
+    sub: (m) => `deep ${dur(m.deepMin)} · ${fmt(m.efficiencyPct)}%`,
   },
   {
     key: 'spo2',
     label: 'SpO₂',
+    hint: () => 'mean · %',
     unit: '%',
     get: (m) => m.spo2Mean,
     better: 'up',
@@ -105,6 +114,7 @@ const METRICS: MetricDef[] = [
   {
     key: 'resp',
     label: 'Breathing',
+    hint: () => 'breaths / min',
     unit: '/min',
     get: (m) => m.respRate,
     better: 'rise-bad',
@@ -115,13 +125,13 @@ const METRICS: MetricDef[] = [
   {
     key: 'temp',
     label: 'Skin temp',
+    hint: () => 'vs Google baseline',
     unit: '°C',
     get: (m) => m.tempDeviationC,
     better: 'rise-bad',
     value: (v) => `${sign(Math.round(v * 100))}${fmt(Math.abs(v), 2)}`,
     delta: signedFixed(2),
     sdFloor: 0.1,
-    sub: () => 'deviation from Google’s 30-day baseline',
   },
 ];
 
@@ -140,15 +150,6 @@ function tone(better: Better, z: number): Tone {
 }
 
 const TONE_WORD: Record<Tone, string> = { good: 'better than usual', bad: 'worse than usual', neutral: 'about usual' };
-
-function Arrow({ dir }: { dir: -1 | 0 | 1 }) {
-  if (dir === 0) return <span aria-hidden>·</span>;
-  return (
-    <svg width={8} height={9} viewBox="0 0 8 9" aria-hidden style={{ flex: 'none' }}>
-      <path d={dir > 0 ? 'M4 0.5 L7.5 5 H5.2 V8.5 H2.8 V5 H0.5 Z' : 'M4 8.5 L7.5 4 H5.2 V0.5 H2.8 V4 H0.5 Z'} fill="currentColor" />
-    </svg>
-  );
-}
 
 interface Row {
   def: MetricDef;
@@ -176,126 +177,158 @@ function rowsFor(dataset: Dataset, personId: string, index: number): Row[] {
   });
 }
 
-function MetricRow({ row, m, date, color }: { row: Row; m: PersonNightMetrics; date: string; color: string }) {
+interface Col {
+  person: Person;
+  color: string;
+  m: PersonNightMetrics | null;
+  away: boolean;
+  rows: Row[] | null;
+  lastDate: string | null;
+}
+
+function Cell({ col, row, date }: { col: Col; row: Row; date: string }) {
   const { def, v, base } = row;
-  const unit = def.unit ? <span className="vital-unit">{def.unit}</span> : null;
   const d = base && Number.isFinite(v) ? v - base.mean : NaN;
   const z = Number.isFinite(d) ? d / Math.max(base!.sd || 0, def.sdFloor) : NaN;
   const t = tone(def.better, z);
   const shown = Number.isFinite(d) ? def.delta(d) : '';
-  const dir: -1 | 0 | 1 = !Number.isFinite(d) || /^±/.test(shown) ? 0 : d > 0 ? 1 : -1;
-  const sub = def.sub?.(m) ?? null;
-  const ctx = def.context?.(date);
+  const dir = !Number.isFinite(d) || /^±/.test(shown) ? 0 : d > 0 ? 1 : -1;
+  const sub = col.m ? def.sub?.(col.m) ?? null : null;
   return (
-    <li className="vital-row">
-      <div className="vital-head">
-        <span className="vital-label">
-          {def.label}
-          {ctx && <span className="muted"> · {ctx}</span>}
-        </span>
-        {sub && <span className="vital-sub">{sub}</span>}
+    <Link
+      prefetch={false}
+      href={`/body#${def.key}`}
+      className={`${s.vc} tap`}
+      onClick={() => writePref('bodyPerson', col.person.id)}
+      aria-label={`${col.person.name} ${def.label}: ${Number.isFinite(v) ? `${def.value(v)} ${def.unit}` : 'no data'}${Number.isFinite(d) ? `, ${shown} vs baseline, ${TONE_WORD[t]}` : ''}. Open in Body`}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div className={`${s.vv} num`}>
+          {Number.isFinite(v) ? <CountUp value={v} format={def.value} duration={1100} /> : '–'}
+          {Number.isFinite(v) && def.unit && <small>{def.unit}</small>}
+        </div>
+        <div className={`${s.vd} ${s[t]}`}>
+          {Number.isFinite(d) ? (
+            <>
+              <i aria-hidden>{dir > 0 ? '▲' : dir < 0 ? '▼' : '·'}</i>
+              {shown.replace(/^[+−±]/, '')}
+              <span className={s.vbase}>vs {def.value(base!.mean)}</span>
+            </>
+          ) : (
+            <span className={s.vbase}>{Number.isFinite(v) ? 'baseline…' : 'no data'}</span>
+          )}
+        </div>
+        {sub && <div className={s.vsub}>{sub}</div>}
       </div>
-      <div className="vital-body">
-        <span className="vital-value">
-          {Number.isFinite(v) ? def.value(v) : '–'}
-          {Number.isFinite(v) && unit}
-        </span>
+      <div className={s.vspark}>
         <VitalSpark
           points={row.spark}
           band={base}
-          color={color}
-          label={def.label}
+          color={col.color}
+          height={26}
+          label={`${col.person.name} ${def.label}`}
           format={(x, dt) => `${shortDay(dt)} ${shortDate(dt)} · ${def.value(x)}${def.unit ? ` ${def.unit}` : ''}`}
         />
-        <span className={`vital-delta ${t}`} title={base ? `${base.n}-night baseline ${def.value(base.mean)}${def.unit ? ` ${def.unit}` : ''}` : undefined}>
-          {Number.isFinite(d) ? (
-            <>
-              <span className="vital-delta-main" aria-label={`${shown} ${def.unit} vs baseline, ${TONE_WORD[t]}`}>
-                <Arrow dir={dir} />
-                {shown.replace(/^[+−±]/, '')}
-              </span>
-              <span className="vital-base">vs {def.value(base!.mean)}</span>
-            </>
-          ) : (
-            <span className="vital-base">{Number.isFinite(v) ? 'baseline…' : 'no data'}</span>
-          )}
-        </span>
       </div>
-    </li>
+    </Link>
   );
 }
 
-function PersonVitals({ dataset, person, index, away }: { dataset: Dataset; person: Person; index: number; away: boolean }) {
-  const night = dataset.nights[index]!;
-  const m = away ? null : (dataset.person[person.id]?.[index] ?? null);
-  const color = personColor(dataset.people, person.id);
-  const openBody = () => writePref('bodyPerson', person.id);
-  const title = (
-    <span className="row" style={{ gap: 7, flexWrap: 'nowrap' }}>
-      <i className="key-dot" style={{ background: color, width: 10, height: 10 }} aria-hidden />
-      {person.name}
-    </span>
-  );
-  if (!m) {
-    // Last night before this one with this person's data, so an away card says how stale the picture is.
-    let last = -1;
-    for (let i = index - 1; i >= 0 && last < 0; i--) if (dataset.person[person.id]?.[i]) last = i;
-    const lastDate = last >= 0 ? dataset.nights[last]!.date : null;
-    return (
-      <Card title={title} sub={away ? 'Away this night' : 'No body data this night'}>
-        <p className="small muted">
-          {away ? 'Not home, so no vitals for this night.' : 'The tracker didn’t sync for this night.'}
-          {lastDate && ` Last data: ${shortDay(lastDate)} ${shortDate(lastDate)}.`}
-        </p>
-      </Card>
-    );
-  }
-  const rows = rowsFor(dataset, person.id, index);
-  const n = rows.find((r) => r.base)?.base?.n ?? 0;
-  const tableNights = rows[0]!.spark.map((s) => s.date);
-  return (
-    <Card
-      title={title}
-      sub={n ? `Last night vs own ${n}-night baseline` : 'Last night · baseline builds over 7 nights'}
-      meta={
-        <Link href="/body" onClick={openBody} aria-label={`Open Body for ${person.name}`}>
-          Body →
-        </Link>
-      }
-    >
-      <ul className="vital-list">
-        {rows.map((r) => (
-          <MetricRow key={r.def.key} row={r} m={m} date={night.date} color={color} />
-        ))}
-      </ul>
-      <div className="vital-foot">
-        <span className="small muted">
-          <i className="vital-key-band" aria-hidden /> usual range (±1 SD) · 14 nights
-        </span>
-        <TableView
-          caption={`${person.name}: vitals, last ${tableNights.length} nights`}
-          columns={['Night', ...rows.map((r) => r.def.column ?? (r.def.unit ? `${r.def.label} (${r.def.unit})` : r.def.label))]}
-          rows={tableNights
-            .map((date, i) => [shortDate(date), ...rows.map((r) => (Number.isFinite(r.spark[i]!.v) ? r.def.value(r.spark[i]!.v) : '–'))])
-            .reverse()}
-        />
-      </div>
-    </Card>
-  );
-}
-
-/** One card per person, always (an away card when they weren't home); side by side on wide screens, stacked on phones. */
-export function VitalsSection({ dataset, index }: { dataset: Dataset; index: number }) {
+/**
+ * The comparison table: one column per person (an "away" column when they weren't home), one row per metric.
+ * `index` points into `dataset.nights`.
+ */
+export function VitalsTable({ dataset, index }: { dataset: Dataset; index: number }) {
+  const [table, setTable] = useState(false);
   const night = dataset.nights[index];
   if (!night) return null;
+  const cols: Col[] = dataset.people.map((p) => {
+    const away = !night.people.some((x) => x.personId === p.id);
+    const m = away ? null : (dataset.person[p.id]?.[index] ?? null);
+    let lastDate: string | null = null;
+    if (!m) for (let i = index - 1; i >= 0 && !lastDate; i--) if (dataset.person[p.id]?.[i]) lastDate = dataset.nights[i]!.date;
+    return { person: p, color: personColor(dataset.people, p.id), m, away, rows: m ? rowsFor(dataset, p.id, index) : null, lastDate };
+  });
+  const n = cols.find((c) => c.rows)?.rows?.find((r) => r.base)?.base?.n ?? 0;
+  const grid = { gridTemplateColumns: `minmax(74px, 0.62fr) repeat(${cols.length}, minmax(0, 1fr))` };
   return (
-    <>
-      <h2 className="section-label span-2" id="vitals">
-        Vitals
-      </h2>
-      {dataset.people.map((p) => (
-        <PersonVitals key={p.id} dataset={dataset} person={p} index={index} away={!night.people.some((x) => x.personId === p.id)} />
+    <div className={s.vt}>
+      <div className={`${s.vr} ${s.vhead}`} style={grid}>
+        <span aria-hidden />
+        {cols.map((c) => (
+          <span key={c.person.id} className={s.vname}>
+            <i style={{ background: c.color }} />
+            {c.person.name}
+          </span>
+        ))}
+      </div>
+      {METRICS.map((def, ri) => (
+        <Reveal key={def.key} className={s.vr} style={{ ...grid, ['--i' as string]: ri % 4 }}>
+          <div className={s.vk}>
+            {def.label}
+            <span>{def.hint(night.date)}</span>
+          </div>
+          {cols.map((c) =>
+            c.rows ? (
+              <Cell key={c.person.id} col={c} row={c.rows[ri]!} date={night.date} />
+            ) : (
+              <div key={c.person.id} className={s.vaway}>
+                {ri === 0 ? (
+                  <>
+                    <b>{c.away ? 'Away' : 'No data'}</b>
+                    <span>
+                      {c.away ? 'Not home this night.' : 'The tracker didn’t sync.'}
+                      {c.lastDate && ` Last data ${shortDay(c.lastDate)} ${shortDate(c.lastDate)}.`}
+                    </span>
+                  </>
+                ) : (
+                  <span>–</span>
+                )}
+              </div>
+            ),
+          )}
+        </Reveal>
       ))}
-    </>
+      <div className={s.vfoot}>
+        <span className="t-micro muted">
+          {n ? `vs own ${n}-night baseline` : 'Baseline builds over 7 nights'} · <i className="vital-key-band" aria-hidden /> usual range
+        </span>
+        <button type="button" className={`btn quiet ${s.vtBtn}`} onClick={() => setTable((o) => !o)} aria-expanded={table}>
+          <Icon name="table" size={14} /> {table ? 'Hide table' : 'View as table'}
+        </button>
+      </div>
+      {table &&
+        cols
+          .filter((c) => c.rows)
+          .map((c) => {
+            const rows = c.rows!;
+            const tableNights = rows[0]!.spark.map((x) => x.date);
+            const columns = ['Night', ...rows.map((r) => r.def.column ?? (r.def.unit ? `${r.def.label} (${r.def.unit})` : r.def.label))];
+            return (
+              <div key={c.person.id} className={s.vtable}>
+                <div className={s.vname} style={{ margin: '14px 0 6px' }}>
+                  <i style={{ background: c.color }} />
+                  {c.person.name} · last {tableNights.length} nights
+                </div>
+                <div className="scroll-x" style={{ maxHeight: 260, overflowY: 'auto' }}>
+                  <table className="data-table">
+                    <caption className="hidden">{`${c.person.name}: vitals, last ${tableNights.length} nights`}</caption>
+                    <thead>
+                      <tr>{columns.map((h) => <th key={h}>{h}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                      {tableNights
+                        .map((date, i) => [shortDate(date), ...rows.map((r) => (Number.isFinite(r.spark[i]!.v) ? r.def.value(r.spark[i]!.v) : '–'))])
+                        .reverse()
+                        .map((r, i) => (
+                          <tr key={i}>{r.map((v, j) => <td key={j}>{v}</td>)}</tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })}
+    </div>
   );
 }

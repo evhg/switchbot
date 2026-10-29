@@ -1,0 +1,110 @@
+/* Reset, document, typography scale (docs/DESIGN.md §2) and iOS PWA polish. */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  background: var(--bg);
+  transition: background-color var(--d-base) var(--ease-io);
+  /* NOTE: no scroll-behavior: smooth here (fights iOS momentum, §9.3 rule 5). */
+}
+body {
+  /* Transparent so fixed z-index:-1 layers (the story sky) show; html paints --bg on the canvas (overscroll too). */
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.4;
+  letter-spacing: -0.005em;
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  overflow-x: hidden;
+  overflow-x: clip;
+  min-height: 100dvh;
+  transition: background-color var(--d-base) var(--ease-io), color var(--d-base) var(--ease-io);
+}
+::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+a { color: var(--accent); text-decoration: none; -webkit-tap-highlight-color: transparent; }
+button, input, select, textarea { font: inherit; color: inherit; letter-spacing: inherit; }
+button { cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+img, svg { max-width: 100%; }
+h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -0.02em; }
+p { margin: 0; }
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+input[type='checkbox'], input[type='radio'] { accent-color: var(--accent); }
+
+/* ---------- Type scale (px at a 390pt viewport) ---------- */
+.t-hero, .t-mega, .t-clock, .t-big, .t-h1, .t-stat, .num {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: 'tnum' 1, 'lnum' 1, 'ss01' 1;
+}
+.t-hero { font-size: clamp(160px, 54vw, 212px); line-height: .78; font-weight: 800; letter-spacing: -0.075em; color: var(--num-color); }
+.t-mega { font-size: clamp(88px, 31vw, 120px); line-height: .82; font-weight: 800; letter-spacing: -0.06em; color: var(--num-color); }
+.t-clock { font-size: clamp(84px, 30vw, 118px); line-height: .9; font-weight: 300; letter-spacing: -0.045em; color: var(--num-color); }
+.t-clock.sm { font-size: 76px; }
+.t-big { font-size: 64px; line-height: .9; font-weight: 750; letter-spacing: -0.05em; }
+.t-h1 { font-size: clamp(40px, 13.3vw, 52px); line-height: .95; font-weight: 750; letter-spacing: -0.045em; }
+.t-h2 { font-size: 28px; line-height: 1.05; font-weight: 700; letter-spacing: -0.03em; }
+.t-h3 { font-size: 20px; line-height: 1.15; font-weight: 650; letter-spacing: -0.02em; }
+.t-stat { font-size: 23px; line-height: 1; font-weight: 700; letter-spacing: -0.02em; }
+.t-body { font-size: 17px; line-height: 1.4; font-weight: 450; letter-spacing: -0.01em; }
+.t-small { font-size: 13.5px; line-height: 1.4; font-weight: 450; letter-spacing: 0; }
+.t-label { font-family: var(--font-mono); font-size: 10.5px; line-height: 1.3; font-weight: 500; letter-spacing: .14em; text-transform: uppercase; }
+.t-micro { font-family: var(--font-mono); font-size: 9.5px; line-height: 1.2; font-weight: 400; letter-spacing: .12em; text-transform: uppercase; }
+.t-unit { font-family: var(--font-mono); font-size: .34em; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--text-2); margin-left: .25em; vertical-align: baseline; }
+/* Two-tone headline: <h2 className="t-h1">First. <em className="tone">Second.</em></h2> */
+.tone { font-style: normal; color: var(--ch-accent); }
+.tone-2 { font-style: normal; color: var(--text-2); }
+/* Gradient fill for the hero number (flat --num-color in night mode). */
+.grad-num {
+  background: linear-gradient(180deg, var(--text) 20%, color-mix(in oklab, var(--ch-accent) 35%, var(--text)) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  /* Keep tall glyphs (tight line-heights) inside the clipped box, or Chromium paints the overflow as a solid block. */
+  display: inline-block; padding: .14em .04em .1em 0; margin: -.14em -.04em -.1em 0;
+}
+:root[data-theme='night'] .grad-num { background: none; color: var(--num-color); }
+
+.muted { color: var(--muted); }
+.t2 { color: var(--text-2); }
+.accent { color: var(--ch-accent); }
+.small { font-size: 12.5px; }
+.mono { font-family: var(--font-mono); }
+.num { font-variant-numeric: tabular-nums; }
+.good { color: var(--good-text); }
+.bad { color: var(--bad-text); }
+.hidden { display: none !important; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* ---------- Press feedback (iOS-like): scale on tap, no highlight ---------- */
+.press, .btn, .icon-btn, .chip, .seg button, .tabbar a, .card-link, .tap {
+  transition: transform var(--d-fast) var(--ease-out), opacity var(--d-fast) var(--ease-out), background-color var(--d-fast), color var(--d-fast), border-color var(--d-fast);
+  -webkit-user-select: none; user-select: none;
+}
+.press:active, .btn:active, .icon-btn:active, .chip:active, .tap:active, .card-link:active { transform: scale(.97); }
+.tabbar a:active { transform: scale(.92); }
+.btn:disabled:active, .icon-btn:disabled:active { transform: none; }
+
+/* ---------- Night mode: native controls in red-on-black ---------- */
+:root[data-theme='night'] img { filter: grayscale(1) brightness(0.3) sepia(1) hue-rotate(-50deg) saturate(4); }
+:root[data-theme='night'] input[type='checkbox'] {
+  appearance: none; -webkit-appearance: none;
+  width: 16px; height: 16px; flex: none; margin: 0;
+  border: 1.5px solid var(--text-2); border-radius: 4px; background: var(--bg);
+  display: inline-grid; place-content: center;
+}
+:root[data-theme='night'] input[type='checkbox']:checked::after {
+  content: ''; width: 8px; height: 4px; border: solid var(--text); border-width: 0 0 2px 2px;
+  transform: translateY(-1px) rotate(-45deg);
+}
+:root[data-theme='night'] select,
+:root[data-theme='night'] option,
+:root[data-theme='night'] input,
+:root[data-theme='night'] textarea { background-color: var(--surface-2); color: var(--text); border-color: var(--border); }
+:root[data-theme='night'] input::placeholder { color: var(--muted); }
+:root[data-theme='night'] input[type='date']::-webkit-calendar-picker-indicator { filter: grayscale(1) brightness(0.3) sepia(1) hue-rotate(-50deg) saturate(4); }
+:root[data-theme='night'] ::selection { background: #2a0604; color: var(--text); }

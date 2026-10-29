@@ -131,7 +131,7 @@ export function NightStrip({ night, people, curve, events }: { night: Night; peo
   return (
     <div ref={ref} className="chart-box" style={{ touchAction: 'pan-y' }}>
       {width > 0 && (
-        <svg width={w} height={H} role="img" aria-label="Night strip: sleep stages and room temperature, humidity and CO2 over the night">
+        <svg width={w} height={H} style={{ fontFamily: 'var(--font-mono)', letterSpacing: '.08em' }} role="img" aria-label="Night strip: sleep stages and room temperature, humidity and CO2 over the night">
           {/* gridlines */}
           {ticks.map((t) => (
             <line key={t} x1={x(t)} x2={x(t)} y1={hypY[0] ?? tempY} y2={axisY - 2} stroke="var(--grid)" />
@@ -146,8 +146,8 @@ export function NightStrip({ night, people, curve, events }: { night: Night; peo
           {/* hypnograms */}
           {persons.map((p, pi) => (
             <g key={p.personId}>
-              <text x={0} y={hypY[pi]! + 12} fill="var(--text-2)" fontSize={11} fontWeight={600}>
-                {name(p.personId)}
+              <text x={0} y={hypY[pi]! + 12} fill="var(--text-2)" fontSize={9.5} fontWeight={500}>
+                {name(p.personId).toUpperCase()}
               </text>
               {STAGE_ORDER.map((s) => (
                 <text key={s} x={L - 6} y={lvlY(pi, s) + 3} fill="var(--muted)" fontSize={8} textAnchor="end">
@@ -160,8 +160,8 @@ export function NightStrip({ night, people, curve, events }: { night: Night; peo
                 const x1 = x(Math.min(s.end, to));
                 return (
                   <g key={i}>
-                    {prev && <line x1={x0} x2={x0} y1={lvlY(pi, prev.stage) + 2} y2={lvlY(pi, s.stage) + 2} stroke="var(--axis)" strokeWidth={1} />}
-                    <rect x={x0} y={lvlY(pi, s.stage)} width={Math.max(1, x1 - x0 - 0.5)} height={5} rx={1.5} fill={stageColor(s.stage)} />
+                    {prev && <line x1={x0} x2={x0} y1={lvlY(pi, prev.stage) + 2} y2={lvlY(pi, s.stage) + 2} stroke="var(--hairline-2)" strokeWidth={1} />}
+                    <rect x={x0} y={lvlY(pi, s.stage) - 0.5} width={Math.max(1.4, x1 - x0 - 0.5)} height={6} rx={2.5} fill={stageColor(s.stage)} />
                   </g>
                 );
               })}
@@ -169,15 +169,15 @@ export function NightStrip({ night, people, curve, events }: { night: Night; peo
           ))}
 
           {/* temperature */}
-          <text x={0} y={tempY + 10} fill="var(--text-2)" fontSize={11} fontWeight={600}>°C</text>
+          <text x={0} y={tempY + 10} fill="var(--text-2)" fontSize={9.5} fontWeight={500}>°C</text>
           {[tLo, Math.round((tLo + tHi) / 2), tHi].map((v) => (
             <text key={v} x={L - 6} y={yT(v) + 3} fill="var(--muted)" fontSize={9} textAnchor="end">{v}</text>
           ))}
-          <path d={linePath(target.map((t) => ({ x: x(t.ts), y: yT(t.t) })))} fill="none" stroke="var(--text-2)" strokeWidth={1.5} strokeDasharray="4 3" />
+          <path d={linePath(target.map((t) => ({ x: x(t.ts), y: yT(t.t) })))} fill="none" stroke="var(--text-2)" strokeOpacity={0.7} strokeWidth={1.2} strokeDasharray="3 3" />
           <clipPath id="ns-temp-clip">
             <rect x={L} y={tempY - 2} width={w - L - R} height={rows.temp + 4} />
           </clipPath>
-          <path clipPath="url(#ns-temp-clip)" d={linePath(room.map((r) => ({ x: x(r.ts), y: yT(r.tempC) })), 12)} fill="none" stroke="var(--temp)" strokeWidth={2} strokeLinejoin="round" />
+          <path clipPath="url(#ns-temp-clip)" d={linePath(room.map((r) => ({ x: x(r.ts), y: yT(r.tempC) })), 12)} fill="none" stroke="var(--temp)" strokeWidth={2.2} strokeLinejoin="round" strokeLinecap="round" />
           {offTop && (
             <g>
               <path d={`M${x(offTop.ts) + 2},${tempY + 6} l4,-6 l4,6`} fill="none" stroke="var(--temp)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
@@ -188,15 +188,15 @@ export function NightStrip({ night, people, curve, events }: { night: Night; peo
           )}
 
           {/* RH */}
-          <text x={0} y={rhY + 10} fill="var(--text-2)" fontSize={11} fontWeight={600}>RH</text>
+          <text x={0} y={rhY + 10} fill="var(--text-2)" fontSize={9.5} fontWeight={500}>RH</text>
           <rect x={L} y={yR(55)} width={w - L - R} height={Math.max(0, yR(45) - yR(55))} fill="var(--rh)" opacity={0.08} />
           {[rLo, rHi].map((v) => (
             <text key={v} x={L - 6} y={yR(v) + 3} fill="var(--muted)" fontSize={9} textAnchor="end">{v}%</text>
           ))}
-          <path d={linePath(room.map((r) => ({ x: x(r.ts), y: yR(r.rh) })), 12)} fill="none" stroke="var(--rh)" strokeWidth={2} strokeLinejoin="round" />
+          <path d={linePath(room.map((r) => ({ x: x(r.ts), y: yR(r.rh) })), 12)} fill="none" stroke="var(--rh)" strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" />
 
           {/* CO2 with fixed bands */}
-          <text x={0} y={co2Y + 10} fill="var(--text-2)" fontSize={11} fontWeight={600}>CO₂</text>
+          <text x={0} y={co2Y + 10} fill="var(--text-2)" fontSize={9.5} fontWeight={500}>CO₂</text>
           {CO2_BANDS.map((b) => {
             const y0 = yC(Math.min(b.to, cHi));
             const y1 = yC(Math.max(b.from, 400));
@@ -205,19 +205,28 @@ export function NightStrip({ night, people, curve, events }: { night: Night; peo
           {[800, 1000, 1500].filter((v) => v < cHi).map((v) => (
             <text key={v} x={L - 6} y={yC(v) + 3} fill="var(--muted)" fontSize={9} textAnchor="end">{v >= 1000 ? `${v / 1000}k` : v}</text>
           ))}
-          <path d={linePath(room.map((r) => ({ x: x(r.ts), y: yC(r.co2) })), 12)} fill="none" stroke="var(--text-2)" strokeWidth={2} strokeLinejoin="round" />
+          <defs>
+            <linearGradient id="ns-co2" gradientUnits="userSpaceOnUse" x1={0} x2={0} y1={co2Y} y2={co2Y + rows.co2}>
+              <stop offset={0} stopColor="var(--co2)" />
+              <stop offset={Math.max(0, Math.min(1, (yC(1000) - co2Y) / rows.co2))} stopColor="var(--co2)" />
+              <stop offset={Math.max(0, Math.min(1, (yC(1000) - co2Y) / rows.co2))} stopColor="var(--text-2)" />
+              <stop offset={1} stopColor="var(--text-2)" />
+            </linearGradient>
+          </defs>
+          <line x1={L} x2={w - R} y1={yC(1000)} y2={yC(1000)} stroke="var(--text-2)" strokeOpacity={0.6} strokeDasharray="3 4" />
+          <path d={linePath(room.map((r) => ({ x: x(r.ts), y: yC(r.co2) })), 12)} fill="none" stroke="url(#ns-co2)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
 
           {/* AC commands */}
-          <text x={0} y={acY + 14} fill="var(--text-2)" fontSize={11} fontWeight={600}>AC</text>
+          <text x={0} y={acY + 14} fill="var(--text-2)" fontSize={9.5} fontWeight={500}>AC</text>
           <line x1={L} x2={w - R} y1={acY + 11} y2={acY + 11} stroke="var(--grid)" />
           {night.ac.map((c, i) => (
             <g key={i}>
-              <line x1={x(c.ts)} x2={x(c.ts)} y1={acY + 4} y2={acY + 18} stroke={c.landed === false ? 'var(--critical)' : 'var(--text-2)'} strokeWidth={2} strokeLinecap="round" />
+              <line x1={x(c.ts)} x2={x(c.ts)} y1={acY + 4} y2={acY + 18} stroke={c.landed === false ? 'var(--critical)' : c.state.power ? 'var(--setpoint)' : 'var(--muted)'} strokeWidth={2.5} strokeLinecap="round" />
             </g>
           ))}
 
           {/* events */}
-          <text x={0} y={evY + 14} fill="var(--text-2)" fontSize={11} fontWeight={600}>Events</text>
+          <text x={0} y={evY + 14} fill="var(--text-2)" fontSize={9.5} fontWeight={500}>EVENTS</text>
           {events
             .filter((e) => e.kind === 'room_empty' && (e.end ?? e.start) > from && e.start < to)
             .map((e, i) => (
@@ -231,10 +240,10 @@ export function NightStrip({ night, people, curve, events }: { night: Night; peo
 
           {/* axis */}
           {ticks.map((t) => (
-            <text key={t} x={x(t)} y={axisY + 12} fill="var(--muted)" fontSize={10} textAnchor="middle">{hm(t)}</text>
+            <text key={t} x={x(t)} y={axisY + 12} fill="var(--muted)" fontSize={9.5} textAnchor="middle">{hm(t)}</text>
           ))}
 
-          {hover !== null && <line x1={x(hover)} x2={x(hover)} y1={2} y2={axisY} stroke="var(--text-2)" strokeWidth={1} />}
+          {hover !== null && <line x1={x(hover)} x2={x(hover)} y1={2} y2={axisY} stroke="var(--hairline-2)" strokeWidth={1} />}
           <rect
             x={L}
             y={0}

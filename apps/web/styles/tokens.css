@@ -1,0 +1,221 @@
+/* =====================================================================================================
+   Design tokens: "Kinetic Night" (docs/DESIGN.md §2–§5, §9.1).
+   Every colour in the app (CSS, inline SVG and Recharts) reads from these custom properties, so the three
+   themes swap in one place. Theme = data-theme on <html> ('light' | 'dark' | 'night'), set before first
+   paint by lib/theme-boot.ts. Token NAMES used by charts are stable; only values change per theme.
+   ===================================================================================================== */
+
+:root {
+  /* ---------- Type ---------- */
+  --font: var(--font-display, ui-sans-serif), system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-num: var(--font-display, ui-sans-serif), system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-geist-mono, ui-monospace), ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* ---------- Spacing (4px grid) ---------- */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px;
+  --sp-8: 32px; --sp-10: 40px; --sp-12: 48px; --sp-16: 64px; --sp-24: 96px;
+  --gutter: 16px;
+  --content-max: 560px;
+
+  /* ---------- Radii ---------- */
+  --r-xl: 28px; --r-lg: 22px; --r-md: 14px; --r-sm: 10px; --r-pill: 999px;
+  --radius: var(--r-lg);
+
+  /* ---------- Chrome sizes ---------- */
+  --tabbar-h: 62px;        /* the floating pill itself */
+  --tabbar-space: 84px;    /* reserved below content */
+  --topbar-h: 48px;
+
+  /* ---------- Motion (§9.1) ---------- */
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --ease-io: cubic-bezier(.65, 0, .35, 1);
+  --ease-pop: cubic-bezier(.34, 1.36, .64, 1);
+  --d-fast: 180ms; --d-base: 320ms; --d-reveal: 900ms; --d-draw: 1300ms; --d-count: 1300ms; --d-ring: 1600ms;
+  --stagger: 70ms; --rise: 28px;
+
+  /* ======================= LIGHT ("ivory paper") — default ======================= */
+  color-scheme: light;
+  --bg: #f5f1e8;
+  --surface: #fffdf9;
+  --surface-2: #efe9dc;
+  --surface-glass: rgba(250, 247, 240, .78);
+  --text: #14131a;
+  --text-2: #55525e;
+  --muted: #8b8794;
+  --hairline: rgba(20, 19, 26, .09);
+  --hairline-2: rgba(20, 19, 26, .16);
+  --border: var(--hairline);
+  --grid: rgba(20, 19, 26, .07);
+  --axis: rgba(20, 19, 26, .18);
+  --ring-track: rgba(20, 19, 26, .08);
+  --on-accent: #ffffff;
+  --num-color: var(--text);
+
+  --person-a: #2f6fe0;
+  --person-b: #d9622a;
+  --temp: #0a8fc0;
+  --co2: #c77d00;
+  --rh: #6250d6;
+  --setpoint: #a86d00;
+  --dew: #c2457a;
+  --outdoor: #d03b3b;
+
+  /* Legacy categorical slots (still read by a few charts). */
+  --s1: var(--person-a); --s2: var(--person-b); --s3: #1f9e5a; --s4: #d99400; --s5: #c2457a; --s7: #6250d6; --s8: #d03b3b;
+
+  --good: #1f9e5a; --warn: #d99400; --serious: #e0763f; --critical: #d03b3b;
+  --good-text: #13703f; --bad-text: #b02a2a;
+  --band-good: rgba(31, 158, 90, .07);
+  --band-warn: rgba(217, 148, 0, .10);
+  --band-serious: rgba(224, 118, 63, .11);
+  --band-critical: rgba(208, 59, 59, .12);
+
+  --stage-deep: #1d3fc4; --stage-light: #4f7fe8; --stage-rem: #9db6f2; --stage-awake: #d99400;
+
+  --seq: #2f6fe0; --seq-2: #d9622a;
+  --div-pos: #5a9e00; --div-neg: #d03b3b; --div-mid: #efe9dc;
+  --spark-line: #8b8794; --spark-band: rgba(20, 19, 26, .05);
+
+  --ghost: .18;
+  --glow-o: .35;
+  --shine-o: .5;
+  --shadow: 0 1px 1px rgba(20, 19, 26, .04), 0 6px 16px -6px rgba(20, 19, 26, .08), 0 28px 56px -18px rgba(20, 19, 26, .14);
+  --raise: none;
+  --skeleton-shine: rgba(255, 255, 255, .55);
+
+  /* Chapter accents (§3.4). <Chapter accent="night"> sets --ch-accent: var(--ac-night). */
+  --ac-verdict: #5b4bd6;
+  --ac-lights: #0a8fc0;
+  --ac-night: #2f5fe0;
+  --ac-air: #c77d00;
+  --ac-bodies: var(--text);
+  --ac-drivers: #5a9e00;
+  --ac-drivers-neg: #d03b3b;
+  --ac-tonight: #0f9e66;
+  --ch-accent: var(--ac-verdict);
+  --accent: var(--ch-accent);
+
+  /* Sky (§3.5): three layers, only opacity animates. */
+  --sky-dusk: linear-gradient(180deg, #f7e3d3 0%, #efe2ef 50%, var(--bg) 100%);
+  --sky-mid: linear-gradient(180deg, #e6e9f5 0%, var(--bg) 70%);
+  --sky-dawn: linear-gradient(180deg, #e2f0ea 0%, var(--bg) 70%);
+  --star: transparent;
+}
+
+/* ======================= DARK (the main look) ======================= */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #000000;
+  --surface: #0b0b0c;
+  --surface-2: #141416;
+  --surface-glass: rgba(10, 10, 12, .82);
+  --text: #f4f4f1;
+  --text-2: #a7a7a2;
+  --muted: #6c6c68;
+  --hairline: rgba(255, 255, 255, .09);
+  --hairline-2: rgba(255, 255, 255, .16);
+  --grid: rgba(255, 255, 255, .07);
+  --axis: rgba(255, 255, 255, .16);
+  --ring-track: rgba(255, 255, 255, .08);
+  --on-accent: #000000;
+
+  --person-a: #4d9bff;
+  --person-b: #ff7a3d;
+  --temp: #3fd0ff;
+  --co2: #ffb020;
+  --rh: #9085e9;
+  --setpoint: #c98500;
+  --dew: #d55181;
+  --outdoor: #e66767;
+  --s3: #3ddc84; --s4: #c98500; --s5: #d55181; --s7: #9085e9; --s8: #e66767;
+
+  --good: #3ddc84; --warn: #ffb020; --serious: #ff8a4c; --critical: #ff5a4e;
+  --good-text: #5be39a; --bad-text: #ff7a70;
+  --band-good: rgba(61, 220, 132, .05);
+  --band-warn: rgba(255, 176, 32, .09);
+  --band-serious: rgba(255, 138, 76, .12);
+  --band-critical: rgba(255, 90, 78, .16);
+
+  --stage-deep: #2f5bff; --stage-light: #6f9bff; --stage-rem: #b7c9ff; --stage-awake: #ffb020;
+
+  --seq: #4d9bff; --seq-2: #ff7a3d;
+  --div-pos: #c8ff3d; --div-neg: #ff5a4e; --div-mid: #141416;
+  --spark-line: #6c6c68; --spark-band: rgba(255, 255, 255, .05);
+
+  --ghost: .14;
+  --glow-o: .22;
+  --shine-o: .35;
+  --shadow: none;
+  --raise: inset 0 1px 0 rgba(255, 255, 255, .06);
+  --skeleton-shine: rgba(255, 255, 255, .06);
+
+  --ac-verdict: #a495ff;
+  --ac-lights: #3fd0ff;
+  --ac-night: #5b8cff;
+  --ac-air: #ffb020;
+  --ac-drivers: #c8ff3d;
+  --ac-drivers-neg: #ff5a4e;
+  --ac-tonight: #3dffa8;
+
+  --sky-dusk: radial-gradient(120% 50% at 50% 100%, rgba(255, 154, 90, .12), transparent 70%), linear-gradient(180deg, #1a1233 0%, #2c1a3f 45%, #000 100%);
+  --sky-mid: linear-gradient(180deg, #05071a 0%, #000 70%);
+  --sky-dawn: radial-gradient(120% 50% at 50% 100%, rgba(40, 200, 190, .10), transparent 70%), linear-gradient(180deg, #071a24 0%, #0e2a33 40%, #000 100%);
+  --star: #ffffff;
+}
+
+/* ======================= NIGHT: red on black, very low luminance =======================
+   Rules: no hue outside red; no pixel brighter than #c42a1e; G and B channels ≤ 0x30. Identity rides on
+   lightness, dash patterns and labels, never hue. No glows, sky, stars, gradients, shine or blur. */
+:root[data-theme='night'] {
+  color-scheme: dark;
+  --bg: #000000;
+  --surface: #070000;
+  --surface-2: #100100;
+  --surface-glass: #050000;
+  --text: #a3241a;
+  --text-2: #7d1a12;
+  --muted: #5c130d;
+  --hairline: rgba(150, 24, 12, .18);
+  --hairline-2: rgba(150, 24, 12, .30);
+  --grid: #170302;
+  --axis: #2a0604;
+  --ring-track: #1c0302;
+  --on-accent: #000000;
+  --num-color: var(--text-2);
+
+  --person-a: #a3241a;
+  --person-b: #6e170f;
+  --temp: #9c2219;
+  --co2: #7d1a12;
+  --rh: #6e170f;
+  --setpoint: #7d1a12;
+  --dew: #8a1c13;
+  --outdoor: #b0261b;
+  --s1: #b0261b; --s2: #6e170f; --s3: #9c2219; --s4: #7d1a12; --s5: #8a1c13; --s7: #6e170f; --s8: #b0261b;
+
+  --good: #5c130d; --warn: #7d1a12; --serious: #9c2219; --critical: #c42a1e;
+  --good-text: #8f1f16; --bad-text: #c42a1e;
+  --band-good: rgba(120, 20, 10, .04);
+  --band-warn: rgba(140, 25, 15, .10);
+  --band-serious: rgba(160, 30, 20, .16);
+  --band-critical: rgba(190, 35, 25, .24);
+
+  --stage-deep: #560f09; --stage-light: #7a1a11; --stage-rem: #8f1f16; --stage-awake: #b0261b;
+
+  --seq: #b0261b; --seq-2: #b0261b;
+  --div-pos: #7d1a12; --div-neg: #b0261b; --div-mid: #1c0302;
+  --spark-line: #5c130d; --spark-band: #140201;
+
+  --ghost: .25;
+  --glow-o: 0;
+  --shine-o: 0;
+  --shadow: none;
+  --raise: none;
+  --skeleton-shine: transparent;
+
+  --ac-verdict: #a3241a; --ac-lights: #a3241a; --ac-night: #a3241a; --ac-air: #a3241a;
+  --ac-bodies: #a3241a; --ac-drivers: #a3241a; --ac-drivers-neg: #b0261b; --ac-tonight: #a3241a;
+
+  --sky-dusk: none; --sky-mid: none; --sky-dawn: none;
+  --star: transparent;
+}

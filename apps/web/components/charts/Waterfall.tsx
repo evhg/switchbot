@@ -2,12 +2,15 @@
 import { useState } from 'react';
 import type { ScoreDriver } from '@sleep-lab/core';
 import { signed } from '@/lib/format.ts';
+import { Reveal } from '../motion.tsx';
 import { useWidth } from '../ui.tsx';
+import s from '../story/story.module.css';
 import { scale } from './common.tsx';
 
 /**
- * Horizontal waterfall: starts at a typical night (70), each driver moves the running total,
- * ends at the score. Rows double as the list of drivers, so the labels are the legend.
+ * Horizontal waterfall: starts at a typical night (70), each driver moves the running total, ends at the score.
+ * Rows double as the list of drivers, so the labels are the legend. Bars grow from their start on reveal
+ * (scaleX, 70 ms stagger); gains in --div-pos, losses in --div-neg, the base and total in --axis / --text-2.
  */
 export function Waterfall({ drivers, start = 70, total, totalLabel }: { drivers: ScoreDriver[]; start?: number; total: number; totalLabel: string }) {
   const [ref, width] = useWidth<HTMLDivElement>();
@@ -21,43 +24,44 @@ export function Waterfall({ drivers, start = 70, total, totalLabel }: { drivers:
   rows.push({ label: totalLabel, from: 0, to: total, kind: 'total' });
   const lo = Math.max(0, Math.floor(Math.min(...rows.map((r) => Math.min(r.from, r.to)).filter((v) => v > 0), start) / 10) * 10 - 10);
   const hi = Math.min(100, Math.ceil(Math.max(...rows.map((r) => Math.max(r.from, r.to))) / 10) * 10);
-  const barW = Math.max(96, Math.min(240, width * 0.34));
+  const barW = Math.max(96, Math.min(240, width * 0.36));
   const x = scale(lo, hi, 0, barW);
-  const rowH = 34;
   return (
-    <div ref={ref} className="chart-box">
-      {rows.map((r, i) => {
-        const a = Math.min(r.from, r.to);
-        const b = Math.max(r.from, r.to);
-        const x0 = r.kind === 'step' ? x(a) : 0;
-        const x1 = x(b);
-        const fill = r.kind === 'step' ? ((r.points ?? 0) >= 0 ? 'var(--div-pos)' : 'var(--div-neg)') : 'var(--axis)';
-        return (
-          <div
-            key={i}
-            onPointerEnter={() => setHover(i)}
-            onPointerLeave={() => setHover(null)}
-            style={{
-              display: 'grid',
-              gridTemplateColumns: `minmax(0,1fr) ${barW}px 38px`,
-              alignItems: 'center',
-              gap: 8,
-              minHeight: rowH,
-              borderTop: i ? '1px solid var(--border)' : undefined,
-              background: hover === i ? 'var(--surface-2)' : undefined,
-            }}
-          >
-            <span style={{ fontSize: 12.5, color: r.kind === 'step' ? 'var(--text)' : 'var(--text-2)', fontWeight: r.kind === 'total' ? 600 : 400, lineHeight: 1.25, padding: '4px 0' }}>{r.label}</span>
-            <svg width={barW} height={16} aria-hidden>
-              <rect x={0} y={7.5} width={barW} height={1} fill="var(--grid)" />
-              <rect x={x0} y={2} width={Math.max(2, x1 - x0)} height={12} rx={3} fill={fill} opacity={r.kind === 'base' ? 0.6 : 1} />
-            </svg>
-            <span className="num" style={{ fontSize: 13, textAlign: 'right', fontWeight: 600, color: 'var(--text)' }}>
-              {r.kind === 'step' ? signed(r.points ?? 0) : Math.round(r.to)}
-            </span>
-          </div>
-        );
-      })}
-    </div>
+    <Reveal className={s.wf} y={8}>
+      <div ref={ref}>
+        {rows.map((r, i) => {
+          const a = Math.min(r.from, r.to);
+          const b = Math.max(r.from, r.to);
+          const x0 = r.kind === 'step' ? x(a) : 0;
+          const x1 = x(b);
+          const pos = (r.points ?? 0) >= 0;
+          const fill = r.kind === 'step' ? (pos ? 'var(--div-pos)' : 'var(--div-neg)') : r.kind === 'total' ? 'var(--text-2)' : 'var(--axis)';
+          return (
+            <div
+              key={i}
+              className={`${s.wfRow} ${hover === i ? s.wfHover : ''} ${r.kind === 'total' ? s.wfTotal : ''}`}
+              onPointerEnter={() => setHover(i)}
+              onPointerLeave={() => setHover(null)}
+              style={{ gridTemplateColumns: `minmax(0,1fr) ${barW}px 40px`, ['--i' as string]: i }}
+            >
+              <span className={s.wfLabel}>{r.label}</span>
+              <span className={s.wfTrack} style={{ width: barW }}>
+                <i
+                  style={{
+                    left: x0,
+                    width: Math.max(2, x1 - x0),
+                    background: fill,
+                    transformOrigin: r.kind === 'step' && !pos ? '100% 50%' : '0 50%',
+                  }}
+                />
+              </span>
+              <span className={`num ${s.wfNum}`} style={r.kind === 'step' ? { color: pos ? 'var(--good-text)' : 'var(--bad-text)' } : undefined}>
+                {r.kind === 'step' ? signed(r.points ?? 0) : Math.round(r.to)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </Reveal>
   );
 }

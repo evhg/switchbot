@@ -1,0 +1,126 @@
+/* Lab charts + Lab screen (components/charts/lab.tsx, components/screens/LabScreen.tsx).
+   Motion: transform / opacity only. Night = opacity only, short. Reduced motion = final states. */
+
+/* ───────────── chart entrances (.in is added once on reveal) ───────────── */
+
+/* Scatter: dots glide to new positions; fade in along the series on first reveal. */
+.dot { transition: transform 500ms var(--ease-out), opacity 500ms var(--ease-out); opacity: 0; transition-delay: 0ms, var(--d, 0ms); }
+.scatter.in .dot { opacity: 1; }
+.fadeLate { opacity: 0; transition: opacity 600ms var(--ease-out) 900ms; }
+.scatter.in .fadeLate { opacity: 1; }
+
+/* Interval plot: dot pops, whiskers draw (DrawPath, --d-draw = 600ms set inline). */
+.est { opacity: 0; transform: scale(.3); transform-box: fill-box; transform-origin: center; transition: opacity 320ms var(--ease-out), transform 420ms var(--ease-pop); transition-delay: var(--d, 0ms); }
+.ivp.in .est { opacity: 1; transform: none; }
+.bar { transform: scaleX(0); transform-box: fill-box; transform-origin: left center; transition: transform 900ms var(--ease-out) 200ms; }
+.ivp.in .bar { transform: none; }
+
+/* Correlation matrix: diagonal fade. */
+.cell { opacity: 0; transition: opacity 420ms var(--ease-out); transition-delay: var(--d, 0ms); cursor: pointer; }
+.matrix.in .cell { opacity: 1; }
+.matrixFoot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; min-height: 30px; }
+.matrixRead { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.matrixRead :global(.t-label) { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.matrixRead b { font-family: var(--font-num); font-size: 22px; font-weight: 700; letter-spacing: -0.03em; color: var(--num-color); white-space: nowrap; }
+.matrixScale { display: flex; align-items: center; gap: 6px; flex: none; }
+.matrixScale i.matrixRampNight { width: 40px; background: linear-gradient(90deg, var(--div-mid), var(--div-pos)); }
+.matrixScale i { display: block; width: 64px; height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--div-neg), var(--div-mid) 50%, var(--div-pos)); }
+
+/* Mirrored hypnogram: compositor-only wipe on reveal (two counter-translating wrappers). */
+.mirror { position: relative; }
+.wipeOuter { overflow: hidden; transform: translate3d(-100%, 0, 0); }
+.wipeInner { transform: translate3d(100%, 0, 0); }
+.wipeOuter, .wipeInner { transition: transform 1400ms var(--ease-out) 150ms; }
+.mirror.in .wipeOuter, .mirror.in .wipeInner { transform: none; }
+
+/* Compromise axis: marks slide down into place. */
+.mark { opacity: 0; transform: translate3d(0, -8px, 0); transition: opacity 500ms var(--ease-out), transform 600ms var(--ease-out); transition-delay: calc(200ms + var(--d, 0ms)); }
+.compromise.in .mark { opacity: 1; transform: none; }
+
+:global(:root[data-theme='night']) .dot,
+:global(:root[data-theme='night']) .est,
+:global(:root[data-theme='night']) .mark { transform-origin: center; transition-duration: 250ms; }
+:global(:root[data-theme='night']) .scatter .dot { transition: opacity 300ms linear; }
+:global(:root[data-theme='night']) .est { transform: none; }
+:global(:root[data-theme='night']) .mark { transform: none; }
+:global(:root[data-theme='night']) .cell { transition-duration: 250ms; transition-delay: 0ms; }
+:global(:root[data-theme='night']) .wipeOuter,
+:global(:root[data-theme='night']) .wipeInner { transform: none; transition: none; }
+:global(:root[data-theme='night']) .mirror { opacity: 0; transition: opacity 350ms linear; }
+:global(:root[data-theme='night']) .mirror.in { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dot, .est, .bar, .cell, .mark, .fadeLate { opacity: 1 !important; transition: none !important; }
+  .est, .bar, .mark { transform: none !important; }
+  .wipeOuter, .wipeInner { transform: none !important; transition: none !important; }
+  :global(:root[data-theme='night']) .mirror { opacity: 1; transition: none; }
+}
+
+/* ───────────── Lab screen ───────────── */
+.page { display: grid; gap: 0; min-width: 0; }
+.intro { display: grid; gap: 14px; margin: -4px 0 18px; padding: 0 2px; }
+.lede { color: var(--text-2); font-size: 15px; line-height: 1.45; max-width: 56ch; }
+.lede b { color: var(--text); font-weight: 600; }
+.facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); }
+.fact { padding: 12px 0 12px 12px; display: grid; gap: 6px; border-left: 1px solid var(--hairline); min-width: 0; }
+.fact:first-child { border-left: 0; padding-left: 0; }
+.fact > span:first-child { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.factValue { font-family: var(--font-num); font-size: 30px; font-weight: 750; line-height: 1; letter-spacing: -0.05em; color: var(--num-color); font-variant-numeric: tabular-nums lining-nums; }
+
+.section { display: grid; gap: 16px; margin-top: 44px; min-width: 0; }
+.section:first-of-type { margin-top: 8px; }
+.sectionHead { display: grid; gap: 10px; padding: 0 2px; }
+.sectionHead :global(.sh-title) { max-width: 20ch; }
+.sectionLede { color: var(--text-2); font-size: 14px; line-height: 1.45; max-width: 54ch; margin-top: -2px; }
+
+/* Hero figure per section: one big number + mono caption. */
+.hero { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; padding: 0 2px; }
+.heroNum { font-family: var(--font-num); font-size: clamp(56px, 19vw, 76px); line-height: .86; font-weight: 800; letter-spacing: -0.06em; color: var(--num-color); font-variant-numeric: tabular-nums lining-nums; white-space: nowrap; }
+.heroNum :global(.t-unit) { font-size: 12px; letter-spacing: .1em; margin-left: 6px; }
+.heroCap { display: grid; gap: 4px; padding-bottom: 6px; min-width: 0; flex: 1 1 160px; }
+.heroCap > :first-child { color: var(--ch-accent); }
+.heroCap > :last-child { color: var(--text-2); font-size: 13.5px; line-height: 1.4; }
+
+.controls { display: grid; gap: 8px; margin-bottom: 14px; }
+.ctlRow { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ctlRow > :global(.t-micro) { width: 34px; flex: none; color: var(--muted); }
+.ctlRow > :global(.seg) { flex: 0 1 auto; min-width: 0; }
+
+.stats { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: -4px 0 10px; color: var(--text-2); }
+.stats b { color: var(--text); font-weight: 600; font-family: var(--font-mono); font-size: 11px; letter-spacing: .04em; }
+
+.callout {
+  display: flex; gap: 10px; align-items: flex-start; padding: 11px 12px; border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--ch-accent) 9%, transparent); border: 1px solid color-mix(in oklab, var(--ch-accent) 22%, transparent);
+  color: var(--text-2); font-size: 13px; line-height: 1.45; margin-bottom: 14px;
+}
+.callout svg { color: var(--ch-accent); flex: none; margin-top: 1px; }
+.callout b { color: var(--text); font-weight: 600; }
+:global(:root[data-theme='night']) .callout { background: none; }
+
+.chipRow {
+  display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 0 -18px 12px; padding: 0 18px; scroll-padding: 18px;
+  /* Fade the clipped edge so a cut chip reads as "more this way". */
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 36px), transparent);
+  mask-image: linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 36px), transparent);
+}
+.chipRow::after { content: ''; flex: none; width: 24px; }
+.chipRow::-webkit-scrollbar { display: none; }
+.chipRow :global(.chip) { flex: none; min-height: 32px; padding: 5px 12px; font-size: 13px; }
+
+.wakes { list-style: none; margin: 10px 0 0; padding: 0; }
+.wakes li { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 2px 10px; padding: 10px 0; border-top: 1px solid var(--hairline); font-size: 13.5px; }
+.wakes li > b { font-family: var(--font-mono); font-size: 12px; font-weight: 500; color: var(--text); padding-top: 1px; }
+.wakes li > span:last-child { grid-column: 2; color: var(--muted); font-family: var(--font-mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+.wakes li.none { display: block; color: var(--muted); }
+
+.skel { display: grid; gap: 14px; }
+.ctlScroll {
+  overflow-x: auto; scrollbar-width: none; margin-right: -18px; padding-right: 18px; gap: 6px;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent);
+}
+.ctlScroll::after { content: ''; flex: none; width: 28px; }
+.ctlScroll::-webkit-scrollbar { display: none; }
+.ctlScroll > :global(.t-micro) { margin-right: 4px; }
+.ctlScroll :global(.chip) { flex: none; min-height: 32px; padding: 5px 12px; font-size: 13px; }

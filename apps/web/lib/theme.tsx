@@ -12,9 +12,8 @@ export const isNightHour = (ts: number) => {
   return h >= 21 || h < 7;
 };
 
-const META: Record<ResolvedTheme, string> = { light: '#f3f2ef', dark: '#0d0d0d', night: '#000000' };
-
-
+/** Browser chrome / status bar colour per theme (matches --bg). */
+export const THEME_COLOR: Record<ResolvedTheme, string> = { light: '#f5f1e8', dark: '#000000', night: '#000000' };
 
 function resolve(mode: ThemeMode, now: number, systemDark: boolean): ResolvedTheme {
   if (mode !== 'auto') return mode;
@@ -49,7 +48,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const resolved = resolve(mode, now, systemDark);
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', resolved);
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', META[resolved]);
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEME_COLOR[resolved]);
   }, [resolved]);
 
   const value = useMemo(() => ({ mode, resolved, setMode }), [mode, resolved, setMode]);

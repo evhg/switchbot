@@ -14,13 +14,34 @@ export function simEndDate(now: Ms): string {
 
 export function createSimSource(seed = SIM_SEED, nights = SIM_NIGHTS): DataSource {
   let dataset: Promise<Dataset> | null = null;
+  const partialSubs = new Set<(ds: Dataset) => void>();
+  const progressSubs = new Set<(msg: string) => void>();
+  let lastPartial: Dataset | null = null;
   const details = new Map<string, Promise<NightDetail>>();
   return {
     kind: 'sim',
     label: `Simulator (seed ${seed}, ${nights} nights)`,
-    loadDataset() {
-      const now = Date.now();
-      dataset ??= runEngine<Dataset>({ type: 'simulate', params: { seed, nights, endDate: simEndDate(now), clipTs: now } });
+    loadDataset(onProgress, onPartial) {
+      if (onPartial) {
+        partialSubs.add(onPartial);
+        if (lastPartial) onPartial(lastPartial);
+      }
+      if (onProgress) progressSubs.add(onProgress);
+      if (!dataset) {
+        const now = Date.now();
+        dataset = runEngine<Dataset>({ type: 'simulate', params: { seed, nights, endDate: simEndDate(now), clipTs: now } }, (m) => {
+          if (m.partial) {
+            lastPartial = m.partial as Dataset;
+            for (const f of partialSubs) f(lastPartial);
+          }
+          if (m.progress) for (const f of progressSubs) f(m.progress);
+        });
+        const clear = () => {
+          partialSubs.clear();
+          progressSubs.clear();
+        };
+        dataset.then(clear, clear);
+      }
       return dataset;
     },
     loadNightDetail(date) {

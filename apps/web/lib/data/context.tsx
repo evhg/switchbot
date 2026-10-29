@@ -1,7 +1,7 @@
 'use client';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Night, PersonNightMetrics, RoomNightMetrics, RoomReading } from '@sleep-lab/core';
-import { HOUR } from '../format.ts';
+import { HOUR, tidyReport } from '../format.ts';
 import { usePref } from '../prefs.ts';
 import { createSimSource } from './sim.ts';
 import { createSupabaseSource, supabaseConfigured } from './supabase.ts';
@@ -14,7 +14,14 @@ interface DataCtx {
   status: 'loading' | 'ready' | 'error';
   progress: string;
   error: string | null;
+  /** The full dataset (all nights + metrics). Null until computed; history-dependent views wait for this. */
   dataset: Dataset | null;
+  /**
+   * Newest-night-first preview: a partial dataset (`partial: true`) that arrives well before `dataset` — first the
+   * newest night only, then the newest 31 nights (enough for 30-night baselines of the newest night) — and the full
+   * dataset once ready. Use for first paint of the latest night (Today).
+   */
+  latest: Dataset | null;
   /** Wake date of the night being viewed (shared across tabs). */
   date: string | null;
   setDate: (d: string) => void;
@@ -40,6 +47,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     error: null,
     progress: 'Simulating 90 nights…',
   });
+  const [preview, setPreview] = useState<Dataset | null>(null);
   const [date, setDate] = useState<string | null>(null);
   const [names, setNames] = usePref<Record<string, string>>('names', {});
   const setPersonName = useCallback(
@@ -50,8 +58,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let alive = true;
     setState((s) => ({ ...s, status: 'loading', error: null, progress: sourceKind === 'sim' ? 'Simulating 90 nights…' : 'Connecting…' }));
+    setPreview(null);
     source
-      .loadDataset((progress) => alive && setState((s) => ({ ...s, progress })))
+      .loadDataset(
+        (progress) => alive && setState((s) => (s.status === 'loading' ? { ...s, progress } : s)),
+        (partial) => {
+          if (!alive) return;
+          setPreview(partial);
+          const last = partial.nights.at(-1)?.date ?? null;
+          setDate((d) => d ?? last);
+        },
+      )
       .then((dataset) => {
         if (!alive) return;
         setState({ status: 'ready', dataset, error: null, progress: '' });
@@ -71,16 +88,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, [source, sourceKind]);
 
   // Names flow everywhere through dataset.people; an empty override falls back to the source's name.
-  const dataset = useMemo<Dataset | null>(() => {
-    const ds = state.dataset;
-    if (!ds) return null;
-    if (!ds.people.some((p) => names[p.id]?.trim())) return ds;
-    return { ...ds, people: ds.people.map((p) => ({ ...p, name: names[p.id]?.trim() || p.name })) };
-  }, [state.dataset, names]);
+  const applyNames = useCallback(
+    (ds: Dataset | null): Dataset | null => {
+      if (!ds) return null;
+      if (!ds.people.some((p) => names[p.id]?.trim())) return ds;
+      return { ...ds, people: ds.people.map((p) => ({ ...p, name: names[p.id]?.trim() || p.name })) };
+    },
+    [names],
+  );
+  const dataset = useMemo(() => applyNames(state.dataset), [state.dataset, applyNames]);
+  const latest = useMemo(() => dataset ?? applyNames(preview), [dataset, preview, applyNames]);
 
   const value = useMemo<DataCtx>(
-    () => ({ sourceKind, setSourceKind, source, ...state, dataset, date, setDate, names, sourcePeople: state.dataset?.people ?? null, setPersonName }),
-    [sourceKind, setSourceKind, source, state, dataset, date, names, setPersonName],
+    () => ({ sourceKind, setSourceKind, source, ...state, dataset, latest, date, setDate, names, sourcePeople: state.dataset?.people ?? preview?.people ?? null, setPersonName }),
+    [sourceKind, setSourceKind, source, state, dataset, latest, preview, date, names, setPersonName],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
@@ -92,30 +113,39 @@ export function useData(): DataCtx {
 }
 
 export interface SelectedNight {
+  /** Index into the dataset this came from (`dataset`, or the 1-night preview while `partial`). */
   index: number;
+  /** True while only the newest night is available (history-dependent views should show skeletons). */
+  partial: boolean;
   night: Night;
   room: RoomNightMetrics;
   person: Record<string, PersonNightMetrics | null>;
 }
 
-/** The night currently being viewed, plus its precomputed metrics. */
+/**
+ * The night currently being viewed, plus its precomputed metrics. Available from the newest-night preview
+ * (partial: true) before the full dataset is ready.
+ */
 export function useSelectedNight(): SelectedNight | null {
-  const { dataset, date } = useData();
+  const { latest, date } = useData();
   return useMemo(() => {
-    if (!dataset || !date) return null;
-    const index = dataset.nights.findIndex((n) => n.date === date);
+    if (!latest || !date) return null;
+    const index = latest.nights.findIndex((n) => n.date === date);
     if (index < 0) return null;
     const person: Record<string, PersonNightMetrics | null> = {};
-    for (const p of dataset.people) person[p.id] = dataset.person[p.id]?.[index] ?? null;
-    return { index, night: dataset.nights[index]!, room: dataset.room[index]!, person };
-  }, [dataset, date]);
+    for (const p of latest.people) person[p.id] = latest.person[p.id]?.[index] ?? null;
+    return { index, partial: !!latest.partial, night: latest.nights[index]!, room: latest.room[index]!, person };
+  }, [latest, date]);
 }
 
 export function useNightDetail(date: string | null | undefined): { detail: NightDetail | null; error: string | null } {
-  const { source, status } = useData();
+  const { source, status, latest } = useData();
   const [res, setRes] = useState<{ key: string; detail: NightDetail | null; error: string | null }>({ key: '', detail: null, error: null });
+  // The engine can answer detail for the newest night as soon as the preview exists (it interleaves with the
+  // history computation), so don't wait for the full dataset.
+  const canLoad = status === 'ready' || (status === 'loading' && !!latest && latest.nights.some((n) => n.date === date));
   useEffect(() => {
-    if (!date || status !== 'ready') return;
+    if (!date || !canLoad) return;
     let alive = true;
     source
       .loadNightDetail(date)
@@ -124,7 +154,7 @@ export function useNightDetail(date: string | null | undefined): { detail: Night
     return () => {
       alive = false;
     };
-  }, [date, source, status]);
+  }, [date, source, canLoad]);
   // Keep the previous detail while the next loads (no layout jump), but flag it.
   return res.key === date ? res : { detail: res.detail, error: null };
 }
@@ -153,7 +183,8 @@ export function useLive(hours = 6): { now: number; reading: RoomReading | null; 
 export const personName = (dataset: Dataset | null, id: string) => dataset?.people.find((p) => p.id === id)?.name ?? id;
 
 /** Rule-report text uses person ids ("a: HRV …"); show names instead. */
-export function withNames(text: string, dataset: Dataset | null): string {
+export function withNames(raw: string, dataset: Dataset | null): string {
+  const text = tidyReport(raw);
   if (!dataset) return text;
   let out = text;
   for (const p of dataset.people) out = out.replace(new RegExp(`(^|\\s)${p.id}:`, 'g'), `$1${p.name}:`);

@@ -1,0 +1,164 @@
+/* Body tab: scoped styles for components/screens/BodyScreen.tsx and components/charts/body.tsx.
+   docs/DESIGN.md §11 "Body". Motion: transform / opacity only; calm in night mode; final states under reduced motion. */
+
+/* ───────────── Page + sections ───────────── */
+.page { display: grid; gap: 0; min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.swap { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; animation: swapIn 420ms var(--ease-out) both; }
+@keyframes swapIn { from { opacity: 0; } }
+.section { display: grid; gap: 16px; margin-top: 48px; min-width: 0; }
+.sectionHead { display: grid; gap: 10px; padding: 0 2px; }
+.sectionHead :global(.sh-title) { max-width: 20ch; }
+.sectionLede { color: var(--text-2); font-size: 14px; line-height: 1.45; max-width: 52ch; margin-top: -2px; }
+.anchor { scroll-margin-top: calc(env(safe-area-inset-top) + var(--topbar-h) + 84px); }
+.flash { animation: flash 1.8s var(--ease-out) 1 both; }
+@keyframes flash { 0%, 40% { box-shadow: 0 0 0 2px color-mix(in oklab, var(--ch-accent) 70%, transparent); } 100% { box-shadow: 0 0 0 2px transparent; } }
+
+/* ───────────── Person switcher ───────────── */
+.switcher { display: flex; width: 100%; }
+@media (min-width: 700px) { .switchRow { max-width: 520px; } }
+.switcher > button { flex: 1 1 0; min-width: 0; min-height: 52px !important; padding: 8px 12px !important; }
+.who { display: inline-flex; align-items: center; justify-content: center; gap: 9px; width: 100%; min-width: 0; }
+.whoDot { width: 8px; height: 8px; border-radius: 50%; flex: none; box-shadow: 0 0 0 3px color-mix(in oklab, var(--dot) 22%, transparent); background: var(--dot); }
+.whoName { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; }
+.whoScore { font-family: var(--font-mono); font-size: 11px; font-weight: 500; letter-spacing: .06em; color: var(--muted); font-variant-numeric: tabular-nums; }
+.switcher > button[aria-pressed='true'] .whoScore { color: var(--text-2); }
+.switchRow { display: grid; gap: 10px; margin-bottom: 14px; }
+.source { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); padding: 0 4px; }
+
+/* ───────────── Hero ("Last night") ───────────── */
+.hero {
+  position: relative; isolation: isolate; overflow: hidden; min-width: 0;
+  border-radius: var(--r-xl); border: 1px solid var(--hairline);
+  background: var(--surface); box-shadow: var(--shadow), var(--raise);
+  padding: 20px 18px 18px; display: grid; gap: 22px;
+}
+/* Corner wash in the person colour (dark / light only, §4). */
+.hero::before {
+  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: radial-gradient(120% 70% at 100% 0%, color-mix(in oklab, var(--ch-accent) 22%, transparent), transparent 62%);
+}
+:global(:root[data-theme='light']) .hero::before { background: radial-gradient(120% 70% at 100% 0%, color-mix(in oklab, var(--ch-accent) 12%, transparent), transparent 62%); }
+:global(:root[data-theme='night']) .hero::before { display: none; }
+.heroKicker { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--ch-accent); }
+.heroKicker > span:first-child { display: inline-flex; align-items: center; gap: 10px; }
+.heroKicker > span:first-child::before { content: ''; width: 16px; height: 1px; background: currentColor; }
+.heroKicker > span:last-child { color: var(--text-2); }
+.heroTop { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 18px; }
+.heroRing { width: 124px; }
+.heroNum {
+  display: flex; align-items: baseline; white-space: nowrap; margin-top: 6px;
+  font-family: var(--font-num); font-size: clamp(44px, 13.5vw, 60px); line-height: .9; font-weight: 750; letter-spacing: -0.055em;
+  color: var(--num-color); font-variant-numeric: tabular-nums lining-nums;
+}
+.heroNum :global(.t-unit) { font-family: var(--font-num); font-size: .36em; font-weight: 600; text-transform: none; letter-spacing: -0.02em; color: var(--text-2); margin: 0 .22em 0 .06em; }
+.heroNum :global(.t-unit):last-child { margin-right: 0; }
+.heroFacts { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--text-2); }
+.heroFacts b { color: var(--text); font-weight: 600; font-family: var(--font-num); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.heroLabel { color: var(--text-2); }
+.heroTiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.heroTiles :global(.tile) { border-radius: var(--r-md); background: color-mix(in oklab, var(--surface-2) 70%, transparent); box-shadow: none; }
+.heroTiles :global(.tile-label svg) { color: var(--ch-accent); }
+.heroTiles :global(.tile-value) { color: var(--num-color); }
+@media (min-width: 900px) {
+  .hero { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); column-gap: 32px; padding: 26px 28px 24px; }
+  .hero > * { grid-column: 1 / -1; }
+  .hero > .heroTop { grid-column: 1; }
+  .hero > .heroChart { grid-column: 2; grid-row: span 2; }
+  .hero > .heroMix { grid-column: 1; }
+  .heroTiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+.heroChart { min-width: 0; }
+.heroMix { min-width: 0; }
+
+/* ───────────── Hypnogram (wipe reveal) ───────────── */
+.hyp { position: relative; }
+.hyp svg { display: block; overflow: visible; }
+.hypLayer { position: absolute; top: 0; bottom: 0; overflow: hidden; pointer-events: none; }
+.hypOuter { position: absolute; inset: 0; overflow: hidden; transform: translate3d(-100%, 0, 0); transition: transform 1500ms var(--ease-out) 150ms; }
+.hypInner { position: absolute; inset: 0; transform: translate3d(100%, 0, 0); transition: transform 1500ms var(--ease-out) 150ms; }
+.hypOuter::after {
+  content: ''; position: absolute; top: 0; bottom: 18px; right: 0; width: 1px;
+  background: var(--ch-accent); box-shadow: 0 0 12px 1px var(--ch-accent); opacity: 1; transition: opacity 400ms var(--ease-out) 1500ms;
+}
+.hyp.in .hypOuter, .hyp.in .hypInner { transform: none; }
+.hyp.in .hypOuter::after { opacity: 0; }
+.ghost { opacity: var(--ghost); }
+
+/* Stage mix bar */
+.mixBar { display: flex; gap: 3px; height: 10px; }
+.mixSeg { height: 100%; border-radius: 3px; transform: scaleX(0); transform-origin: left center; transition: transform 900ms var(--ease-out); transition-delay: calc(300ms + var(--i, 0) * 90ms); }
+.mix.in .mixSeg { transform: none; }
+.mixGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 12px; }
+.mixCell { display: grid; gap: 4px; padding: 0 8px; min-width: 0; }
+.mixCell:first-child { padding-left: 0; }
+.mixCell + .mixCell { border-left: 1px solid var(--hairline); }
+.mixLabel { display: flex; align-items: center; gap: 6px; color: var(--text-2); white-space: nowrap; }
+.mixLabel i { width: 6px; height: 6px; border-radius: 2px; flex: none; }
+.mixVal { font-family: var(--font-num); font-size: 18px; font-weight: 700; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--num-color); }
+.mixPct { color: var(--muted); }
+
+/* ───────────── Card internals ───────────── */
+.cardTools { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.cardTools :global(.legend) { margin: 0; }
+.note { font-size: 12.5px; color: var(--muted); margin-top: 12px; line-height: 1.5; }
+.note b { color: var(--text-2); font-weight: 600; }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 14px; border-top: 1px solid var(--hairline); }
+.stat { padding: 12px 10px 2px 0; min-width: 0; display: grid; gap: 6px; align-content: start; }
+.stat + .stat { padding-left: 12px; border-left: 1px solid var(--hairline); }
+.statLabel { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.statValue { font-family: var(--font-num); font-size: 22px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--num-color); }
+.statValue :global(.t-unit) { margin-left: 3px; }
+.statSub { font-size: 11.5px; color: var(--muted); }
+.chartIn { position: relative; }
+
+/* Trend rows */
+.trends { display: grid; gap: 4px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 900px) { .trends { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 28px; } }
+.trend { padding: 12px 0 2px; border-top: 1px solid var(--hairline); min-width: 0; }
+.trends > .trend:first-child { border-top: 0; padding-top: 2px; }
+@media (min-width: 900px) { .trends > .trend:nth-child(2) { border-top: 0; padding-top: 2px; } }
+.trendHead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 2px; }
+.trendLabel { color: var(--text-2); white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+.trendLabel svg { color: var(--ch-accent); }
+.trendVal { display: inline-flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+.trendNum { font-family: var(--font-num); font-size: 20px; font-weight: 700; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; color: var(--num-color); }
+
+/* Chart sub-titles (mono) */
+.chartLabel { color: var(--text-2); margin: 2px 0 4px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+/* ───────────── Chart micro-motion ───────────── */
+/* Nadir / dip markers pop in after the line has drawn. */
+.pop { transform-box: fill-box; transform-origin: center; animation: pop 520ms var(--ease-pop) both; animation-delay: var(--pop-delay, 950ms); }
+@keyframes pop { from { opacity: 0; transform: scale(.3); } }
+.halo { transform-box: fill-box; transform-origin: center; animation: halo 1.6s var(--ease-out) 1 both; animation-delay: calc(var(--pop-delay, 950ms) + 300ms); }
+@keyframes halo { 0% { opacity: .55; transform: scale(.6); } 100% { opacity: 0; transform: scale(1.9); } }
+.fadeIn { animation: fadeIn 600ms var(--ease-out) both; animation-delay: var(--pop-delay, 900ms); }
+@keyframes fadeIn { from { opacity: 0; } }
+
+/* Ridgeline: ridges rise, 30 ms apart, back to front. */
+.ridge { opacity: 0; transform: translate3d(0, 10px, 0); transition: opacity 700ms var(--ease-out), transform 700ms var(--ease-out); transition-delay: calc(var(--i, 0) * 30ms); }
+.ridges.in .ridge { opacity: 1; transform: none; }
+.ridgeHit { cursor: pointer; }
+
+/* Lanes (ours vs Google) */
+.lanes { opacity: 0; transition: opacity 700ms var(--ease-out); }
+.lanesBox.in .lanes { opacity: 1; }
+.lanesBox.in .lanes + .lanes { transition-delay: 160ms; }
+.lanesBox.in .lanes + .lanes + .lanes { transition-delay: 320ms; }
+
+/* Night: calm — no pops or halos, short fades only. */
+:global(:root[data-theme='night']) .pop { animation: fadeIn 300ms linear both; animation-delay: 0ms; }
+:global(:root[data-theme='night']) .halo { display: none; }
+:global(:root[data-theme='night']) .ridge { transform: none; transition-duration: 350ms; transition-delay: 0ms; }
+:global(:root[data-theme='night']) .hypOuter, :global(:root[data-theme='night']) .hypInner { transition-duration: 500ms; transition-delay: 0ms; }
+:global(:root[data-theme='night']) .hypOuter::after { display: none; }
+:global(:root[data-theme='night']) .mixSeg { transition-duration: 350ms; transition-delay: 0ms; }
+:global(:root[data-theme='night']) .swap { animation-duration: 200ms; }
+:global(:root[data-theme='night']) .whoDot { box-shadow: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .swap, .pop, .halo, .fadeIn, .flash { animation: none !important; }
+  .halo { display: none; }
+  .ridge, .mixSeg, .lanes, .hypOuter, .hypInner { opacity: 1 !important; transform: none !important; transition: none !important; }
+  .hypOuter::after { display: none; }
+}

@@ -1,52 +1,55 @@
 'use client';
 import { useData } from '@/lib/data/context.tsx';
 import { dayLabel, ictDate } from '@/lib/format.ts';
+import { Icon } from './icons.tsx';
+import { Reveal } from './motion.tsx';
 
-const Chevron = ({ dir }: { dir: 'l' | 'r' }) => (
-  <svg viewBox="0 0 24 24" aria-hidden>
-    <path d={dir === 'l' ? 'M15 5l-7 7 7 7' : 'M9 5l7 7-7 7'} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-
-/** Header with the viewed night and prev / next / pick-a-date controls (shared across tabs). */
-export function DateNav({ title }: { title?: string }) {
-  const { dataset, date, setDate, sourceKind } = useData();
-  if (!dataset || !date) return null;
-  const dates = dataset.nights.map((n) => n.date);
+/**
+ * Large page header shared across tabs: mono kicker, big title, the viewed night in mono with a SIMULATED / LIVE
+ * pill, and prev / pick / next as 36 px glass circles. Works from the newest-night preview before the full dataset.
+ *
+ *   <DateNav />                       title = "Last night" / "This morning" / the date
+ *   <DateNav title="Room" kicker="Bedroom air" />
+ */
+export function DateNav({ title, kicker }: { title?: string; kicker?: string }) {
+  const { dataset, latest, date, setDate, sourceKind } = useData();
+  const ds = dataset ?? latest;
+  if (!ds || !date) return null;
+  const dates = ds.nights.map((n) => n.date);
   const i = dates.indexOf(date);
-  const latest = i === dates.length - 1;
+  const latestNight = i === dates.length - 1;
   const isToday = date === ictDate(Date.now());
+  const partial = !dataset;
   return (
-    <header className="page-head">
+    <Reveal as="header" className="page-head" y={12}>
       <div style={{ minWidth: 0 }}>
-        <h1>{title ?? (isToday ? 'This morning' : latest ? 'Last night' : dayLabel(date))}</h1>
-        <div className="page-sub">
-          {title || isToday || latest ? `${dayLabel(date)} · ` : ''}
-          {sourceKind === 'sim' ? <span className="badge">SIMULATED</span> : <span className="badge">LIVE</span>}
+        {kicker && <div className="page-kicker t-label">{kicker}</div>}
+        <h1>{title ?? (isToday ? 'This morning' : latestNight ? 'Last night' : dayLabel(date))}</h1>
+        <div className="page-sub t-label">
+          {(title || isToday || latestNight) && <span>{dayLabel(date)}</span>}
+          {sourceKind === 'sim' ? <span className="badge">Simulated</span> : <span className="badge live">Live</span>}
         </div>
       </div>
-      <div className="row" style={{ flexWrap: 'nowrap', gap: 6 }}>
-        <button className="icon-btn" type="button" aria-label="Previous night" disabled={i <= 0} onClick={() => setDate(dates[i - 1]!)}>
-          <Chevron dir="l" />
+      <div className="nav">
+        <button className="icon-btn" type="button" aria-label="Previous night" disabled={partial || i <= 0} onClick={() => setDate(dates[i - 1]!)}>
+          <Icon name="chevron-left" size={18} strokeWidth={2} />
         </button>
-        <label className="icon-btn" style={{ position: 'relative', overflow: 'hidden' }} aria-label="Pick a night">
-          <svg viewBox="0 0 24 24" aria-hidden>
-            <rect x={4} y={5} width={16} height={15} rx={2} fill="none" stroke="currentColor" strokeWidth={1.8} />
-            <path d="M4 10h16M9 3v4M15 3v4" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" />
-          </svg>
+        <label className="icon-btn press" style={{ position: 'relative', overflow: 'hidden', opacity: partial ? 0.35 : 1 }} aria-label="Pick a night">
+          <Icon name="calendar" size={18} />
           <input
             type="date"
             value={date}
             min={dates[0]}
             max={dates.at(-1)}
+            disabled={partial}
             onChange={(e) => dates.includes(e.target.value) && setDate(e.target.value)}
             style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%', cursor: 'pointer' }}
           />
         </label>
-        <button className="icon-btn" type="button" aria-label="Next night" disabled={latest} onClick={() => setDate(dates[i + 1]!)}>
-          <Chevron dir="r" />
+        <button className="icon-btn" type="button" aria-label="Next night" disabled={latestNight} onClick={() => setDate(dates[i + 1]!)}>
+          <Icon name="chevron-right" size={18} strokeWidth={2} />
         </button>
       </div>
-    </header>
+    </Reveal>
   );
 }

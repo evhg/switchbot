@@ -1,73 +1,59 @@
 'use client';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import type { ReactNode } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
+import { useEffect, type MouseEvent } from 'react';
+import { Icon, type IconName } from './icons.tsx';
+import { useNavigate } from './motion.tsx';
 
-const S = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' } as const;
-
-const TABS: { href: string; label: string; icon: ReactNode }[] = [
-  {
-    href: '/',
-    label: 'Today',
-    icon: (
-      <svg viewBox="0 0 24 24" aria-hidden>
-        <path {...S} d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z" />
-      </svg>
-    ),
-  },
-  {
-    href: '/room',
-    label: 'Room',
-    icon: (
-      <svg viewBox="0 0 24 24" aria-hidden>
-        <path {...S} d="M4 11.5 12 5l8 6.5V20H4z" />
-        <path {...S} d="M9 15.5c1.5-1.2 4.5-1.2 6 0" />
-      </svg>
-    ),
-  },
-  {
-    href: '/body',
-    label: 'Body',
-    icon: (
-      <svg viewBox="0 0 24 24" aria-hidden>
-        <path {...S} d="M3 12h4l2-5 3 10 2.5-7 1.5 2H21" />
-      </svg>
-    ),
-  },
-  {
-    href: '/lab',
-    label: 'Lab',
-    icon: (
-      <svg viewBox="0 0 24 24" aria-hidden>
-        <path {...S} d="M9 3h6M10 3v6L4.5 19a1.3 1.3 0 0 0 1.1 2h12.8a1.3 1.3 0 0 0 1.1-2L14 9V3" />
-        <path {...S} d="M7.5 14h9" />
-      </svg>
-    ),
-  },
-  {
-    href: '/settings',
-    label: 'System',
-    icon: (
-      <svg viewBox="0 0 24 24" aria-hidden>
-        <circle {...S} cx="12" cy="12" r="3" />
-        <path {...S} d="M12 2.8v2.4M12 18.8v2.4M21.2 12h-2.4M5.2 12H2.8M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7M18.5 18.5l-1.7-1.7M7.2 7.2 5.5 5.5" />
-      </svg>
-    ),
-  },
+const TABS: { href: string; label: string; icon: IconName }[] = [
+  { href: '/', label: 'Today', icon: 'moon' },
+  { href: '/room', label: 'Room', icon: 'house' },
+  { href: '/body', label: 'Body', icon: 'pulse' },
+  { href: '/lab', label: 'Lab', icon: 'flask' },
+  { href: '/settings', label: 'System', icon: 'gear' },
 ];
 
+/** Floating glass pill; the active tab sits on a capsule that slides between items (transform only). */
 export function TabBar() {
   const path = usePathname();
+  const navigate = useNavigate();
+  const router = useRouter();
+  // Warm every tab's route chunks once the first screen has settled (and the browser is idle), so a cold switch never
+  // waits on a download behind a frozen view-transition snapshot. Links don't prefetch on sight: on Today that would
+  // parse the Recharts chunk during the first scroll.
+  useEffect(() => {
+    const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number };
+    const run = () => {
+      for (const t of TABS) if (t.href !== path) router.prefetch(t.href);
+    };
+    const id = window.setTimeout(() => (w.requestIdleCallback ? w.requestIdleCallback(run) : run()), 5000);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router]);
+  const activeIndex = Math.max(
+    0,
+    TABS.findIndex((t) => (t.href === '/' ? path === '/' : path.startsWith(t.href))),
+  );
+  const onClick = (href: string) => (e: MouseEvent<HTMLAnchorElement>) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.preventDefault();
+    if (href === path) {
+      window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      return;
+    }
+    navigate(href);
+  };
   return (
     <nav className="tabbar" aria-label="Main">
-      <ul>
-        {TABS.map((t) => {
-          const active = t.href === '/' ? path === '/' : path.startsWith(t.href);
+      <ul style={{ ['--i' as string]: activeIndex }}>
+        <li className="tabbar-capsule" aria-hidden />
+        {TABS.map((t, i) => {
+          const active = i === activeIndex;
           return (
             <li key={t.href}>
-              <Link href={t.href} aria-current={active ? 'page' : undefined}>
-                {t.icon}
-                {t.label}
+              <Link href={t.href} prefetch={false} aria-current={active ? 'page' : undefined} onClick={onClick(t.href)}>
+                <Icon name={t.icon} size={22} filled={active && t.icon === 'moon'} />
+                <span>{t.label}</span>
               </Link>
             </li>
           );

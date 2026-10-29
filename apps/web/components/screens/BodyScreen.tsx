@@ -1,32 +1,98 @@
 'use client';
-import { useMemo, useState } from 'react';
+/**
+ * Body tab (docs/DESIGN.md §11 "Body"): a per-person deep dive. A large person switcher sets the page accent to that
+ * person's colour; the "Last night" hero (score ring, time asleep, hypnogram wipe, stage mix, four vitals) is followed
+ * by Heart, Breathing & O₂, Trends and Algorithm sections under a sticky jump bar. Renders from the newest-night
+ * preview; anything that needs history shows a skeleton until enough nights have streamed in.
+ * Deep links from Today's vitals (/body#hrv, #rhr, #steps, #sleep, #spo2, #resp, #temp) scroll to the matching block.
+ */
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { personColor, useData, useNightDetail, useSelectedNight } from '@/lib/data/context.tsx';
 import { hrSleepWake } from '@/lib/analysis.ts';
-import { dur, fmt, hm, MIN } from '@/lib/format.ts';
+import { dur, fmt, hm, MIN, signed } from '@/lib/format.ts';
 import { usePref } from '@/lib/prefs.ts';
 import { mean, sd } from '@/lib/stats.ts';
-import { HrCurve, HrvNight, Ridgeline, SleepWakeCompare, Spo2Strip, TempDeviation, TrendBand } from '../charts/body.tsx';
-import { STAGE_LABEL, STAGE_ORDER, stageColor } from '../charts/NightStrip.tsx';
+import { HrCurve, HrvNight, Hypnogram, Ridgeline, SleepWakeCompare, Spo2Strip, StageMix, TempDeviation, TrendBand } from '../charts/body.tsx';
+import s from '../charts/body.module.css';
+import { ScoreRing } from '../charts/ScoreRing.tsx';
 import { DateNav } from '../DateNav.tsx';
-import { Card, Legend, Loading, Placeholder, Segmented } from '../ui.tsx';
+import { CountUp, useMotionPrefs } from '../motion.tsx';
+import { Card, JumpBar, Loading, MetricTile, Placeholder, SectionHeader, Segmented, type Tone } from '../ui.tsx';
 
 type Range = '7' | '30' | '90';
 
+const JUMP = [
+  { id: 'last', label: 'Night' },
+  { id: 'heart', label: 'Heart' },
+  { id: 'breath', label: 'O₂' },
+  { id: 'trends', label: 'Trends' },
+  { id: 'algo', label: 'Algo' },
+] as const;
+
+function Section({ id, n, kicker, lines, lede, children }: { id: string; n: number; kicker: string; lines: ReactNode[]; lede?: ReactNode; children: ReactNode }) {
+  return (
+    <section id={id} data-jump className={s.section} aria-label={kicker}>
+      <div className={s.sectionHead}>
+        <SectionHeader n={n} kicker={kicker} lines={lines} size="h2" />
+        {lede && <p className={s.sectionLede}>{lede}</p>}
+      </div>
+      <div className="stack two">{children}</div>
+    </section>
+  );
+}
+
+function Stat({ label, value, unit, sub, id }: { label: ReactNode; value: ReactNode; unit?: string; sub?: ReactNode; id?: string }) {
+  return (
+    <div className={`${s.stat} ${id ? s.anchor : ''}`} id={id}>
+      <span className={`${s.statLabel} t-micro`}>{label}</span>
+      <span className={s.statValue}>
+        {value}
+        {unit && <span className="t-unit">{unit}</span>}
+      </span>
+      {sub && <span className={s.statSub}>{sub}</span>}
+    </div>
+  );
+}
+
+/** Signed delta vs baseline → chip props. `better` = which direction is good. */
+function deltaOf(v: number, base: number, better: 'up' | 'down' | null, digits = 0, unit = ''): { text: string; tone: Tone; dir: 'up' | 'down' | 'flat' } | undefined {
+  const d = v - base;
+  if (!Number.isFinite(d)) return undefined;
+  const text = signed(d, digits);
+  const flat = /^±/.test(text);
+  return {
+    text: `${text.replace(/^[+−±]/, '')}${unit} vs base`,
+    tone: flat || !better ? 'neutral' : (d > 0) === (better === 'up') ? 'good' : 'bad',
+    dir: flat ? 'flat' : d > 0 ? 'up' : 'down',
+  };
+}
+
 export function BodyScreen() {
-  const { status, dataset, progress, date, setDate } = useData();
+  const { latest, progress, date, setDate } = useData();
   const sel = useSelectedNight();
   const { detail } = useNightDetail(date);
+  const { night: nightMode } = useMotionPrefs();
   const [who, setWho] = usePref<string>('bodyPerson', 'a');
   const [range, setRange] = useState<Range>('30');
 
-  const personId = dataset?.people.some((p) => p.id === who) ? who : (dataset?.people[0]?.id ?? 'a');
-  const series = dataset?.person[personId] ?? [];
+  const ds = latest;
+  const personId = ds?.people.some((p) => p.id === who) ? who : (ds?.people[0]?.id ?? 'a');
+  const series = useMemo(() => ds?.person[personId] ?? [], [ds, personId]);
 
   const baseline = useMemo(() => {
     if (!sel) return null;
     const past = series.slice(Math.max(0, sel.index - 30), sel.index).filter((m): m is NonNullable<typeof m> => m !== null);
+    const ok = past.length >= 5;
     const rm = past.map((m) => m.rmssdMean);
-    return { nadir: mean(past.map((m) => m.hrNadir)), rmssd: { mean: mean(rm), lo: mean(rm) - sd(rm), hi: mean(rm) + sd(rm) }, n: past.length };
+    const mu = (f: (m: (typeof past)[number]) => number | undefined) => (ok ? mean(past.map((m) => f(m) ?? NaN)) : NaN);
+    return {
+      nadir: mu((m) => m.hrNadir),
+      rmssd: { mean: mu((m) => m.rmssdMean), lo: ok ? mean(rm) - sd(rm) : NaN, hi: ok ? mean(rm) + sd(rm) : NaN },
+      spo2: mu((m) => m.spo2Mean),
+      resp: mu((m) => m.respRate),
+      sleep: mu((m) => m.totalSleepMin),
+      n: past.length,
+    };
   }, [series, sel]);
 
   const ours = useMemo(() => {
@@ -36,8 +102,8 @@ export function BodyScreen() {
     let agree = 0;
     let n = 0;
     for (let t = pn.sleep.start; t < pn.sleep.end; t += MIN) {
-      const g = pn.sleep.stages.find((s) => t >= s.start && t < s.end);
-      const o = est.find((s) => t >= s.start && t < s.end);
+      const g = pn.sleep.stages.find((x) => t >= x.start && t < x.end);
+      const o = est.find((x) => t >= x.start && t < x.end);
       if (!g || !o) continue;
       n++;
       if ((g.stage === 'awake') === o.awake) agree++;
@@ -45,128 +111,251 @@ export function BodyScreen() {
     return { est, agreement: n ? agree / n : NaN };
   }, [sel, personId]);
 
-  if (status !== 'ready' || !dataset || !sel || !baseline) return <Loading text={progress || 'Loading…'} />;
-  const person = dataset.people.find((p) => p.id === personId)!;
-  const color = personColor(dataset.people, personId);
+  // Deep links (#hrv, #rhr …) once the full page exists: scroll there and flash the block.
+  const jumped = useRef(false);
+  const full = !!sel && !sel.partial;
+  useEffect(() => {
+    if (jumped.current || !full) return;
+    const h = decodeURIComponent(window.location.hash.slice(1));
+    if (!h) return;
+    jumped.current = true;
+    const t = window.setTimeout(() => {
+      const el = document.getElementById(h);
+      if (!el) return;
+      el.scrollIntoView({ block: 'start', behavior: 'auto' });
+      el.classList.add(s.flash!);
+      window.setTimeout(() => el.classList.remove(s.flash!), 1900);
+    }, 120);
+    return () => window.clearTimeout(t);
+  }, [full]);
+
+  if (!ds || !sel || !baseline) return <Loading text={progress || 'Reading the night…'} />;
+
+  const pIndex = ds.people.findIndex((p) => p.id === personId);
+  const person = ds.people[pIndex]!;
+  const color = personColor(ds.people, personId);
+  const dash = nightMode && pIndex === 1;
   const pn = sel.night.people.find((p) => p.personId === personId);
   const m = detail?.people.find((p) => p.personId === personId) ?? sel.person[personId] ?? null;
   const n = Number(range);
-  const trendRows = dataset.nights.slice(-n).map((night, i) => {
-    const idx = dataset.nights.length - n + i;
-    return { night, m: series[idx] ?? null, room: dataset.room[idx]! };
+  const enoughForRidge = sel.index >= 6;
+  const hasBaseline = baseline.n >= 5;
+
+  const rows = (f: (x: NonNullable<(typeof series)[number]>) => number | undefined) => ds.nights.map((night, i) => ({ date: night.date, v: series[i] ? (f(series[i]!) ?? NaN) : NaN }));
+  const spark = (f: (x: NonNullable<(typeof series)[number]>) => number | undefined) =>
+    ds.nights
+      .slice(Math.max(0, sel.index - 13), sel.index + 1)
+      .map((night, k) => {
+        const mm = series[Math.max(0, sel.index - 13) + k];
+        return { ts: Date.parse(`${night.date}T00:00:00Z`), v: mm ? (f(mm) ?? NaN) : NaN };
+      })
+      .filter((p) => Number.isFinite(p.v));
+  const trendRows = ds.nights.slice(-n).map((night, i) => {
+    const idx = ds.nights.length - n + i;
+    return { night, m: series[idx] ?? null, room: ds.room[idx]! };
   });
-  const rows = (f: (x: NonNullable<(typeof series)[number]>) => number | undefined) => dataset.nights.map((night, i) => ({ date: night.date, v: series[i] ? (f(series[i]!) ?? NaN) : NaN }));
+
+  const pageStyle = { ['--ch-accent' as string]: color, ['--accent' as string]: color } as CSSProperties;
+
+  const switcher = (
+    <div className={s.switchRow}>
+      <Segmented
+        size="lg"
+        className={s.switcher}
+        value={personId}
+        onChange={setWho}
+        label="Person"
+        options={ds.people.map((p) => {
+          const pm = sel.person[p.id];
+          return {
+            value: p.id,
+            label: (
+              <span className={s.who}>
+                <i className={s.whoDot} style={{ ['--dot' as string]: personColor(ds.people, p.id) } as CSSProperties} aria-hidden />
+                <span className={s.whoName}>{p.name}</span>
+                {pm && <span className={s.whoScore}>{fmt(pm.sleepScore)}</span>}
+              </span>
+            ),
+          };
+        })}
+      />
+      <div className={`${s.source} t-micro`}>
+        <span>Fitbit Air · Google Health</span>
+        <span>{baseline.n >= 5 ? `${baseline.n}-night baseline` : 'Baseline loading'}</span>
+      </div>
+    </div>
+  );
+
+  if (!pn || !m)
+    return (
+      <div className={s.page} style={pageStyle}>
+        <DateNav title="Body" kicker="Per person" />
+        {switcher}
+        <Card title={`No data for ${person.name} this night`} kicker="Away">
+          <p className="card-sub">Pick another night, or switch person.</p>
+        </Card>
+      </div>
+    );
+
+  const nadirLate = m.hrNadirAtMin > 300;
+  const asleepH = Math.floor(m.totalSleepMin / 60);
+  const asleepM = Math.round(m.totalSleepMin - asleepH * 60);
+  const nadirAt = pn.sleep.start + m.hrNadirAtMin * MIN;
 
   return (
-    <>
-      <DateNav title="Body" />
-      <div className="row between" style={{ marginBottom: 12 }}>
-        <Segmented value={personId} onChange={setWho} options={dataset.people.map((p) => ({ value: p.id, label: p.name }))} label="Person" />
-        <span className="small muted">Fitbit Air · Google Health (simulated)</span>
-      </div>
-      {!pn || !m ? (
-        <Card title={`No data for ${person.name} this night`}>
-          <p className="small muted">Pick another night.</p>
-        </Card>
-      ) : (
-        <div className="stack two">
-          <Card title="Last night" sub={`${hm(pn.sleep.start)} → ${hm(pn.sleep.end)}`} className="span-2">
-            <div className="tiles">
-              <div className="tile" style={{ boxShadow: 'none', background: 'var(--surface-2)' }}>
-                <div className="tile-label">Asleep</div>
-                <div className="tile-value">{dur(m.totalSleepMin)}</div>
-                <div className="tile-delta">eff. {fmt(m.efficiencyPct)}% · latency {fmt(m.latencyMin)}m</div>
+    <div className={s.page} style={pageStyle}>
+      <DateNav title="Body" kicker="Per person" />
+      {switcher}
+      <JumpBar key={`jb-${personId}`} items={JUMP} label="Body sections" />
+
+      <div key={personId} className={s.swap}>
+        {/* ───────── Last night (hero) ───────── */}
+        <section id="last" data-jump aria-label="Last night">
+          <div id="sleep" className={`${s.hero} ${s.anchor}`}>
+            <div className={`${s.heroKicker} t-label`}>
+              <span>Last night · {person.name}</span>
+              <span>
+                {hm(pn.sleep.start)} → {hm(pn.sleep.end)}
+              </span>
+            </div>
+            <div className={s.heroTop}>
+              <div className={s.heroRing}>
+                <ScoreRing size={124} value={m.sleepScore} inner={detail ? m.recoveryScore : undefined} color={color} label={`${person.name} sleep score`} centerSub="Sleep" />
               </div>
-              <div className="tile" style={{ boxShadow: 'none', background: 'var(--surface-2)' }}>
-                <div className="tile-label">HR nadir</div>
-                <div className="tile-value">
-                  {fmt(m.hrNadir)}
-                  <span className="tile-unit">bpm</span>
+              <div style={{ minWidth: 0 }}>
+                <div className={`${s.heroLabel} t-label`}>Asleep</div>
+                <div className={s.heroNum} aria-label={dur(m.totalSleepMin)}>
+                  <CountUp value={asleepH} duration={1100} />
+                  <span className="t-unit">h</span>
+                  <CountUp value={asleepM} duration={1300} format={(v) => String(Math.round(v)).padStart(2, '0')} />
+                  <span className="t-unit">m</span>
                 </div>
-                <div className="tile-delta">at +{dur(m.hrNadirAtMin)} · base {fmt(baseline.nadir)}</div>
-              </div>
-              <div className="tile" style={{ boxShadow: 'none', background: 'var(--surface-2)' }}>
-                <div className="tile-label">HRV (RMSSD)</div>
-                <div className="tile-value">
-                  {fmt(m.rmssdMean)}
-                  <span className="tile-unit">ms</span>
+                <div className={`${s.heroFacts} t-small`}>
+                  <span>
+                    <b>{detail ? fmt(m.recoveryScore) : '–'}</b> recovery
+                  </span>
+                  <span>
+                    <b>{fmt(m.efficiencyPct)}%</b> efficient
+                  </span>
+                  <span>
+                    <b>{fmt(m.latencyMin)}</b> min to sleep
+                  </span>
+                  <span>
+                    <b>{fmt(m.awakenings)}</b> wakes
+                  </span>
                 </div>
-                <div className="tile-delta">base {fmt(baseline.rmssd.mean)} ms</div>
-              </div>
-              <div className="tile" style={{ boxShadow: 'none', background: 'var(--surface-2)' }}>
-                <div className="tile-label">Recovery</div>
-                <div className="tile-value">{detail ? fmt(m.recoveryScore) : '…'}</div>
-                <div className="tile-delta">breathing {fmt(m.respRate ?? NaN, 1)}/min</div>
               </div>
             </div>
-            <div style={{ marginTop: 12 }}>
-              <svg width="100%" height={14} viewBox="0 0 100 14" preserveAspectRatio="none" aria-hidden>
-                {(() => {
-                  const tot = m.deepMin + m.remMin + m.lightMin + m.awakeMin;
-                  let x = 0;
-                  return STAGE_ORDER.map((s) => {
-                    const v = s === 'deep' ? m.deepMin : s === 'rem' ? m.remMin : s === 'light' ? m.lightMin : m.awakeMin;
-                    const wpx = (v / Math.max(1, tot)) * 100;
-                    const r = <rect key={s} x={x} y={0} width={Math.max(0, wpx - 0.6)} height={14} fill={stageColor(s)} rx={1} />;
-                    x += wpx;
-                    return r;
-                  });
-                })()}
-              </svg>
-              <Legend
-                items={STAGE_ORDER.map((s) => ({
-                  label: `${STAGE_LABEL[s]} ${dur(s === 'deep' ? m.deepMin : s === 'rem' ? m.remMin : s === 'light' ? m.lightMin : m.awakeMin)}`,
-                  color: stageColor(s),
-                  shape: 'rect' as const,
-                }))}
+            <div className={s.heroChart}>
+              <Hypnogram stages={pn.sleep.stages} start={pn.sleep.start} end={pn.sleep.end} label={`${person.name}'s sleep stages, ${hm(pn.sleep.start)} to ${hm(pn.sleep.end)}`} />
+            </div>
+            <div className={s.heroMix}>
+              <StageMix m={m} />
+            </div>
+            <div className={s.heroTiles}>
+              <MetricTile
+                icon="heart"
+                label="HR nadir"
+                value={m.hrNadir}
+                unit="bpm"
+                delta={deltaOf(m.hrNadir, baseline.nadir, 'down')}
+                sub={!hasBaseline ? `at +${dur(m.hrNadirAtMin)}` : undefined}
+                spark={spark((x) => x.hrNadir)}
+                sparkColor={color}
               />
+              <MetricTile icon="pulse" label="HRV" value={m.rmssdMean} unit="ms" delta={deltaOf(m.rmssdMean, baseline.rmssd.mean, 'up')} spark={spark((x) => x.rmssdMean)} sparkColor={color} />
+              <MetricTile icon="o2" label="SpO₂" value={m.spo2Mean} dp={1} unit="%" delta={deltaOf(m.spo2Mean, baseline.spo2, 'up', 1)} spark={spark((x) => x.spo2Mean)} sparkColor={color} />
+              <MetricTile icon="lungs" label="Breathing" value={m.respRate ?? NaN} dp={1} unit="/ min" delta={deltaOf(m.respRate ?? NaN, baseline.resp, null, 1)} spark={spark((x) => x.respRate)} sparkColor={color} />
             </div>
+          </div>
+        </section>
+
+        {/* ───────── Heart ───────── */}
+        <Section
+          id="heart"
+          n={1}
+          kicker="Heart"
+          lines={[`Bottomed out at ${fmt(m.hrNadir)} bpm.`, nadirLate ? 'Late in the night.' : 'Early: well recovered.']}
+          lede={hasBaseline ? `${hm(nadirAt)}, ${dur(m.hrNadirAtMin)} after falling asleep. Your 30-night nadir is ${fmt(baseline.nadir)} bpm.` : `${hm(nadirAt)}, ${dur(m.hrNadirAtMin)} after falling asleep.`}
+        >
+          <Card kicker="Tonight's curve" title="Sleeping heart rate" sub={nadirLate ? 'Late nadir: often a late meal, alcohol or a warm room' : 'Nadir in the first half: a well-recovered pattern'}>
+            <HrCurve hr={pn.hr} start={pn.sleep.start} end={pn.sleep.end} nadir={m.hrNadir} nadirAt={nadirAt} baseline={baseline.nadir} color={color} dash={dash} />
           </Card>
 
-          <Card title="Sleeping heart rate" sub={m.hrNadirAtMin > 300 ? 'Late nadir: often a late meal, alcohol or a warm room' : 'Nadir in the first half: a well-recovered pattern'}>
-            <HrCurve hr={pn.hr} start={pn.sleep.start} end={pn.sleep.end} nadir={m.hrNadir} nadirAt={pn.sleep.start + m.hrNadirAtMin * MIN} baseline={baseline.nadir} color={color} />
+          <Card id="hrv" className={s.anchor} kicker="Recovery signal" title="HRV through the night" sub={hasBaseline ? `Mean ${fmt(m.rmssdMean)} ms vs ${baseline.n}-night baseline ${fmt(baseline.rmssd.mean)} ms` : `Mean ${fmt(m.rmssdMean)} ms`}>
+            <HrvNight hrv={pn.hrv} start={pn.sleep.start} end={pn.sleep.end} band={baseline.rmssd} color={color} dash={dash} />
           </Card>
 
-          <Card title="Last 14 nights" sub="HR curves from sleep start; dot = nadir. Tap to open a night">
-            <Ridgeline nights={dataset.nights.slice(Math.max(0, sel.index - 13), sel.index + 1)} personId={personId} color={color} selected={sel.night.date} onPick={setDate} />
+          <Card kicker="Two weeks" className="span-2" title="Last 14 nights" sub="HR curves from sleep start; dot = nadir. Tap a ridge to open that night">
+            {enoughForRidge ? (
+              <Ridgeline nights={ds.nights.slice(Math.max(0, sel.index - 13), sel.index + 1)} personId={personId} color={color} selected={sel.night.date} onPick={setDate} dash={dash} />
+            ) : (
+              <Placeholder height={290} text="Loading earlier nights…" />
+            )}
           </Card>
+        </Section>
 
-          <Card title="HRV through the night" sub={`Mean ${fmt(m.rmssdMean)} ms vs ${baseline.n}-night baseline ${fmt(baseline.rmssd.mean)} ms`}>
-            <HrvNight hrv={pn.hrv} start={pn.sleep.start} end={pn.sleep.end} band={baseline.rmssd} color={color} />
+        {/* ───────── Breathing & O₂ ───────── */}
+        <Section
+          id="breath"
+          n={2}
+          kicker="Breathing & O₂"
+          lines={[`Oxygen held at ${fmt(m.spo2Mean, 1)}%.`, `${fmt(m.spo2DipsPerHour, 1)} dips an hour.`]}
+          lede="Blood oxygen from the wrist sensor, with dips of 3 % or more below the rolling baseline."
+        >
+          <Card id="spo2" className={`span-2 ${s.anchor}`} kicker="SpO₂" title="Blood oxygen" sub="Lowest reading per 2 minutes; red dots mark the dips">
+            <Spo2Strip spo2={pn.spo2} start={pn.sleep.start} end={pn.sleep.end} color={color} dash={dash} />
+            <div className={s.stats}>
+              <Stat label="Mean SpO₂" value={fmt(m.spo2Mean, 1)} unit="%" />
+              <Stat label="Dips / hour" value={fmt(m.spo2DipsPerHour, 1)} sub="ODI-style" />
+              <Stat id="resp" label="Breathing" value={fmt(m.respRate ?? NaN, 1)} unit="/min" sub={Number.isFinite(baseline.resp) ? `base ${fmt(baseline.resp, 1)}` : undefined} />
+            </div>
+            <p className={s.note}>Not a medical test. Above ~5 dips/hour on many nights is worth mentioning to a doctor.</p>
           </Card>
+        </Section>
 
-          <Card title="Blood oxygen" sub={`${fmt(m.spo2Mean, 1)} % mean · ${fmt(m.spo2DipsPerHour, 1)} dips/hour (ODI-style)`}>
-            <Spo2Strip spo2={pn.spo2} start={pn.sleep.start} end={pn.sleep.end} color={color} />
-            <p className="card-note">Not a medical test. Above ~5 dips/hour on many nights is worth mentioning to a doctor.</p>
-          </Card>
-
-          <Card title="Our sleep/wake vs Google's" sub={ours ? `${fmt(ours.agreement * 100)}% of minutes agree on awake vs asleep` : ''}>
-            {ours ? <SleepWakeCompare stages={pn.sleep.stages} ours={ours.est} start={pn.sleep.start} end={pn.sleep.end} /> : <Placeholder height={70} />}
-            <p className="card-note">A simple heart-rate rule we control. When agreement suddenly shifts across many nights, Google has likely changed its algorithm.</p>
-          </Card>
-
+        {/* ───────── Trends ───────── */}
+        <Section id="trends" n={3} kicker="Trends" lines={[`${n} nights,`, 'against your own baseline.']} lede="Grey band = the previous 30 nights ±1 SD. The chip compares last night with that baseline.">
           <Card
+            kicker="Recovery"
             title="Recovery trends"
-            sub="Grey band = previous 30 nights ±1 SD"
             meta={<Segmented value={range} onChange={setRange} options={[{ value: '7', label: '7d' }, { value: '30', label: '30d' }, { value: '90', label: '90d' }]} label="Range" />}
             className="span-2"
           >
-            <div className="stack two" style={{ gap: 10 }}>
-              <TrendBand show={n} label="HR nadir" unit="bpm" color={color} rows={rows((x) => x.hrNadir)} />
-              <TrendBand show={n} label="HRV (RMSSD)" unit="ms" color={color} rows={rows((x) => x.rmssdMean)} />
-              <TrendBand show={n} label="Deep sleep" unit="min" color={color} rows={rows((x) => x.deepMin)} />
-              <TrendBand show={n} label="Breathing rate" unit="/min" digits={1} color={color} rows={rows((x) => x.respRate)} />
-              <TrendBand show={n} label="Resting HR" unit="bpm" color={color} rows={rows((x) => x.restingHr)} />
-              <TrendBand show={n} label="Steps (day before)" unit="" color={color} rows={rows((x) => x.steps)} />
-            </div>
-            <p className="card-note">Breathing rate is a whole-night average; per-stage rates arrive once the respiratory-rate parser lands.</p>
+            {sel.partial ? (
+              <Placeholder height={620} text="Loading history…" />
+            ) : (
+              <div className={s.trends}>
+                <TrendBand show={n} label="HR nadir" icon="heart" unit="bpm" better="down" color={color} dash={dash} rows={rows((x) => x.hrNadir)} />
+                <TrendBand show={n} label="HRV (RMSSD)" icon="pulse" unit="ms" better="up" color={color} dash={dash} rows={rows((x) => x.rmssdMean)} />
+                <TrendBand show={n} label="Deep sleep" icon="zzz" unit="min" better="up" color={color} dash={dash} rows={rows((x) => x.deepMin)} />
+                <TrendBand show={n} label="Breathing rate" icon="lungs" unit="/min" digits={1} color={color} dash={dash} rows={rows((x) => x.respRate)} />
+                <TrendBand id="rhr" className={s.anchor} show={n} label="Resting HR" icon="heart" unit="bpm" better="down" color={color} dash={dash} rows={rows((x) => x.restingHr)} />
+                <TrendBand id="steps" className={s.anchor} show={n} label="Steps (day before)" icon="footprints" unit="" color={color} dash={dash} rows={rows((x) => x.steps)} />
+              </div>
+            )}
+            <p className={s.note}>Breathing rate is a whole-night average; per-stage rates arrive once the respiratory-rate parser lands.</p>
           </Card>
 
-          <Card title="Skin temperature vs room" sub="Is a warm night showing up in the body?" className="span-2">
-            <TempDeviation rows={trendRows.map((r) => ({ date: r.night.date, dev: r.m?.tempDeviationC ?? null, room: r.room.tempMean }))} />
+          <Card id="temp" className={`span-2 ${s.anchor}`} kicker="Thermal" title="Skin temperature vs room" sub="Is a warm night showing up in the body?">
+            {sel.partial ? <Placeholder height={290} text="Loading history…" /> : <TempDeviation rows={trendRows.map((r) => ({ date: r.night.date, dev: r.m?.tempDeviationC ?? null, room: r.room.tempMean }))} />}
           </Card>
-        </div>
-      )}
-    </>
+        </Section>
+
+        {/* ───────── Algorithm ───────── */}
+        <Section
+          id="algo"
+          n={4}
+          kicker="Algorithm"
+          lines={['Our read vs Google’s.', ours && Number.isFinite(ours.agreement) ? `${fmt(ours.agreement * 100)}% agree.` : 'Comparing…']}
+          lede="A simple heart-rate rule we control, checked minute by minute against Google's stages."
+        >
+          <Card kicker="Sleep / wake" title="Our sleep/wake vs Google's" sub={ours ? `${fmt(ours.agreement * 100)}% of minutes agree on awake vs asleep` : ''} className="span-2">
+            {ours ? <SleepWakeCompare stages={pn.sleep.stages} ours={ours.est} start={pn.sleep.start} end={pn.sleep.end} /> : <Placeholder height={96} />}
+            <p className={s.note}>When agreement suddenly shifts across many nights, Google has likely changed its algorithm.</p>
+          </Card>
+        </Section>
+      </div>
+    </div>
   );
 }

@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import { DrawPath } from '../motion.tsx';
 import { useWidth } from '../ui.tsx';
 import { linePath, scale } from './common.tsx';
 
@@ -9,8 +10,9 @@ export interface SparkPoint {
 }
 
 /**
- * Stat-tile trend: the last N nights as a de-emphasised line over the personal baseline band (mean ± 1 SD),
- * with tonight's point in the person's colour. Gaps (missing nights) break the line. Hover/tap shows a value.
+ * Vitals trend (docs/DESIGN.md §8.3): the last N nights as a recessive --spark-line over the personal baseline band
+ * (mean ± 1 SD, --spark-band), ending in a dot in the person's colour. The line draws in on reveal (1.3 s) and the
+ * dot fades in after it. Gaps (missing nights) break the line. Hover / touch shows that night's value in a glass chip.
  */
 export function VitalSpark({
   points,
@@ -30,7 +32,7 @@ export function VitalSpark({
   const [ref, width] = useWidth<HTMLDivElement>();
   const [hi, setHi] = useState<number | null>(null);
   const finite = points.filter((p) => Number.isFinite(p.v));
-  const w = Math.max(40, width);
+  const w = Math.max(36, width);
   if (finite.length < 2) return <div ref={ref} className="chart-box" style={{ height }} aria-hidden />;
 
   const vs = finite.map((p) => p.v);
@@ -40,8 +42,8 @@ export function VitalSpark({
   const pad = (top - lo) * 0.12 || Math.abs(top) * 0.02 || 0.5;
   const n = points.length;
   // Fixed slots per night so a missing night leaves a visible gap.
-  const x = (i: number) => scale(0, Math.max(1, n - 1), 4, w - 5)(i);
-  const y = scale(lo - pad, top + pad, height - 4, 4);
+  const x = (i: number) => scale(0, Math.max(1, n - 1), 2, w - 4)(i);
+  const y = scale(lo - pad, top + pad, height - 3, 3);
 
   const runs: { x: number; y: number }[][] = [];
   let run: { x: number; y: number }[] = [];
@@ -74,27 +76,27 @@ export function VitalSpark({
           height={height}
           onPointerMove={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
-            const i = Math.round(((e.clientX - r.left - 4) / Math.max(1, w - 9)) * (n - 1));
+            const i = Math.round(((e.clientX - r.left - 2) / Math.max(1, w - 6)) * (n - 1));
             setHi(Math.max(0, Math.min(n - 1, i)));
           }}
           onPointerLeave={() => setHi(null)}
           aria-hidden
         >
-          {showBand && <rect x={0} y={y(band.hi)} width={w} height={Math.max(1, y(band.lo) - y(band.hi))} rx={3} fill="var(--spark-band)" />}
+          {showBand && <rect x={0} y={y(band.hi)} width={w} height={Math.max(1, y(band.lo) - y(band.hi))} rx={2.5} fill="var(--spark-band)" />}
           {runs.map((r, i) =>
             r.length > 1 ? (
-              <path key={i} d={linePath(r)} fill="none" stroke="var(--spark-line)" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+              <DrawPath key={i} d={linePath(r)} fill="none" stroke="var(--spark-line)" strokeWidth={1.4} strokeLinejoin="round" strokeLinecap="round" delay={150} />
             ) : (
-              <circle key={i} cx={r[0]!.x} cy={r[0]!.y} r={1.5} fill="var(--spark-line)" />
+              <circle key={i} cx={r[0]!.x} cy={r[0]!.y} r={1.3} fill="var(--spark-line)" />
             ),
           )}
-          {h && <line x1={hx} x2={hx} y1={0} y2={height} stroke="var(--axis)" />}
-          {Number.isFinite(last.v) && <circle cx={x(lastIdx)} cy={y(last.v)} r={4} fill={color} stroke="var(--surface)" strokeWidth={2} />}
-          {h && hi !== lastIdx && <circle cx={hx} cy={y(h.v)} r={3} fill="var(--spark-line)" stroke="var(--surface)" strokeWidth={1.5} />}
+          {h && <line x1={hx} x2={hx} y1={0} y2={height} stroke="var(--hairline-2)" />}
+          {Number.isFinite(last.v) && <circle className="fade-late" cx={x(lastIdx)} cy={y(last.v)} r={3} fill={color} stroke="var(--bg)" strokeWidth={1.5} />}
+          {h && hi !== lastIdx && <circle cx={hx} cy={y(h.v)} r={2.5} fill="var(--text-2)" stroke="var(--bg)" strokeWidth={1.5} />}
         </svg>
       )}
       {h && (
-        <div className="tip" style={{ position: 'absolute', bottom: height + 4, left: Math.min(Math.max(0, hx - 48), w - 104), padding: '3px 7px', minWidth: 0, whiteSpace: 'nowrap', zIndex: 5 }}>
+        <div className="tip" style={{ position: 'absolute', bottom: height + 6, right: 0, padding: '4px 8px', minWidth: 0, whiteSpace: 'nowrap', zIndex: 5 }}>
           {format(h.v, h.date)}
         </div>
       )}

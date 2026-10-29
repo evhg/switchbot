@@ -42,6 +42,22 @@ export function dur(min: number): string {
   return h ? `${h}h ${pad(m % 60)}m` : `${m}m`;
 }
 
+/**
+ * Brings report sentences from @sleep-lab/core in line with the app's formats: durations as `dur()` ("2h 04m"),
+ * thousands separators, "60%" (no space), and words instead of bare comparison signs ("above 60%").
+ */
+export function tidyReport(text: string): string {
+  return text
+    .replace(/(\d+) h (\d+) m\b/g, (_, h: string, m: string) => `${h}h ${pad(Number(m))}m`)
+    .replace(/(\d+) h\b(?! \d)/g, '$1h')
+    .replace(/\b(\d+) m\b/g, '$1m')
+    .replace(/(?<![\d.\-:])(\d{4,6})(?![\d.\-:])/g, (n: string) => Number(n).toLocaleString('en-US'))
+    .replace(/(\d) %/g, '$1%')
+    .replace(/ > (?=[\d.]+)/g, '\u00a0above\u00a0')
+    .replace(/ < (?=[\d.]+)/g, '\u00a0below\u00a0')
+    .replace(/(\d+)-night\b/g, '$1-night');
+}
+
 export const fmt = (x: number | null | undefined, digits = 0) =>
   x === null || x === undefined || !Number.isFinite(x) ? '–' : x.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 

@@ -1,5 +1,10 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+/**
+ * Room tab (docs/DESIGN.md §11 "Room"): live hero strip, then four sections — Air, Comfort, Aircon, Events — under a
+ * sticky jump bar. Each section carries its own chapter accent. Sections render as soon as the newest-night preview
+ * exists; cards that need history show skeletons until the full dataset arrives.
+ */
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { DEFAULT_CURVE, dewPointC, downsample, FALLBACK_GEN_LPS, fitBuildup, forecastCo2, forecastCo2Occupied, type RoomReading } from '@sleep-lab/core';
 import { useData, useLive, useNightDetail, useSelectedNight } from '@/lib/data/context.tsx';
 import { ACH_FOR_1000, acRuntimeMin, coolingResponse, pulldownWindow, showerImpact, steadyCo2 } from '@/lib/analysis.ts';
@@ -7,51 +12,105 @@ import { addDays, co2Band, dur, fmt, hm, ictDate, ictHour, ictMidnight, HOUR, MI
 import { usePref } from '@/lib/prefs.ts';
 import { median } from '@/lib/stats.ts';
 import { AchTracker, CalendarHeatmap, Co2ForecastChart, ComfortChart, EventLanes, OutdoorIndoor, RadialClock, ResponseScatter, SetpointChart, ShowerMini, VentGauge } from '../charts/room.tsx';
-import { Sparkline } from '../charts/Sparkline.tsx';
+import { LiveSpark, LiveTile } from '../charts/room/live.tsx';
+import s from '../charts/room/room.module.css';
 import { DateNav } from '../DateNav.tsx';
-import { Card, Legend, Loading, Placeholder, Segmented, StatusDot, TableView } from '../ui.tsx';
+import { Icon } from '../icons.tsx';
+import { LazyMount } from '../motion.tsx';
+import { Button, Card, DeltaChip, JumpBar, Legend, Loading, Placeholder, SectionHeader, Segmented, StatusDot, TableView } from '../ui.tsx';
 
+const accent = (a: string): CSSProperties => ({ ['--ch-accent' as string]: `var(--ac-${a})` });
+
+const JUMP = [
+  { id: 'air', label: 'Air' },
+  { id: 'comfort', label: 'Comfort' },
+  { id: 'aircon', label: 'Aircon' },
+  { id: 'events', label: 'Events' },
+] as const;
+
+function Section({ id, n, kicker, lines, lede, accent: ac, children }: { id: string; n: number; kicker: string; lines: ReactNode[]; lede?: ReactNode; accent: string; children: ReactNode }) {
+  return (
+    <section id={id} data-jump className={s.section} style={accent(ac)} aria-label={kicker}>
+      <div className={s.sectionHead}>
+        <SectionHeader n={n} kicker={kicker} lines={lines} size="h2" />
+        {lede && <p className={s.sectionLede}>{lede}</p>}
+      </div>
+      <div className="stack two">{children}</div>
+    </section>
+  );
+}
+
+/** One small stat in a hairline-separated row. */
+function Stat({ label, value, unit, sub }: { label: ReactNode; value: ReactNode; unit?: string; sub?: ReactNode }) {
+  return (
+    <div className={s.stat}>
+      <span className={`${s.statLabel} t-micro`}>{label}</span>
+      <span className={s.statValue}>
+        {value}
+        {unit && <span className="t-unit">{unit}</span>}
+      </span>
+      {sub && <span className={s.statSub}>{sub}</span>}
+    </div>
+  );
+}
+
+// ───────────── Live strip ─────────────
 function LiveTiles() {
   const { now, reading, history } = useLive(6);
   const hourAgo = history.find((r) => r.ts >= now - HOUR);
   const tiles = [
-    { key: 'temp', label: 'Temperature', unit: '°C', digits: 1, color: 'var(--temp)', get: (r: RoomReading) => r.tempC },
-    { key: 'rh', label: 'Humidity', unit: '%', digits: 0, color: 'var(--rh)', get: (r: RoomReading) => r.rh },
-    { key: 'co2', label: 'CO₂', unit: 'ppm', digits: 0, color: 'var(--text-2)', get: (r: RoomReading) => r.co2 },
-    { key: 'dew', label: 'Dew point', unit: '°C', digits: 1, color: 'var(--dew)', get: (r: RoomReading) => dewPointC(r.tempC, r.rh) },
+    { key: 'temp', label: 'Temperature', icon: 'thermometer' as const, unit: '°C', digits: 1, color: 'var(--temp)', get: (r: RoomReading) => r.tempC },
+    { key: 'rh', label: 'Humidity', icon: 'droplet' as const, unit: '%', digits: 0, color: 'var(--rh)', get: (r: RoomReading) => r.rh },
+    { key: 'co2', label: 'CO₂', icon: 'co2' as const, unit: 'ppm', digits: 0, color: 'var(--co2)', get: (r: RoomReading) => r.co2 },
+    { key: 'dew', label: 'Dew point', icon: 'wind' as const, unit: '°C', digits: 1, color: 'var(--dew)', get: (r: RoomReading) => dewPointC(r.tempC, r.rh) },
   ];
   const spark = useMemo(() => downsample(history, 5 * MIN, 'mean'), [history]);
   return (
-    <section>
-      <div className="row between" style={{ margin: '0 2px 8px' }}>
-        <span className="small t2">
-          Live · updated {reading ? hm(reading.ts) : '–'} · last 6 h
+    <section className={s.live} aria-label="Live readings">
+      <div className={s.liveHead}>
+        <span className={`${s.liveTag} t-label`}>
+          <i className={s.liveDot} aria-hidden />
+          Live · {reading ? hm(reading.ts) : '–'}
         </span>
-        <span className="small muted">refreshes every 60 s</span>
+        <span className={`${s.liveMeta} t-micro muted`}>Last 6 h · every 60 s</span>
       </div>
-      <div className="tiles">
+      <div className={s.tiles}>
         {tiles.map((t) => {
           const v = reading ? t.get(reading) : NaN;
           const d = reading && hourAgo ? v - t.get(hourAgo) : NaN;
           const band = t.key === 'co2' && reading ? co2Band(reading.co2) : null;
           return (
-            <div className="tile" key={t.key}>
-              <div className="tile-label">{t.label}</div>
-              <div className="tile-value">
-                {fmt(v, t.digits)}
-                <span className="tile-unit">{t.unit}</span>
-              </div>
-              <div className="tile-delta">
-                {band ? (
-                  <span className="status-pill">
-                    <StatusDot status={band.key} /> {band.label} · {signed(d, 0)} /h
-                  </span>
+            <LiveTile
+              key={t.key}
+              label={t.label}
+              icon={t.icon}
+              value={v}
+              dp={t.digits}
+              unit={t.unit}
+              color={t.color}
+              band={band ? `var(--${band.key})` : undefined}
+              stamp={reading?.ts ?? null}
+              delta={
+                band ? (
+                  <>
+                    <span className="status-pill" style={{ marginTop: 0 }}>
+                      <StatusDot status={band.key} /> {band.label}
+                    </span>
+                    <span className="mono">{Number.isFinite(d) ? `${signed(d, 0)}/h` : ''}</span>
+                  </>
+                ) : Number.isFinite(d) ? (
+                  <>
+                    <DeltaChip tone="neutral" dir={d > 0.05 ? 'up' : d < -0.05 ? 'down' : 'flat'}>
+                      {signed(d, t.digits)}
+                    </DeltaChip>
+                    <span>vs 1 h ago</span>
+                  </>
                 ) : (
-                  `${signed(d, t.digits)} vs 1 h ago`
-                )}
-              </div>
-              <Sparkline values={spark.map((r) => ({ ts: r.ts, v: t.get(r) }))} color={t.color} format={(v, ts) => `${hm(ts)} · ${fmt(v, t.digits)}`} />
-            </div>
+                  <span>&nbsp;</span>
+                )
+              }
+              spark={<LiveSpark values={spark.map((r) => ({ ts: r.ts, v: t.get(r) }))} color={t.color} format={(v, ts) => `${hm(ts)} · ${fmt(v, t.digits)}`} />}
+            />
           );
         })}
       </div>
@@ -59,6 +118,7 @@ function LiveTiles() {
   );
 }
 
+// ───────────── CO₂ forecast ─────────────
 function Co2ForecastCard() {
   const { source, dataset } = useData();
   const sel = useSelectedNight();
@@ -116,7 +176,7 @@ function Co2ForecastCard() {
   }, [mode, live, sel, untilTs, learned, lightsOutTonight]);
 
   const end = view?.forecast.at(-1);
-  const actualEnd = mode === 'check' ? view?.actual.at(-1) : undefined;
+  const actualEnd = mode === 'check' ? view?.actual.filter((r) => r.ts <= view.until).at(-1) : undefined;
   return (
     <Card
       title="CO₂ ramp & forecast"
@@ -127,32 +187,33 @@ function Co2ForecastCard() {
             : `Forecast made at ${hm(view!.known)}: ${fmt(end.co2)} ppm at wake · actual ${fmt(actualEnd?.co2 ?? NaN)}`
           : 'Waiting for data…'
       }
-      className="span-2"
     >
-      <div className="row between" style={{ marginBottom: 6 }}>
+      <div className={s.cardTools}>
         <Segmented
           value={mode}
           onChange={setMode}
+          label="Forecast mode"
           options={[
             { value: 'tonight', label: 'Tonight' },
-            { value: 'check', label: dataset && sel ? `Check ${shortDate(sel.night.date)}` : 'Check' },
+            { value: 'check', label: sel ? `Check ${shortDate(sel.night.date)}` : 'Check' },
           ]}
         />
-        <Legend items={[{ label: 'Measured', color: 'var(--text-2)' }, { label: 'Forecast', color: 'var(--text-2)', shape: 'dash' }]} />
+        <Legend items={[{ label: 'Measured', color: 'var(--co2)' }, { label: 'Forecast ±', color: 'var(--co2)', shape: 'dash' }]} />
       </div>
-      {view ? <Co2ForecastChart actual={view.actual} forecast={view.forecast} known={view.known} until={view.until} /> : <Placeholder height={200} />}
-      <p className="card-note">
+      <LazyMount minHeight={220}>{view ? <Co2ForecastChart actual={view.actual} forecast={view.forecast} known={view.known} until={view.until} /> : <Placeholder height={220} />}</LazyMount>
+      <p className={s.note}>
         {view?.basis === 'learned' && learned
           ? `Assumes two sleepers from ≈${hm(lightsOutTonight)} (usual lights-out) at the rate learned from recent nights (${fmt(learned.gen * 1000, 1)} mL/s CO₂, ${fmt(learned.ach, 2)} ACH). After 90 min of sleep it switches to tonight's own build-up.`
-          : 'Build-up model fitted on the sleeping hours so far (120 m³, outdoor 425 ppm).'}{' '}
+          : 'Build-up model fitted on the sleeping hours so far (120 m³, outdoor 425 ppm). The ribbon is ±(50 ppm + 5 %).'}{' '}
         Bands: &lt;800 · 800–1,000 · 1,000–1,500 · &gt;1,500.
       </p>
     </Card>
   );
 }
 
+// ───────────── Screen ─────────────
 export function RoomScreen() {
-  const { status, dataset, progress, date, setDate } = useData();
+  const { dataset, progress, date, setDate } = useData();
   const sel = useSelectedNight();
   const { detail } = useNightDetail(date);
   const [filterDate, setFilterDate] = usePref<string | null>('filterCleaned', null);
@@ -211,166 +272,234 @@ export function RoomScreen() {
     };
   }, [sel, detail]);
 
-  if (status !== 'ready' || !dataset || !sel || !derived) return <Loading text={progress || 'Loading…'} />;
+  if (!sel) return <Loading text={progress || 'Loading…'} />;
   const n = sel.night;
-  const verdict = derived.medCo2 > 1000 ? 'Ventilation recommended' : derived.medCo2 > 800 ? 'Borderline: try the door ajar' : 'No ventilation needed';
-  const ervAch = Number.isFinite(derived.medAch) ? derived.medAch + 65 / 120 : NaN;
+  const nightMin = Math.max(1, (n.wake - n.lightsOut) / MIN);
+  const rhPct = (sel.room.minutesRhInBand / nightMin) * 100;
+  const verdict = derived ? (derived.medCo2 > 1000 ? 'Ventilation recommended' : derived.medCo2 > 800 ? 'Borderline: try the door ajar' : 'No ventilation needed') : null;
+  const ventBand = derived ? co2Band(derived.medCo2).key : 'good';
+  const ervAch = derived && Number.isFinite(derived.medAch) ? derived.medAch + 65 / 120 : NaN;
   const filterDays = filterDate ? Math.floor((Date.now() - Date.parse(`${filterDate}T00:00:00Z`)) / 86_400_000) : null;
-  const rt7 = median(derived.runtime.slice(-7));
+  const rt7 = derived ? median(derived.runtime.slice(-7)) : NaN;
+  const missed = n.ac.filter((c) => c.landed === false).length;
+  const pending = <Placeholder height={200} text={progress || 'Reading 30 nights…'} />;
 
   return (
-    <>
-      <DateNav title="Room" />
-      <div className="stack two">
-        <div className="span-2">
-          <LiveTiles />
-        </div>
+    <div className={s.page} style={accent('air')}>
+      <DateNav title="Room" kicker="Bedroom air" />
+      <LiveTiles />
+      <JumpBar items={JUMP} label="Room sections" />
+
+      <Section
+        id="air"
+        n={1}
+        kicker="Air"
+        accent="air"
+        lines={['Fresh air.', verdict ? `${verdict}.` : 'Measuring…']}
+        lede={derived ? <>The median night averaged {fmt(derived.medCo2)} ppm over the last 30 nights; {fmt(sel.room.minutesCo2Over1000)} min above 1,000 on {shortDate(n.date)}.</> : undefined}
+      >
         <Co2ForecastCard />
 
-        <Card title="Ventilation verdict" sub={verdict}>
-          <VentGauge value={derived.medCo2} />
-          <dl className="kv" style={{ marginTop: 8 }}>
-            <dt>Morning CO₂ (median)</dt>
-            <dd>{fmt(derived.morningCo2)} ppm</dd>
-            <dt>Fresh air now (median)</dt>
-            <dd>{fmt(derived.medAch, 2)} ACH</dd>
-            <dt>With a 65 m³/h ERV</dt>
-            <dd>≈{fmt(Math.round(steadyCo2(ervAch) / 10) * 10)} ppm</dd>
-          </dl>
-          <p className="card-note">
-            Rule: buy if the median nightly mean is above 1,000 ppm or mornings are regularly above 1,200. An ERV (not HRV) because Phuket air is a humidity load:
-            ≈0.4–0.9 kW of extra cooling at 50–80 m³/h.
-          </p>
+        <Card title="Ventilation verdict" sub={verdict ? '30-night median vs the 1,000 ppm decision line' : 'Waiting for 30 nights…'}>
+          {derived ? (
+            <>
+              <VentGauge value={derived.medCo2} />
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: 12 }}>
+                <span className={s.verdictPill} style={{ ['--band-c' as string]: `var(--${ventBand})` }}>
+                  <StatusDot status={ventBand} /> {verdict}
+                </span>
+              </div>
+              <div className={s.stats}>
+                <Stat label="Morning CO₂" value={fmt(derived.morningCo2)} unit="ppm" sub="median at wake" />
+                <Stat label="Fresh air" value={fmt(derived.medAch, 2)} unit="ACH" sub="median, door shut" />
+                <Stat label="With ERV" value={`≈${fmt(Math.round(steadyCo2(ervAch) / 10) * 10)}`} unit="ppm" sub="65 m³/h unit" />
+              </div>
+              <p className={s.note}>
+                Rule: buy if the median nightly mean is above 1,000 ppm or mornings are regularly above 1,200. An ERV (not HRV) because Phuket air is a humidity load: ≈0.4–0.9 kW of extra cooling at 50–80 m³/h.
+              </p>
+            </>
+          ) : (
+            pending
+          )}
         </Card>
 
         <Card title="Fresh-air tracker" sub="Air changes per hour from each morning's CO₂ decay">
-          <AchTracker points={derived.ach} needed={ACH_FOR_1000} />
-          <TableView columns={['Night', 'ACH', 'Door']} rows={derived.ach.filter((a) => a.ach !== null).slice(-30).reverse().map((a) => [shortDate(a.date), fmt(a.ach, 2), a.ajar ? 'ajar' : 'closed'])} />
+          {derived ? (
+            <>
+              <LazyMount minHeight={226}>
+                <AchTracker points={derived.ach} needed={ACH_FOR_1000} />
+              </LazyMount>
+              <TableView columns={['Night', 'ACH', 'Door']} rows={derived.ach.filter((a) => a.ach !== null).slice(-30).reverse().map((a) => [shortDate(a.date), fmt(a.ach, 2), a.ajar ? 'ajar' : 'closed'])} />
+            </>
+          ) : (
+            pending
+          )}
         </Card>
 
-        <Card title="Comfort" sub={`${shortDate(n.date)}: temp × humidity, one dot per 5 min`}>
-          <ComfortChart points={comfort} />
-          <p className="card-note">
-            {fmt((sel.room.minutesRhInBand / Math.max(1, (n.wake - n.lightsOut) / MIN)) * 100)}% of the night inside 45–55 % RH. Drifting up and left = &quot;cold and clammy&quot;: try DRY
-            mode before bed.
+        <Card title="Nights over 1,000 ppm" sub="Minutes per night · tap a day to open it">
+          {derived ? <CalendarHeatmap cells={derived.co2Cells} color="var(--co2)" max={300} unit="min" onPick={setDate} selected={date} /> : pending}
+        </Card>
+      </Section>
+
+      <Section id="comfort" n={2} kicker="Comfort" accent="lights" lines={['Comfort.', `${fmt(rhPct)}% of the night in the humidity band.`]}>
+        <Card title="Temperature × humidity" sub={`${shortDate(n.date)} · one dot per 5 min, darker = later`} className="span-2">
+          <LazyMount minHeight={256}>
+            <ComfortChart points={comfort} />
+          </LazyMount>
+          <p className={s.note}>
+            <b>{fmt(rhPct)}%</b> of the night inside 45–55 % RH. Drifting up and left = &quot;cold and clammy&quot;: try DRY mode before bed.
           </p>
         </Card>
 
-        <Card title="24-hour rhythm" sub="When the room breathes: last 14 nights">
-          <RadialClock nights={dataset.nights.slice(-14)} />
+        <Card title="24-hour rhythm" sub="When the room breathes · last 14 nights">
+          {dataset ? (
+            <LazyMount minHeight={340}>
+              <RadialClock nights={dataset.nights.slice(-14)} />
+            </LazyMount>
+          ) : (
+            <Placeholder height={320} />
+          )}
         </Card>
 
-        <Card title="Nights over 1,000 ppm" sub="Minutes per night">
-          <CalendarHeatmap cells={derived.co2Cells} color="var(--seq-2)" max={300} unit="min" onPick={setDate} selected={date} />
-        </Card>
         <Card title="Nights off the temperature curve" sub="Minutes more than 0.75 °C from target">
-          <CalendarHeatmap cells={derived.tempCells} color="var(--seq)" max={180} unit="min" onPick={setDate} selected={date} />
+          {derived ? <CalendarHeatmap cells={derived.tempCells} color="var(--temp)" max={180} unit="min" onPick={setDate} selected={date} /> : pending}
         </Card>
+      </Section>
 
-        <Card title="Setpoint vs actual" sub={`${n.ac.length} IR commands · ${n.ac.filter((c) => c.landed === false).length} flagged as missed`} className="span-2">
-          <SetpointChart night={n} curve={DEFAULT_CURVE} />
+      <Section id="aircon" n={3} kicker="Aircon" accent="night" lines={['The aircon.', `${n.ac.length} commands${missed ? `, ${missed} missed` : ''} on ${shortDate(n.date)}.`]}>
+        <Card title="Setpoint vs actual" sub={`${n.ac.length} IR commands · ${missed} flagged as missed`} className="span-2">
+          <LazyMount minHeight={236}>
+            <SetpointChart night={n} curve={DEFAULT_CURVE} />
+          </LazyMount>
           <TableView
             columns={['Time', 'Command', 'Landed', 'Reason']}
             rows={n.ac.map((c) => [hm(c.ts), c.state.power ? `${c.state.mode} ${c.state.setpointC}° ${c.state.fan}` : 'OFF', c.landed === false ? 'missed?' : c.landed ? 'yes' : '–', c.reason])}
           />
         </Card>
 
+        <Card title="Room response" sub="Minutes to cool 1 °C after the pre-cool command">
+          {derived ? (
+            <>
+              <LazyMount minHeight={216}>
+                <ResponseScatter points={derived.response} />
+              </LazyMount>
+              <p className={s.note}>
+                Median <b>{fmt(median(derived.response.map((r) => r.minutes)))} min</b>. This is the learned model the controller uses to start pre-cooling early enough.
+              </p>
+            </>
+          ) : (
+            pending
+          )}
+        </Card>
+
+        <Card title="Aircon duty & filter">
+          <div className={s.duty}>
+            <div className={s.dutyTile}>
+              <span className="t-micro muted">Runtime · night</span>
+              <span className={s.dutyValue}>{derived ? dur(derived.runtime[sel.index] ?? NaN) : dur(acRuntimeMin(n))}</span>
+              <span className={s.statSub}>7-night median {dur(rt7)}</span>
+            </div>
+            <div className={s.dutyTile}>
+              <span className="t-micro muted">Filter clock</span>
+              <span className={s.dutyValue}>
+                {filterDays === null ? '–' : filterDays}
+                {filterDays !== null && <span className="t-unit">{filterDays === 1 ? 'day' : 'days'}</span>}
+              </span>
+              <span className={s.statSub}>{filterDays === null ? 'not logged yet' : filterDays > 30 ? 'clean it soon' : 'since last clean'}</span>
+            </div>
+          </div>
+          <div className={s.dutyRow}>
+            <span className={s.statSub}>Runtime from IR commands (open loop, estimate).</span>
+            <Button size="sm" variant="ghost" icon="check" onClick={() => setFilterDate(ictDate(Date.now()))}>
+              Cleaned today
+            </Button>
+          </div>
+        </Card>
+      </Section>
+
+      <Section
+        id="events"
+        n={4}
+        kicker="Events"
+        accent="verdict"
+        lines={['What happened.', detail ? `${detail.events.length} events in the air.` : 'Reading the night…']}
+      >
         <Card title="Events" sub={detail ? `${detail.events.length} detected from CO₂ and RH` : 'Detecting…'} className="span-2">
           {detail ? (
             <EventLanes
               from={n.room[0]?.ts ?? n.lightsOut}
               to={n.room.at(-1)?.ts ?? n.wake}
-              lanes={[
-                { label: 'Detected', items: detail.events },
-                ...(n.truth ? [{ label: 'Simulator truth', items: n.truth.events }] : []),
-              ]}
+              lanes={[{ label: 'Detected', items: detail.events }, ...(n.truth ? [{ label: 'Simulator truth', items: n.truth.events }] : [])]}
             />
           ) : (
-            <Placeholder height={180} />
+            <Placeholder height={200} />
           )}
         </Card>
 
-        <Card title="Shower impact" sub={
+        <Card
+          title="Shower impact"
+          sub={
             shower
               ? `${hm(shower.imp.start)} · ${shower.suspect ? 'detected during pre-cool (may be the AC)' : shower.detected ? 'detected' : 'from sim truth (not detected)'}`
               : 'No shower this night'
-          }>
+          }
+        >
           {shower ? (
             <>
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 8 }}>
+              <div className={s.showerGrid}>
                 <div>
-                  <div className="small t2">Humidity</div>
+                  <div className={`${s.miniLabel} t-micro`}>
+                    <Icon name="droplet" size={12} /> Humidity
+                  </div>
                   <ShowerMini series={shower.rh} start={shower.imp.start} end={shower.imp.end} metric="rh" />
                 </div>
                 <div>
-                  <div className="small t2">Temperature</div>
+                  <div className={`${s.miniLabel} t-micro`}>
+                    <Icon name="thermometer" size={12} /> Temperature
+                  </div>
                   <ShowerMini series={shower.temp} start={shower.imp.start} end={shower.imp.end} metric="temp" />
                 </div>
               </div>
-              <dl className="kv" style={{ marginTop: 8 }}>
+              <dl className="kv" style={{ marginTop: 14 }}>
                 <dt>RH before → peak</dt>
-                <dd>
+                <dd className="num">
                   {fmt(shower.imp.rhBefore)} → {fmt(shower.imp.rhPeak)} %
                 </dd>
                 {shower.imp.tempPeak > shower.imp.tempBefore + 0.1 ? (
                   <>
                     <dt>Temp before → peak</dt>
-                    <dd>
+                    <dd className="num">
                       {fmt(shower.imp.tempBefore, 1)} → {fmt(shower.imp.tempPeak, 1)} °C
                     </dd>
                   </>
                 ) : (
                   <>
                     <dt>Temp before → after</dt>
-                    <dd>
+                    <dd className="num">
                       {fmt(shower.imp.tempBefore, 1)} → {fmt(shower.imp.tempAfter, 1)} °C <span className="muted">(aircon cooling)</span>
                     </dd>
                   </>
                 )}
                 <dt>Back to normal RH</dt>
-                <dd>{shower.imp.recoverMin !== null ? dur(shower.imp.recoverMin) : 'not within window'}</dd>
+                <dd className="num">{shower.imp.recoverMin !== null ? dur(shower.imp.recoverMin) : 'not within window'}</dd>
                 <dt>Extra aircon time</dt>
-                <dd>≈{dur(shower.imp.extraCoolMin)}</dd>
+                <dd className="num">≈{dur(shower.imp.extraCoolMin)}</dd>
               </dl>
             </>
           ) : (
-            <Placeholder height={120} text="Pick a night with a shower (calendar above)." />
+            <div className={s.empty}>
+              <Icon name="shower" size={22} />
+              <span>No shower this night. Pick another night in the calendars above.</span>
+            </div>
           )}
         </Card>
 
         <Card title="Outdoor vs bedroom" sub={`${shortDate(n.date)} · simulated Phuket weather (Open-Meteo later)`}>
-          <OutdoorIndoor night={n} />
+          <LazyMount minHeight={330}>
+            <OutdoorIndoor night={n} />
+          </LazyMount>
         </Card>
-
-        <Card title="Room response" sub="Minutes to cool 1 °C after the pre-cool command">
-          <ResponseScatter points={derived.response} />
-          <p className="card-note">Median {fmt(median(derived.response.map((r) => r.minutes)))} min. This is the learned model the controller uses to start pre-cooling early enough.</p>
-        </Card>
-
-        <Card title="Aircon duty & filter">
-          <div className="tiles" style={{ gridTemplateColumns: 'repeat(2, minmax(0,1fr))' }}>
-            <div className="tile" style={{ boxShadow: 'none', background: 'var(--surface-2)' }}>
-              <div className="tile-label">Runtime, this night</div>
-              <div className="tile-value">{dur(derived.runtime[sel.index] ?? NaN)}</div>
-              <div className="tile-delta">7-night median {dur(rt7)}</div>
-            </div>
-            <div className="tile" style={{ boxShadow: 'none', background: 'var(--surface-2)' }}>
-              <div className="tile-label">Filter clock</div>
-              <div className="tile-value">
-                {filterDays === null ? '–' : filterDays}
-                <span className="tile-unit">days</span>
-              </div>
-              <div className="tile-delta">{filterDays === null ? 'not logged yet' : filterDays > 30 ? 'clean it soon' : 'since last clean'}</div>
-            </div>
-          </div>
-          <div className="row between" style={{ marginTop: 10 }}>
-            <span className="small muted">Runtime from IR commands (open loop, estimate).</span>
-            <button className="btn" type="button" onClick={() => setFilterDate(ictDate(Date.now()))}>
-              Cleaned today
-            </button>
-          </div>
-        </Card>
-      </div>
-    </>
+      </Section>
+    </div>
   );
 }
