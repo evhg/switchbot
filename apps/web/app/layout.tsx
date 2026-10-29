@@ -1,13 +1,26 @@
 import type { Metadata, Viewport } from 'next';
-import { Geist_Mono, Inter_Tight } from 'next/font/google';
+import localFont from 'next/font/local';
 import type { ReactNode } from 'react';
 import { Shell } from '@/components/Shell.tsx';
 import { THEME_BOOT } from '@/lib/theme-boot.ts';
 import './globals.css';
 
 // Display + UI face (variable 100–900; we use 300–800) and the mono label face (docs/DESIGN.md §2).
-const display = Inter_Tight({ subsets: ['latin'], weight: 'variable', variable: '--font-display', display: 'swap' });
-const mono = Geist_Mono({ subsets: ['latin'], weight: ['400', '500', '600'], variable: '--font-geist-mono', display: 'swap' });
+// Self-hosted latin subsets (OFL) because next/font/google fails to fetch inside Vercel builds.
+const display = localFont({
+  src: './fonts/InterTight-latin-var.woff2',
+  weight: '100 900',
+  variable: '--font-display',
+  display: 'swap',
+  fallback: ['system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+});
+const mono = localFont({
+  src: './fonts/GeistMono-latin-var.woff2',
+  weight: '100 900',
+  variable: '--font-geist-mono',
+  display: 'swap',
+  fallback: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+});
 
 export const metadata: Metadata = {
   title: 'Sleep Lab',
