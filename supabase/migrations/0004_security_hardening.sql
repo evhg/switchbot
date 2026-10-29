@@ -7,6 +7,11 @@
 -- 0008 rls_enabled_no_policy: the service-role-only tables get an explicit deny-all policy for anon and
 --   authenticated, so the intent is visible (the service role bypasses RLS either way).
 -- 0001 unindexed_foreign_keys: covering indexes for every foreign key.
+--
+-- Written without destructive statements: those trigger an interactive confirmation that the Supabase
+-- MCP cannot surface. Policies are re-pointed with ALTER POLICY, the old public helpers lose EXECUTE instead of
+-- being removed, and unregister_push_subscription keeps its 0001 definer body (it only touches the caller's
+-- own rows).
 
 grant usage on schema private to authenticated, service_role;
 
@@ -38,8 +43,7 @@ begin
     'curves', 'nights', 'ac_commands', 'ac_state', 'events', 'raw_health', 'health_hr', 'health_hrv',
     'health_spo2', 'sleep_sessions', 'health_daily', 'reports', 'api_quota', 'api_quota_log', 'health_vitals_daily'
   ] loop
-    execute format('drop policy if exists "household read" on public.%I', t);
-    execute format('create policy "household read" on public.%I for select to authenticated using ((select private.is_household_member()))', t);
+    execute format('alter policy "household read" on public.%I using ((select private.is_household_member()))', t);
   end loop;
 end $$;
 
@@ -98,17 +102,10 @@ begin
     user_agent = excluded.user_agent, failures = 0;
 end $$;
 
-create or replace function private.unregister_push_subscription(p_endpoint text) returns void
-language sql security definer set search_path = '' as $$
-  delete from public.push_subscriptions s where s.endpoint = p_endpoint and s.user_id = (select auth.uid())
-$$;
-
 revoke all on function private.set_night(date, timestamptz, timestamptz, text[], text, boolean) from public, anon;
 revoke all on function private.register_push_subscription(text, text, text, text) from public, anon;
-revoke all on function private.unregister_push_subscription(text) from public, anon;
 grant execute on function private.set_night(date, timestamptz, timestamptz, text[], text, boolean) to authenticated;
 grant execute on function private.register_push_subscription(text, text, text, text) to authenticated;
-grant execute on function private.unregister_push_subscription(text) to authenticated;
 
 -- Public RPC names and signatures are unchanged; they now run as the caller and delegate.
 create or replace function public.set_night(
@@ -129,11 +126,6 @@ language sql security invoker set search_path = '' as $$
   select private.register_push_subscription(p_endpoint, p_p256dh, p_auth, p_user_agent)
 $$;
 
-create or replace function public.unregister_push_subscription(p_endpoint text) returns void
-language sql security invoker set search_path = '' as $$
-  select private.unregister_push_subscription(p_endpoint)
-$$;
-
 revoke all on function public.set_night(date, timestamptz, timestamptz, text[], text, boolean) from public, anon;
 revoke all on function public.register_push_subscription(text, text, text, text) from public, anon;
 revoke all on function public.unregister_push_subscription(text) from public, anon;
@@ -141,9 +133,9 @@ grant execute on function public.set_night(date, timestamptz, timestamptz, text[
 grant execute on function public.register_push_subscription(text, text, text, text) to authenticated;
 grant execute on function public.unregister_push_subscription(text) to authenticated;
 
--- The exposed membership helpers have no callers left (policies use the private ones).
-drop function public.is_household_member();
-drop function public.is_household_writer();
+-- The exposed membership helpers have no callers left (policies use the private ones): no longer callable.
+revoke all on function public.is_household_member() from public, anon, authenticated;
+revoke all on function public.is_household_writer() from public, anon, authenticated;
 
 -- ---------------------------------------------------------------- service-role-only tables
 
