@@ -1,4 +1,4 @@
-import { civilDate, dailyRows, dailyVitalsRows, rawRows, sessionEndTime, stepsVitalsRows } from '../_shared/health.ts';
+import { civilDate, dailyRows, dailyVitalsRows, newestDeviceSync, newestPointTime, rawRows, sessionEndTime, stepsVitalsRows } from '../_shared/health.ts';
 import { ictDate } from '../_shared/time.ts';
 import { defaultSchedule, nightDateFor, nightWindow } from '../_shared/time.ts';
 
@@ -76,4 +76,31 @@ Deno.test('dailyVitalsRows maps resting HR and daily HRV to their own columns', 
   });
   assert(hrv[0]!.hrv_daily_ms === 41.5 && hrv[0]!.deep_rmssd_ms === null, 'hrv columns, missing deep value is null');
   assert(dailyVitalsRows('b', 'daily-oxygen-saturation', { dataPoints: [] }).length === 0, 'other types');
+});
+
+Deno.test('newestPointTime / newestDeviceSync: latest band activity for band_sync', () => {
+  const pts = [hr('2026-10-28T01:59:00Z', 55), hr('2026-10-28T02:10:00Z', 53), hr('2026-10-28T01:00:05Z', 54)];
+  assert(newestPointTime(pts) === Date.parse('2026-10-28T02:10:00Z'), 'newest sample of an array');
+  assert(newestPointTime({ dataPoints: pts }) === Date.parse('2026-10-28T02:10:00Z'), 'newest sample of a page');
+  const steps = [{ steps: { interval: { startTime: '2026-10-28T03:00:00Z', endTime: '2026-10-28T03:01:00Z' }, count: '12' } }];
+  assert(newestPointTime(steps) === Date.parse('2026-10-28T03:01:00Z'), 'interval end for steps');
+  assert(newestPointTime([]) === null, 'none');
+  const devices = [{ deviceType: 'TRACKER', lastSyncTime: '2026-10-28T04:00:00Z', batteryLevel: 80 }, { deviceType: 'PHONE', lastSyncTime: '2026-10-28T05:00:00Z' }, { deviceType: 'X' }];
+  assert(newestDeviceSync(devices) === Date.parse('2026-10-28T05:00:00Z'), 'newest lastSyncTime');
+  assert(newestDeviceSync([]) === null, 'no devices');
+});
+
+Deno.test('OAuth account check: Gmail-normalised, only another household login is rejected', async () => {
+  const { idTokenEmail, normEmail, wrongAccount } = await import('../_shared/health.ts');
+  assert(normEmail('Cath.Tunti+fit@googlemail.com') === 'cathtunti@gmail.com' && normEmail('a.b@example.com') === 'a.b@example.com' && normEmail('x') === null, 'normEmail');
+  const b64 = (o: unknown) => btoa(JSON.stringify(o)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+  const tok = (c: unknown) => `${b64({ alg: 'RS256' })}.${b64(c)}.sig`;
+  assert(idTokenEmail(tok({ aud: 'cid', email: 'verspui@gmail.com', email_verified: true }), 'cid') === 'verspui@gmail.com', 'email');
+  assert(idTokenEmail(tok({ aud: 'other', email: 'verspui@gmail.com' }), 'cid') === null, 'aud');
+  assert(idTokenEmail(tok({ aud: 'cid', email: 'x@y.z', email_verified: false }), 'cid') === null, 'unverified');
+  assert(idTokenEmail(undefined, 'cid') === null && idTokenEmail('garbage', 'cid') === null, 'absent');
+  const members = [{ personId: 'a', email: 'cath.tunti@gmail.com' }, { personId: 'b', email: 'verspui@gmail.com' }];
+  assert(wrongAccount('verspui@gmail.com', 'a', members) === 'b', 'Erik on Cath\'s link');
+  assert(wrongAccount('cathtunti@gmail.com', 'a', members) === null, 'own account (dots ignored)');
+  assert(wrongAccount('fitbit.only@gmail.com', 'a', members) === null && wrongAccount(null, 'a', members) === null, 'unknown account: accepted');
 });

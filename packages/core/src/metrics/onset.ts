@@ -9,6 +9,10 @@ const DAY_MIN = 1440;
  * onset-anchored curve (one-beep-v2).
  *
  * Per person:
+ *  - Fitbit sometimes splits one night into two sessions around a long awakening (23:00–02:40, 03:10–08:30). Sessions
+ *    less than `mergeGapMin` (2 h) apart are merged first (mergeSplitSessions), so the night's onset is the first
+ *    piece's, not the second's. A short doze (< 90 min) that ends an hour or more before the next session is not
+ *    part of the night and stays separate (dozing off on the sofa at 20:30 is not bedtime);
  *  - one main sleep per night: the longest session per wake date (ICT) that lasts ≥ minMainMin (3 h) and starts in the
  *    evening/night window 18:00 → 04:00 ICT. Naps (short, or daytime) are ignored;
  *  - its onset is the start of the first non-awake stage (the session start when there are no stages): Fitbit opens a
@@ -32,6 +36,8 @@ export interface SleepOnsetOptions {
   before?: Ms;
   /** Local offset from UTC, minutes. Default 420 (ICT). */
   utcOffsetMin?: number;
+  /** Sessions closer than this are one night split in two. Default 120 min. */
+  mergeGapMin?: number;
 }
 
 export interface PersonOnset {
@@ -70,12 +76,44 @@ export function sessionOnset(s: SleepSession): Ms {
   return first ? Math.max(s.start, first.start) : s.start;
 }
 
+const DOZE_MAX_MIN = 90;
+const DOZE_GAP_MIN = 60;
+
+/**
+ * Merges one person's sessions that are less than `gapMin` apart (or overlap) into one, stages concatenated in time
+ * order, so a night Fitbit split around an awakening counts once. A short leading piece (< 90 min) followed by a gap of
+ * ≥ 60 min is a doze before bed, not the start of the night, and is not merged. Input order doesn't matter.
+ */
+export function mergeSplitSessions(sessions: readonly SleepSession[], gapMin = 120): SleepSession[] {
+  const xs = [...sessions].filter((s) => s.end > s.start).sort((a, b) => a.start - b.start);
+  const out: SleepSession[] = [];
+  for (const s of xs) {
+    const cur = out[out.length - 1];
+    const gap = cur ? s.start - cur.end : Infinity;
+    const doze = cur !== undefined && cur.end - cur.start < DOZE_MAX_MIN * MIN && gap >= DOZE_GAP_MIN * MIN;
+    if (cur && cur.personId === s.personId && gap < gapMin * MIN && !doze) {
+      const merged: SleepSession = {
+        personId: cur.personId,
+        start: cur.start,
+        end: Math.max(cur.end, s.end),
+        stages: [...cur.stages, ...s.stages].sort((a, b) => a.start - b.start),
+      };
+      const upd = Math.max(cur.updateTime ?? -Infinity, s.updateTime ?? -Infinity);
+      if (Number.isFinite(upd)) merged.updateTime = upd;
+      out[out.length - 1] = merged;
+    } else {
+      out.push(s);
+    }
+  }
+  return out;
+}
+
 /** Median onset of one person's recent main sleeps, minute of day; null with too few nights. */
 export function personSleepOnset(sessions: readonly SleepSession[], opts: SleepOnsetOptions = {}): PersonOnset | null {
   const off = (opts.utcOffsetMin ?? 420) * MIN;
   const minMain = (opts.minMainMin ?? 180) * MIN;
   const byNight = new Map<string, SleepSession>();
-  for (const s of sessions) {
+  for (const s of mergeSplitSessions(sessions, opts.mergeGapMin ?? 120)) {
     if (!(s.end > s.start) || s.end - s.start < minMain) continue;
     if (opts.before !== undefined && s.end > opts.before) continue;
     const local = new Date(s.start + off);

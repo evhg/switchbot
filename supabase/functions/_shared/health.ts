@@ -172,3 +172,68 @@ export function dailyVitalsRows(personId: string, dataType: string, json: unknow
   }
   return [];
 }
+
+/**
+ * Newest time among data points (sample time, else interval end), or null. For steps that is the end of the newest
+ * 1-min interval: when the band last recorded something that reached Google.
+ */
+export function newestPointTime(json: unknown): number | null {
+  let best: number | null = null;
+  for (const p of dataPointsOf(json)) {
+    const t = parseGoogleTime(deepFind(p, 'physicalTime')) ?? parseGoogleTime(deepFind(p, 'endTime')) ?? parseGoogleTime(deepFind(p, 'startTime'));
+    if (t !== null && (best === null || t > best)) best = t;
+  }
+  return best;
+}
+
+/** Newest `lastSyncTime` across pairedDevices entries (band → phone app → Google), or null. */
+export function newestDeviceSync(devices: readonly unknown[]): number | null {
+  let best: number | null = null;
+  for (const d of devices) {
+    const t = parseGoogleTime(deepFind(d, 'lastSyncTime'));
+    if (t !== null && (best === null || t > best)) best = t;
+  }
+  return best;
+}
+
+/** Gmail ignores dots and "+tags" and treats googlemail.com as gmail.com: compare addresses the way Google does. */
+export function normEmail(e: string | null | undefined): string | null {
+  const s = (e ?? '').trim().toLowerCase();
+  const at = s.lastIndexOf('@');
+  if (at <= 0) return null;
+  let [user, domain] = [s.slice(0, at), s.slice(at + 1)];
+  if (domain === 'googlemail.com') domain = 'gmail.com';
+  if (domain === 'gmail.com') user = user.split('+')[0]!.replaceAll('.', '');
+  return `${user}@${domain}`;
+}
+
+/**
+ * Email of the Google account that consented, from the id_token of the code exchange ('openid email' scopes). The token
+ * came straight from Google's token endpoint over TLS, so its claims are used without a signature check (Google's
+ * guidance for server-side flows); `aud` must still be our client. null when absent or unverified.
+ */
+export function idTokenEmail(idToken: string | undefined, clientId: string): string | null {
+  const part = idToken?.split('.')[1];
+  if (!part) return null;
+  try {
+    const b64 = part.replaceAll('-', '+').replaceAll('_', '/').padEnd(Math.ceil(part.length / 4) * 4, '=');
+    const c = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0)))) as Obj;
+    const aud = Array.isArray(c.aud) ? c.aud : [c.aud];
+    if (!aud.includes(clientId) || c.email_verified === false || typeof c.email !== 'string') return null;
+    return c.email;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The consenting Google account belongs to a DIFFERENT household person (e.g. Erik finishing Cath's consent on a shared
+ * phone): returns that person's id, else null. A Google account that is no household login (a separate Fitbit account)
+ * is accepted: the app login and the band's Google account need not be the same.
+ */
+export function wrongAccount(googleEmail: string | null, personId: string, members: readonly { personId: string | null; email: string | null }[]): string | null {
+  const g = normEmail(googleEmail);
+  if (!g) return null;
+  const owners = members.filter((m) => m.personId && normEmail(m.email) === g).map((m) => m.personId!);
+  return owners.length && !owners.includes(personId) ? owners[0]! : null;
+}

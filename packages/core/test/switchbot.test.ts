@@ -6,6 +6,7 @@ import {
   acStateToSetAllParam,
   normalizeMac,
   parseMeterStatus,
+  plausibleCo2,
   parseRetryAfter,
   parseSetAllParam,
   parseWebhookEvent,
@@ -85,6 +86,21 @@ describe('parseMeterStatus', () => {
     expect(parseMeterStatus({ ...body, CO2: 9999 }, 0)?.co2).toBe(9999);
     expect(parseMeterStatus({ deviceType: 'Meter', temperature: 24, humidity: 50 }, 0)).toBeNull();
     expect(parseMeterStatus(null, 0)).toBeNull();
+  });
+  it('drops the 0 ppm warm-up artifact unless a fallback CO2 is given (temp/RH kept)', () => {
+    expect(parseMeterStatus({ ...body, CO2: 0 }, 0)).toBeNull();
+    expect(parseMeterStatus({ ...body, CO2: 299 }, 0)).toBeNull();
+    expect(parseMeterStatus({ ...body, CO2: 300 }, 0)?.co2).toBe(300);
+    expect(parseMeterStatus({ ...body, CO2: 0 }, 0, { co2Fallback: 930 })).toEqual({ ts: 0, tempC: 24.1, rh: 52, co2: 930, source: 'poll' });
+    expect(parseMeterStatus({ ...body, CO2: 0 }, 0, { co2Fallback: 0 })).toBeNull();
+    expect(parseMeterStatus({ ...body, CO2: 0 }, 0, { co2Fallback: null })).toBeNull();
+    // A valid value ignores the fallback.
+    expect(parseMeterStatus(body, 0, { co2Fallback: 930 })?.co2).toBe(812);
+    const ev = { eventType: 'changeReport', eventVersion: '1', context: { deviceType: 'MeterPro(CO2)', deviceMac: 'B0:E9:FE:00:00:01', temperature: 19.2, humidity: 54, CO2: 0, scale: 'CELSIUS', timeOfSample: 1 } };
+    expect(parseWebhookEvent(ev, 0)!.reading).toBeNull();
+    expect(parseWebhookEvent(ev, 0, { co2Fallback: 925 })!.reading).toEqual({ ts: 0, tempC: 19.2, rh: 54, co2: 925, source: 'webhook' });
+    expect(plausibleCo2(0)).toBe(false);
+    expect(plausibleCo2(420)).toBe(true);
   });
 });
 

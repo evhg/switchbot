@@ -1,9 +1,10 @@
 'use client';
 /**
- * Tonight and presence (decided 2026-10-29): bedtime 22:00 every day, asleep by ~23:00 and wake 08:30 (both
- * editable; the warming step comes 4 h 30 after falling asleep), and the 21:30 pre-cool only when
- * someone is home. `TonightBlock` sits on top of System › Tonight's plan; `PresencePage` (System › Presence) explains the
- * iPhone Shortcuts setup and creates/rotates each person's token. Data and rules: lib/tonight.ts.
+ * Tonight and presence (decided 2026-10-29, 2026-10-30): bedtime 22:00 every day, asleep by ~23:00 and wake 08:30
+ * (both editable), and the 21:30 pre-cool when the household is home: home by default, except away dates (e.g. Bangkok),
+ * "Away tonight", or both phones saying "away". `TonightBlock` sits on top of System › Tonight's plan with the live /
+ * dry-run switch and the away dates; `PresencePage` (System › Presence) explains the iPhone Shortcuts setup and
+ * creates/rotates each person's token. Data and rules: lib/tonight.ts.
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { DEFAULT_PEOPLE } from '@sleep-lab/core';
@@ -11,9 +12,11 @@ import { useAuth } from '@/lib/auth.tsx';
 import { useData } from '@/lib/data/context.tsx';
 import { supabaseConfigured } from '@/lib/data/supabase.ts';
 import { dayLabel, hm, MIN } from '@/lib/format.ts';
-import { hhmm, onsetAfterLightsOut, parseHhmm, presenceUrl, rotatePresenceToken, usePresenceTokens, validSleepOnset, type Override, type Tonight } from '@/lib/tonight.ts';
+import { awayLabel, hhmm, parseHhmm, presenceUrl, rotatePresenceToken, usePresenceTokens, validSleepOnset, type Override, type Tonight } from '@/lib/tonight.ts';
+import { useBandSync } from '@/lib/bands.ts';
 import { systemHref, useChrome } from '../nav.tsx';
-import { Button, Group, PageHeader, Row, Segmented, Skeleton, Status } from '../ui.tsx';
+import { Button, Group, Input, PageHeader, Row, Segmented, Skeleton, Status, Switch } from '../ui.tsx';
+import { BandPresenceGroup } from './bands.tsx';
 import s from './system.module.css';
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ');
@@ -26,8 +29,11 @@ const CHOICES: readonly { value: Choice; label: string }[] = [
   { value: 'away', label: 'Away tonight' },
 ];
 
-/** Tonight's schedule, who is home and what the pre-cool will do. */
-export function TonightBlock({ t }: { t: Tonight }) {
+/**
+ * Tonight's schedule, who is home and what the pre-cool will do. `asleepNote`: what the plan does while you sleep
+ * (from the plan page's schedule), under "Asleep by".
+ */
+export function TonightBlock({ t, asleepNote }: { t: Tonight; asleepNote?: string }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [wakeText, setWakeText] = useState(hhmm(t.wakeMin));
   useEffect(() => setWakeText(hhmm(t.wakeMin)), [t.wakeMin]);
@@ -55,8 +61,8 @@ export function TonightBlock({ t }: { t: Tonight }) {
   };
   const choice: Choice = t.override ?? 'auto';
   const offAt = hhmm(t.wakeMin + 30);
-  const warmAt = hhmm(t.lightsOutMin + onsetAfterLightsOut(t.lightsOutMin, t.sleepOnsetMin) + 270);
   const locked = !ready || (t.live && !t.canWrite);
+  const writable = t.live && t.canWrite;
 
   return (
     <section aria-label="Tonight">
@@ -74,7 +80,7 @@ export function TonightBlock({ t }: { t: Tonight }) {
           <div className="list-row">
             <label className="list-row-t" htmlFor="onset-time">
               <b>Asleep by</b>
-              <span>Usually an hour after lights out. The one warming step comes 4&nbsp;h&nbsp;30 later, at {warmAt}</span>
+              <span>Usually an hour after lights out.{asleepNote ? ` ${asleepNote}` : ''}</span>
             </label>
             <input
               id="onset-time"
@@ -138,9 +144,105 @@ export function TonightBlock({ t }: { t: Tonight }) {
             </div>
           </li>
         )}
+        <Row
+          title="Home by default"
+          sub={t.defaultPresence === 'home' ? 'Pre-cool every night unless away dates, “Away tonight” or both phones say away' : 'Pre-cool only after a phone says home, or “Home tonight”'}
+          trailing={<Switch checked={t.defaultPresence === 'home'} disabled={!writable} onChange={(v) => run(t.setDefaultPresence(v ? 'home' : 'unknown'))} label={<span className="sr-only">Home by default</span>} />}
+        />
+        <Row
+          title="Aircon control"
+          sub={
+            t.acLive === null
+              ? t.live
+                ? 'Loading…'
+                : 'Sign in to see whether the aircon is controlled live'
+              : t.acLive
+                ? 'Live: the controller sends the commands to the aircon (it beeps)'
+                : 'Dry-run: the controller only logs what it would send'
+          }
+          value={t.acLive === null ? undefined : <Status tone={t.acLive ? 'on' : 'off'}>{t.acLive ? 'Live' : 'Dry-run'}</Status>}
+          trailing={<Switch checked={t.acLive === true} disabled={!writable || t.acLive === null} onChange={(v) => run(t.setAcLive(v))} label={<span className="sr-only">Aircon control live</span>} />}
+        />
         <Row title="Presence on your iPhones" sub="Arrive / leave home automations" href={systemHref('presence')} />
       </Group>
+      <AwayDates t={t} onMsg={setMsg} />
     </section>
+  );
+}
+
+const todayIct = () => new Date(Date.now() + 7 * 60 * MIN).toISOString().slice(0, 10);
+
+/** Away dates (public.away_periods): evenings nobody sleeps at home; the aircon stays off those nights. */
+export function AwayDates({ t, onMsg }: { t: Tonight; onMsg?: (m: string | null) => void }) {
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsgLocal] = useState<string | null>(null);
+  const say = (m: string | null) => (onMsg ? onMsg(m) : setMsgLocal(m));
+  const writable = t.live && t.canWrite;
+  const add = async () => {
+    setBusy(true);
+    const e = await t.addAway(from, to || from, note);
+    setBusy(false);
+    say(e);
+    if (!e) {
+      setFrom('');
+      setTo('');
+      setNote('');
+    }
+  };
+  return (
+    <Group
+      label="Away dates"
+      footer={
+        <>
+          Evenings nobody sleeps at home: no pre-cool and the aircon stays off those nights. Home again the next evening.{' '}
+          {!onMsg && msg && <span className="sig">{msg}</span>}
+        </>
+      }
+    >
+      {!t.live ? (
+        <Row title="Sign in as a household member to plan away dates" />
+      ) : t.awayPeriods.length === 0 ? (
+        <Row title="No trips planned" sub="Home every night" />
+      ) : (
+        t.awayPeriods.map((p) => (
+          <Row
+            key={p.id}
+            title={p.note || 'Away'}
+            sub={awayLabel({ ...p, note: null })}
+            value={t.awayTonight?.id === p.id ? <Status tone="off">Tonight</Status> : undefined}
+            trailing={
+              <Button size="sm" variant="text" disabled={!writable} onClick={() => t.removeAway(p.id).then(say)}>
+                Remove
+              </Button>
+            }
+          />
+        ))
+      )}
+      {writable && (
+        <li>
+          <div className={cx('list-row', s.awayForm)}>
+            <label className={s.awayField}>
+              <span className="cap">First evening away</span>
+              <Input type="date" className="num" min={todayIct()} value={from} onChange={(e) => setFrom(e.target.value)} />
+            </label>
+            <label className={s.awayField}>
+              <span className="cap">Last evening away</span>
+              <Input type="date" className="num" min={from || todayIct()} value={to} onChange={(e) => setTo(e.target.value)} />
+            </label>
+            <label className={s.awayField}>
+              <span className="cap">Note</span>
+              <Input type="text" maxLength={60} placeholder="Trip" value={note} onChange={(e) => setNote(e.target.value)} />
+            </label>
+            <Button size="sm" variant="primary" disabled={busy || !from} onClick={add}>
+              {busy ? 'Adding…' : 'Add'}
+            </Button>
+          </div>
+        </li>
+      )}
+    </Group>
   );
 }
 
@@ -192,6 +294,7 @@ export function PresencePage() {
   // Same rule as rotate_presence_token (migration 0010): your own phone's token, or any as the household owner.
   const mayRotate = (personId: string) => canWrite && (auth.probe?.role === 'owner' || auth.probe?.personId === personId);
   const { tokens, error, refresh } = usePresenceTokens(live);
+  const { bands } = useBandSync(live);
   const [shown, setShown] = useState<{ personId: string; token: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -211,15 +314,16 @@ export function PresencePage() {
     <div className={cx(s.sub, s.col, s.drill)}>
       <PageHeader
         title="Presence"
-        lede="Each iPhone tells the app when its owner arrives home or leaves. The 21:30 pre-cool only runs when someone is home, so the aircon doesn’t cool an empty room."
+        lede="The household counts as home every night, except on away dates. Each iPhone can also tell the app when its owner arrives home or leaves, so the 21:30 pre-cool doesn’t cool an empty room."
         className={s.header}
       />
 
       <Group label="How it decides" footer="Your location never leaves the phone: the app only receives “home” or “away” and the time.">
+        <Row title="Home by default, no signal needed" sub="Switch “Home by default” off in Tonight’s plan to wait for a phone instead" value="Pre-cool at 21:30" />
+        <Row title="Away dates (e.g. Bangkok)" sub="Planned in Tonight’s plan; the aircon stays off those nights" value="Off" />
+        <Row title="Both phones said “away” in the last 12 h" sub="Starts later if someone arrives before 01:00" value="Waits" />
         <Row title="Someone’s latest signal is “home”" value="Pre-cool at 21:30" />
-        <Row title="Everyone is away" sub="Starts later if someone arrives before 01:00" value="Waits" />
-        <Row title="No signal from anyone yet" value="No pre-cool" />
-        <Row title="Latest “home” is older than 48 h" sub="A missed “leave” must not cool every night. Counts again with rising bedroom CO₂" value="Waits" />
+        <Row title="Without “Home by default”" sub="No signal: no pre-cool. A “home” older than 48 h counts only with rising bedroom CO₂" value="Waits" />
         <Row title="Pre-cool started by a phone signal" sub="A notification lets you switch to “Away tonight”" value="Notifies" />
         <Row title="“Home tonight” / “Away tonight”" sub="One tap in Tonight’s plan, wins over the phones" value="Override" />
       </Group>
@@ -268,6 +372,8 @@ export function PresencePage() {
         );
       })}
       {(msg || error) && <p className={cx('sec', s.alert)}>{msg ?? error}</p>}
+
+      <BandPresenceGroup people={people} bands={bands} live={live} />
 
       <Group label="Set up on each iPhone (about 3 minutes)">
         <li className={s.bare}>

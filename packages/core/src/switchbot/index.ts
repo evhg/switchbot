@@ -30,5 +30,8 @@ export {
   METER_PRO_CO2_TYPE,
   CO2_MIN,
   CO2_MAX,
+  CO2_PLAUSIBLE_MIN,
+  plausibleCo2,
+  type ParseOptions,
   type SwitchBotWebhookEvent,
 } from './parse.ts';

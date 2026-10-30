@@ -171,9 +171,10 @@ export function decideAcCommand(input: ControllerInput): AcCommand | null {
     return makeCommand(now, desired, remote, `curve: ${phase} start, ${target.toFixed(1)}°C (set ${sp}, bias ${bias >= 0 ? '+' : ''}${bias})`);
   }
   const cur = lastCommand.state;
-  // Precool / early night: if the last command hasn't been confirmed and the room is still hot and not
-  // cooling, the IR frame was probably lost — re-send the full state at minInterval instead of waiting to settle.
-  if (lastCommand.landed !== true && now < lightsOut + 60 * MIN) {
+  // Precool: if the last command hasn't been confirmed and the room is still hot and not cooling, the IR frame was
+  // probably lost — re-send the full state at minInterval instead of waiting to settle. Once (never a resend of a
+  // resend) and only before lights-out: they are in bed after it, and the receiver beeps.
+  if (lastCommand.landed !== true && !lastCommand.reason.startsWith('resend') && now < lightsOut) {
     const above = stalledAbove(recent, now, target);
     if (above !== null) return makeCommand(now, desired, remote, `resend: room ${above.toFixed(1)}° above target and not cooling`);
   }
@@ -260,7 +261,8 @@ function sustainedDeviation(input: ControllerInput, quiet: ResolvedQuiet, steps:
  *     - a resend of a planned "curve: …" command that did not land (not of a fan-only change), or
  *     - an emergency correction (at most maxEmergencyPerNight), when the bed-height room has been ≥ threshold off
  *       target for ≥ emergencyMinMinutes (and the last command is older than the settle time, and no planned step
- *       that fixes it is due within 30 min).
+ *       that fixes it is due within 30 min). Only a room that is too WARM is corrected (cooling) unless
+ *       quiet.emergencyWarm: a too-cold room is never warmed while asleep.
  *     Extras need `tonight` to count them; without it none are sent while asleep.
  * minInterval, the nightly cap and the curve's minC/maxC still apply.
  *
@@ -326,8 +328,13 @@ function decideQuiet(input: ControllerInput, quiet: ResolvedQuiet): AcCommand | 
 
   if (!extraLeft || emergencies >= quiet.maxEmergencyPerNight) return null;
   if (now - lastCommand.ts < Math.max(SETTLE_MIN, quiet.emergencyMinMinutes) * MIN) return null;
+  // The whole deviation window must lie after asleepFrom: readings from the evening pull-down (still converging after
+  // the pre-cool ON) must not trigger the one emergency, which then holds for the rest of the night.
+  if (now - quiet.emergencyMinMinutes * MIN < from) return null;
   const dev = sustainedDeviation(input, quiet, steps);
   if (dev === null) return null;
+  // Never warm the room while asleep (unless the profile allows it): a room that is too cold waits for the morning.
+  if (dev < 0 && !quiet.emergencyWarm) return null;
   // A planned step due within the grace window that moves toward the room (cooler when it is too warm) will fix it:
   // wait for it instead of beeping twice.
   if (nextStep && nextStep.ts - now <= STEP_GRACE_MIN * MIN && Math.sign(nextStep.targetC - heldTarget(input, steps, now)!) === -Math.sign(dev)) return null;

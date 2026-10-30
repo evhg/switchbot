@@ -147,3 +147,11 @@
 .howto b { color: var(--text); font-weight: 560; }
 .howto li::marker { color: var(--muted); }
 .howto :global(.code) { overflow-wrap: anywhere; }
+
+/* Google Health: Connect + Sync now side by side, wrapping on narrow phones. */
+.actions { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+/* Away dates: two dates, a note and Add; wraps to one field per line on the phone. */
+.awayForm { flex-wrap: wrap; align-items: flex-end; gap: var(--sp-3); }
+.awayField { display: flex; flex-direction: column; gap: 4px; flex: 1 1 140px; min-width: 0; }
+.awayField :global(.input) { width: 100%; }
+.awayForm :global(.btn) { flex: none; }

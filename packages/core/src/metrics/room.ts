@@ -1,5 +1,6 @@
 import { targetAt } from '../curve.ts';
 import type { Night, RoomNightMetrics, TemperatureCurve } from '../types.ts';
+import { plausibleCo2 } from '../switchbot/parse.ts';
 import { fitDecayAch } from './co2.ts';
 import { HOUR, MIN, ictTime, quantile, smoothScore, sortByTs } from './util.ts';
 
@@ -33,7 +34,7 @@ const MAX_STEP_MIN = 5;
 export function roomNightBreakdown(night: Night, curve: TemperatureCurve): { metrics: RoomNightMetrics; parts: RoomScoreParts } {
   const rs = sortByTs(night.room).filter((r) => r.ts >= night.lightsOut && r.ts < night.wake);
   let minutes = 0;
-  let co2Sum = 0, tempSum = 0, rhSum = 0, earlySum = 0, earlyW = 0, errSum = 0, errW = 0;
+  let co2Sum = 0, co2W = 0, tempSum = 0, rhSum = 0, earlySum = 0, earlyW = 0, errSum = 0, errW = 0;
   let over1000 = 0, over1500 = 0, inTarget = 0, over24 = 0, rhOver60 = 0, rhBand = 0;
   let co2Max = -Infinity;
   const errs: number[] = [];
@@ -42,12 +43,16 @@ export function roomNightBreakdown(night: Night, curve: TemperatureCurve): { met
     const next = rs[i + 1];
     const w = next ? Math.min(MAX_STEP_MIN, (next.ts - r.ts) / MIN) : 1;
     minutes += w;
-    co2Sum += r.co2 * w;
+    // The meter's 0 ppm warm-up artifact (< 300 ppm) is not a CO2 value; temp and RH of that minute still count.
+    if (plausibleCo2(r.co2)) {
+      co2Sum += r.co2 * w;
+      co2W += w;
+      co2Max = Math.max(co2Max, r.co2);
+      if (r.co2 > 1000) over1000 += w;
+      if (r.co2 > 1500) over1500 += w;
+    }
     tempSum += r.tempC * w;
     rhSum += r.rh * w;
-    co2Max = Math.max(co2Max, r.co2);
-    if (r.co2 > 1000) over1000 += w;
-    if (r.co2 > 1500) over1500 += w;
     if (r.tempC > 24) over24 += w;
     if (r.rh > 60) rhOver60 += w;
     if (r.rh >= 45 && r.rh <= 55) rhBand += w;
@@ -68,7 +73,7 @@ export function roomNightBreakdown(night: Night, curve: TemperatureCurve): { met
   // Stability = spread of the error around its mean, so planned curve steps don't count as instability.
   const errMean = errs.length ? errs.reduce((a, e) => a + e, 0) / errs.length : 0;
   const tempSd = errs.length ? Math.sqrt(errs.reduce((a, e) => a + (e - errMean) ** 2, 0) / errs.length) : 0;
-  const co2Mean = has ? co2Sum / minutes : NaN;
+  const co2Mean = has && co2W > 0 ? co2Sum / co2W : NaN;
   const frac = (m: number) => (has ? m / minutes : 0);
   const tempMeanAbsErr = errW ? errSum / errW : NaN;
 
@@ -77,7 +82,7 @@ export function roomNightBreakdown(night: Night, curve: TemperatureCurve): { met
 
   // Sub-scores (0..1), each a smooth penalty curve.
   const parts: RoomScoreParts = {
-    co2: has ? 0.5 * smoothScore(co2Mean, 700, 1400) + 0.3 * (1 - frac(over1000)) + 0.2 * (1 - frac(over1500)) : 0,
+    co2: has && co2W > 0 ? 0.5 * smoothScore(co2Mean, 700, 1400) + 0.3 * (1 - over1000 / co2W) + 0.2 * (1 - over1500 / co2W) : 0,
     temp: has ? 0.7 * frac(inTarget) + 0.3 * smoothScore(tempMeanAbsErr, 0.3, 2) : 0,
     rh: has ? 0.6 * frac(rhBand) + 0.4 * (1 - frac(rhOver60)) : 0,
     stability: has ? 0.6 * (1 - frac(over24)) + 0.4 * smoothScore(tempSd, 0.5, 2) : 0,
@@ -92,8 +97,8 @@ export function roomNightBreakdown(night: Night, curve: TemperatureCurve): { met
   const metrics: RoomNightMetrics = {
     date: night.date,
     co2Mean: Math.round(co2Mean),
-    co2P95: has ? Math.round(quantile(rs.map((r) => r.co2), 0.95)) : NaN,
-    co2Max: has ? co2Max : NaN,
+    co2P95: has ? Math.round(quantile(rs.filter((r) => plausibleCo2(r.co2)).map((r) => r.co2), 0.95)) : NaN,
+    co2Max: has && co2W > 0 ? co2Max : NaN,
     minutesCo2Over1000: Math.round(over1000),
     minutesCo2Over1500: Math.round(over1500),
     tempMean: Math.round(tempMean * 100) / 100,

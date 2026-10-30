@@ -1,8 +1,13 @@
 // Temperature-curve controller. Called by pg_cron every 5 min, around the clock:
 // inside the night window, night row + curve + last command + recent readings → decideAcCommand → SwitchBot IR → log;
 // outside it (or with the night disabled), only an "ensure off" when the assumed state is still ON.
-// DRY_RUN (default true until the remote is verified; only an explicit false/0/no/off turns it off) logs commands
-// without sending them.
+// Live or dry run (2026-10-30): real IR is sent only when public.household_settings.ac_live is true (toggled in the app,
+// System › Tonight's plan) AND the DRY_RUN function secret does not force a dry run (unset, or false/0/no/off; any
+// other value forces dry). The secret can force a dry run, never a live one; so can the request ({"dryRun":true}).
+// A dry run logs the command (ac_commands.dry_run) without sending it.
+// Simulation (cron auth only): {"at": <epoch ms | ISO time>} evaluates the decision as if it were that moment. It is
+// ALWAYS a dry run and writes nothing (no command row, no gate status, no landing): for checks like "what will
+// 21:30 do tonight?".
 // Quiet mode (the receiver beeps on every IR frame): ON by default — from lights-out + 15 min only the planned phase
 // steps plus at most one extra command (an emergency correction or a resend; packages/core CONTRACT.md). AC_QUIET=false (or 0/no/off)
 // switches it off for every night; anything else, or unset, keeps the stored profile's setting (default on).
@@ -11,23 +16,36 @@
 // "Home tonight" in the app), from the pre-cool start until lights-out + 3 h. The decision is stored on the night
 // (precool_status / precool_reason) and returned as `skipped: "precool: …"`; a closed gate also switches off an AC that
 // is still assumed ON. A live pre-cool started by a presence signal sends a push ("Away tonight" is one tap away).
-// "Away tonight" (or the travel tag) keeps the AC off all night, like ac_enabled = false.
+// "Away tonight" (or the travel tag), or an active away period covering tonight's evening (public.away_periods), keeps
+// the AC off all night, like ac_enabled = false. household_settings.default_presence = 'home' counts the household as
+// home unless every phone said "away" within 12 h (_shared/presence.ts).
 import { decideAcCommand, evaluateLanding, offCommand } from '../../../packages/core/src/control/controller.ts';
 import { DEFAULT_REMOTE, type RemoteProfile, withQuiet } from '../../../packages/core/src/control/remote.ts';
 import { toSwitchBotCommand } from '../../../packages/core/src/switchbot/ac.ts';
 import type { AcCommand, AcState } from '../../../packages/core/src/types.ts';
 import { requireCron } from '../_shared/auth.ts';
 import { knownDeviceId } from '../_shared/devices.ts';
-import { envFlagSafe } from '../_shared/env.ts';
+import { envFlagSafe, optEnv } from '../_shared/env.ts';
 import { background, json, readJson, serve } from '../_shared/http.ts';
 import { ensureNight, loadCurve, loadRoom } from '../_shared/load.ts';
 import { type AcCommandRow, commandToRow, eventToRow, rowSleepOnset, rowToCommand } from '../_shared/rows.ts';
 import { expectedSleepOnset } from '../../../packages/core/src/curve.ts';
-import { co2Rising, isAway, loadLatestPresence, needsPresenceGate, presenceGate, recordGate, START_UNTIL_MIN } from '../_shared/presence.ts';
+import {
+  awayPeriodFor,
+  co2Rising,
+  loadAwayPeriods,
+  loadHouseholdSettings,
+  loadPresence,
+  needsPresenceGate,
+  nightAway,
+  presenceGate,
+  recordGate,
+  START_UNTIL_MIN,
+} from '../_shared/presence.ts';
 import { precoolNotice, pushToAll } from '../_shared/push.ts';
 import { must, serviceClient } from '../_shared/supabase.ts';
 import { errorStatus, switchBotSession } from '../_shared/switchbot.ts';
-import { iso, MIN, nightDateFor } from '../_shared/time.ts';
+import { addDays, iso, MIN, nightDateFor } from '../_shared/time.ts';
 
 interface AcStateRow {
   device_id: string;
@@ -48,10 +66,18 @@ serve(async (req) => {
   // AC_DEVICE_ID / METER_DEVICE_ID when set, else the devices discovered by poll-meter (devices table).
   const [acId, meterId] = await Promise.all([knownDeviceId(db, 'ac'), knownDeviceId(db, 'meter')]);
   if (!acId || !meterId) return json({ skipped: `not discovered yet: ${!acId ? 'aircon remote' : 'meter'}` });
-  // Fail safe: only an explicit DRY_RUN=false|0|no|off sends IR commands; unset or anything else is a dry run.
-  // A request can force a dry run ({"dryRun":true}) but never force a live one.
-  const dryRun = envFlagSafe('DRY_RUN') || body.dryRun === true;
-  const now = typeof body.now === 'number' ? body.now : Date.now();
+  // A simulated moment ({"at": …}; "now" is the older name) is always a dry run that writes nothing.
+  const at = simulatedAt(body.at ?? body.now);
+  if (at === undefined) return json({ ok: false, error: 'at: expected epoch ms or an ISO time' }, 400);
+  const simulate = at !== null;
+  const now = at ?? Date.now();
+  // Live only when the household switched it on in the app AND neither the DRY_RUN secret nor the request forces a
+  // dry run. Fail safe: a settings read error counts as dry.
+  const settings = await loadHouseholdSettings(db);
+  const envDry = !!optEnv('DRY_RUN') && envFlagSafe('DRY_RUN');
+  const dryReason = simulate ? 'simulated at' : body.dryRun === true ? 'request' : envDry ? 'DRY_RUN secret' : !settings.acLive ? `ac_live off${settings.error ? ` (${settings.error})` : ''}` : null;
+  const dryRun = dryReason !== null;
+  const mode = { dryRun, ...(dryReason ? { dryReason } : {}), ...(simulate ? { simulatedAt: iso(now) } : {}) };
 
   const night = await ensureNight(db, nightDateFor(now));
   const lightsOut = Date.parse(night.lights_out);
@@ -61,7 +87,9 @@ serve(async (req) => {
   const curve = await loadCurve(db, night.curve_id);
   const onFrom = lightsOut + Math.min(0, curve.phases[0]?.startMin ?? 0) * MIN;
   // Controller window: precool → an hour past the scheduled OFF (wake + 30), room for one OFF resend.
-  const away = isAway(night.presence_override, night.tags);
+  const period = awayPeriodFor(await loadAwayPeriods(db, addDays(night.date, -1)), night.date);
+  const awayWhy = nightAway(night.presence_override, night.tags, period);
+  const away = awayWhy !== null;
   const enabled = night.ac_enabled && !away;
   const inWindow = enabled && now >= onFrom && now <= wake + 90 * MIN;
 
@@ -82,23 +110,23 @@ serve(async (req) => {
 
   if (!inWindow) {
     // Outside the window (or the night is disabled) the only job is: an AC we believe is ON gets switched off.
-    if (away && night.ac_enabled && now >= onFrom && now <= lightsOut + START_UNTIL_MIN * MIN) {
-      await recordGate(db, night, { status: 'away', reason: 'away tonight (marked in the app)' }, now);
+    if (away && night.ac_enabled && now >= onFrom && now <= lightsOut + START_UNTIL_MIN * MIN && !simulate) {
+      await recordGate(db, night, { status: 'away', reason: awayWhy! }, now);
     }
     if (!lastCommand?.state.power) {
-      return json({ skipped: !night.ac_enabled ? 'ac disabled for this night' : away ? 'away tonight' : 'outside night window', night: night.date, curve: curve.id, sleepOnset: iso(sleepOnset) });
+      return json({ skipped: !night.ac_enabled ? 'ac disabled for this night' : away ? awayWhy : 'outside night window', ...mode, night: night.date, curve: curve.id, sleepOnset: iso(sleepOnset) });
     }
-    if (now - lastCommand.ts < remote.minIntervalMin * MIN) return json({ skipped: 'ensure off: waiting for minInterval', night: night.date });
+    if (now - lastCommand.ts < remote.minIntervalMin * MIN) return json({ skipped: 'ensure off: waiting for minInterval', ...mode, night: night.date });
     const reason = !night.ac_enabled
       ? 'ensure off: AC disabled for this night'
       : away
-      ? 'ensure off: away tonight'
+      ? `ensure off: ${awayWhy}`
       : now > wake
         ? 'ensure off: still on after wake'
         : 'ensure off: still on outside the night window';
     const off = offCommand(now, remote, lastCommand.state, reason);
     if (!off) return json({ ok: false, error: 'remote profile has no OFF state' }, 500);
-    return await send(db, { acId, dryRun, cmd: off, nightDate: lastRow?.night_date ?? night.date, stateRow });
+    return await send(db, { acId, dryRun, simulate, dryReason, cmd: off, nightDate: lastRow?.night_date ?? night.date, stateRow });
   }
 
   // Tonight's commands (same dry/live split as the assumed state): the count feeds the nightly cap, the list lets
@@ -115,7 +143,7 @@ serve(async (req) => {
   const recent = await loadRoom(db, meterId, now - 90 * MIN, now + MIN);
 
   // Landing check of the previous command (40 min of data after it), stored even when nothing new is sent.
-  if (lastCommand && lastRow?.id && (lastCommand.landed === null || lastCommand.landed === undefined) && now - lastCommand.ts >= 40 * MIN) {
+  if (!simulate && lastCommand && lastRow?.id && (lastCommand.landed === null || lastCommand.landed === undefined) && now - lastCommand.ts >= 40 * MIN) {
     const landed = evaluateLanding(lastCommand, recent.filter((r) => r.ts >= lastCommand.ts));
     if (landed !== null) {
       lastCommand.landed = landed;
@@ -139,30 +167,34 @@ serve(async (req) => {
   };
   const cmd = decideAcCommand(input);
   // decideAcCommand may set landed on the previous command itself.
-  if (lastCommand && lastRow?.id && landedBefore == null && typeof lastCommand.landed === 'boolean') {
+  if (!simulate && lastCommand && lastRow?.id && landedBefore == null && typeof lastCommand.landed === 'boolean') {
     await markLanded(db, lastRow.id, lastCommand.landed, night.date, lastCommand);
   }
   // Presence gate: only the command that turns the AC on for the night (pre-cool, or a late start) is gated.
   if (needsPresenceGate(cmd, tonight)) {
+    const presence = await loadPresence(db);
     const gate = presenceGate({
       now,
       precoolStart: onFrom,
       lightsOut,
       override: night.presence_override ?? null,
       tags: night.tags ?? [],
-      latest: await loadLatestPresence(db),
+      latest: presence.latest,
+      people: presence.people,
       co2Rising: co2Rising(recent, now),
+      defaultPresence: settings.defaultPresence,
+      awayPeriod: period,
     });
-    await recordGate(db, night, gate, now);
+    if (!simulate) await recordGate(db, night, gate, now);
     if (!gate.allow) {
       // An AC still assumed ON (e.g. last morning's OFF failed) is switched off rather than left running for nobody.
       if (lastCommand?.state.power && now - lastCommand.ts >= remote.minIntervalMin * MIN) {
         const off = offCommand(now, remote, lastCommand.state, `ensure off: pre-cool gate closed (${gate.reason})`);
-        if (off) return await send(db, { acId, dryRun, cmd: off, nightDate: night.date, stateRow, commandsTonight });
+        if (off) return await send(db, { acId, dryRun, simulate, dryReason, cmd: off, nightDate: night.date, stateRow, commandsTonight });
       }
-      return json({ skipped: `precool: ${gate.reason}`, precool: gate.status, dryRun, night: night.date, curve: curve.id, sleepOnset: iso(sleepOnset) });
+      return json({ skipped: `precool: ${gate.reason}`, precool: gate.status, ...mode, night: night.date, curve: curve.id, sleepOnset: iso(sleepOnset) });
     }
-    const res = await send(db, { acId, dryRun, cmd: cmd!, nightDate: night.date, stateRow, commandsTonight });
+    const res = await send(db, { acId, dryRun, simulate, dryReason, cmd: cmd!, nightDate: night.date, stateRow, commandsTonight, precool: gate });
     // Tell the household when a presence signal (not "Home tonight") started a real pre-cool, once per night.
     if (gate.status === 'started' && !dryRun && res.ok && night.precool_status !== 'started') {
       const p = background(pushToAll(db, precoolNotice(night.date, gate.reason), 'precool').then((r) => console.log('precool push', JSON.stringify(r))));
@@ -170,9 +202,16 @@ serve(async (req) => {
     }
     return res;
   }
-  if (!cmd) return json({ ok: true, dryRun, quiet: remote.quiet?.enabled !== false, night: night.date, curve: curve.id, sleepOnset: iso(sleepOnset), command: null, commandsTonight, lastLanded: lastCommand?.landed ?? null });
-  return await send(db, { acId, dryRun, cmd, nightDate: night.date, stateRow, commandsTonight });
+  if (!cmd) return json({ ok: true, ...mode, quiet: remote.quiet?.enabled !== false, night: night.date, curve: curve.id, sleepOnset: iso(sleepOnset), command: null, commandsTonight, lastLanded: lastCommand?.landed ?? null });
+  return await send(db, { acId, dryRun, simulate, dryReason, cmd, nightDate: night.date, stateRow, commandsTonight });
 });
+
+/** `at` / `now` of the request: null when absent, the epoch ms of a number or ISO string, undefined when unparsable. */
+function simulatedAt(v: unknown): number | null | undefined {
+  if (v === undefined || v === null) return null;
+  const t = typeof v === 'number' ? v : typeof v === 'string' ? Date.parse(v) : NaN;
+  return Number.isFinite(t) ? t : undefined;
+}
 
 async function assumedLastRow(db: Db, acId: string, dryRun: boolean, stateRow: AcStateRow | null): Promise<AcCommandRow | null> {
   if (dryRun) {
@@ -187,9 +226,24 @@ async function assumedLastRow(db: Db, acId: string, dryRun: boolean, stateRow: A
 
 async function send(
   db: Db,
-  o: { acId: string; dryRun: boolean; cmd: AcCommand; nightDate: string; stateRow: AcStateRow | null; commandsTonight?: number },
+  o: {
+    acId: string;
+    dryRun: boolean;
+    /** Simulated moment: nothing is sent or stored, the decision is only returned. */
+    simulate?: boolean;
+    dryReason?: string | null;
+    cmd: AcCommand;
+    nightDate: string;
+    stateRow: AcStateRow | null;
+    commandsTonight?: number;
+    precool?: { status: string; reason: string };
+  },
 ): Promise<Response> {
   const { acId, dryRun, cmd } = o;
+  const extra = { ...(o.dryReason ? { dryReason: o.dryReason } : {}), ...(o.precool ? { precool: o.precool.status, precoolReason: o.precool.reason } : {}) };
+  if (o.simulate) {
+    return json({ ok: true, dryRun: true, simulated: true, ...extra, simulatedAt: iso(cmd.ts), night: o.nightDate, command: cmd, ...(o.commandsTonight !== undefined ? { commandsTonight: o.commandsTonight + 1 } : {}) });
+  }
   let sentOk: boolean | null = null;
   let error: string | null = null;
   if (!dryRun) {
@@ -222,7 +276,7 @@ async function send(
     if (up.error) console.error('ac_state', up.error.message);
   }
   return json(
-    { ok: sentOk !== false, dryRun, night: o.nightDate, command: cmd, ...(o.commandsTonight !== undefined ? { commandsTonight: o.commandsTonight + 1 } : {}), error },
+    { ok: sentOk !== false, dryRun, ...extra, night: o.nightDate, command: cmd, ...(o.commandsTonight !== undefined ? { commandsTonight: o.commandsTonight + 1 } : {}), error },
     sentOk === false ? 502 : 200,
   );
 }

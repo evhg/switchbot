@@ -102,9 +102,9 @@ describe('roomNightMetrics', () => {
     expect(m.minutesTempOver24).toBe(0);
     expect(m.minutesRhInBand).toBe(300);
     expect(m.minutesRhOver60).toBe(180);
-    // The default curve holds 19 °C for the first 4 h (one-beep curve).
-    expect(m.tempEarlyMean).toBeLessThan(19.5);
-    expect(m.tempEarlyMean).toBeGreaterThanOrEqual(18.9);
+    // The default curve holds 18.5 °C all night (steady-18-5-v1).
+    expect(m.tempEarlyMean).toBeLessThan(19);
+    expect(m.tempEarlyMean).toBeGreaterThanOrEqual(18.4);
   });
 
   it('fits the morning decay ACH', () => {
@@ -121,6 +121,16 @@ describe('roomNightMetrics', () => {
     expect(roomNightMetrics(hot, DEFAULT_CURVE).sleepAirScore).toBeLessThan(m.sleepAirScore);
     expect(m.sleepAirScore).toBeGreaterThan(0);
     expect(m.sleepAirScore).toBeLessThan(100);
+  });
+
+  it('ignores impossible CO₂ (the 0 ppm warm-up artifact) but keeps that minute’s temperature', () => {
+    const n = night();
+    const glitched = n.room.map((r, i) => (i < 10 ? { ...r, co2: 0 } : r));
+    const g = roomNightMetrics({ ...n, room: glitched }, DEFAULT_CURVE);
+    expect(g.co2Max).toBe(1600);
+    expect(g.co2Mean).toBeGreaterThanOrEqual(m.co2Mean);
+    expect(g.co2Mean).toBeLessThan(m.co2Mean + 10);
+    expect(g.minutesTempInTarget).toBe(m.minutesTempInTarget);
   });
 
   it('weights sum to 1', () => {

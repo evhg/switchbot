@@ -20,16 +20,19 @@ function fakeDb(rows: SleepRow[]): Db {
   return { from: () => q } as unknown as Db;
 }
 
-Deno.test('tonight (22:00 → 08:30, no stored onset): sleep onset 23:00, warming step 03:30, OFF 09:00', () => {
-  const { lightsOut, wake } = defaultSchedule('2026-10-30', '22:00', '08:30');
+Deno.test('tonight (22:00 → 08:30, no stored onset, steady 18.5 curve): ON 21:30, nothing while asleep, OFF 09:00', () => {
+  const { lightsOut, wake } = defaultSchedule('2026-10-31', '22:00', '08:30');
   const onset = expectedSleepOnset(lightsOut, rowSleepOnset({ sleep_onset: null }));
   eq(hm(onset), '23:00');
-  const plan = planAcSchedule({ curve: DEFAULT_CURVE, lightsOut, wake, remote: DEFAULT_REMOTE, sleepOnset: onset });
-  eq(plan.commands.map((c) => [hm(c.ts), c.state.power ? c.state.setpointC : 'off', c.asleep]), [
-    ['21:30', 18, false],
-    ['03:30', 20, true],
-    ['09:00', 'off', false],
+  // ac_state.bias_c = −2 (migration 0012: set 17 held the bed at 18.5–19.9 °C on the first night) → set 17.
+  const plan = planAcSchedule({ curve: DEFAULT_CURVE, lightsOut, wake, remote: DEFAULT_REMOTE, sleepOnset: onset, biasC: -2 });
+  eq(plan.commands.map((c) => [hm(c.ts), c.state.power ? c.state.setpointC : 'off', c.state.fan, c.asleep]), [
+    ['21:30', 17, 'auto', false],
+    ['09:00', 'off', 'auto', false],
   ]);
+  eq(plan.asleepCount, 0);
+  // The untuned default bias −1 would set 18.
+  eq(planAcSchedule({ curve: DEFAULT_CURVE, lightsOut, wake, remote: DEFAULT_REMOTE }).commands[0]!.state.setpointC, 18);
 });
 
 Deno.test('onsetOnNight puts a minute of day on the right side of midnight', () => {

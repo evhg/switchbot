@@ -7,15 +7,18 @@ Pure TypeScript with no runtime dependencies. It runs unchanged in Node 22, Deno
 - Use only Web-standard APIs: `fetch`, `crypto.subtle`, `crypto.randomUUID`, `TextEncoder`. No Node built-ins.
 - Data types live in `src/types.ts`. Curve helpers (`DEFAULT_CURVE`, `ONE_BEEP_V1`, `CURVE_V1`, `phaseAt`, `targetAt`, `resolveCurve`) live in `src/curve.ts`. Both are fixed: don't change them without updating every consumer.
 
-**Default curve: "one beep per night, from sleep onset" (`one-beep-v2`, since 2026-10-30)**
+**Default curve: "steady 18.5" (`steady-18-5-v1`, since 2026-10-30 evening)**
 ```ts
-export const DEFAULT_CURVE: TemperatureCurve   // id 'one-beep-v2', every phase fan 'auto':
-//   precool −30 min 19 °C · onset 0 19 (both from LIGHTS-OUT) · deep +30 19 · middle +270 (4 h 30) 21 = THE warming step ·
-//   late +360 21 · wake +570 21 (these four from SLEEP ONSET, anchor 'sleepOnset')
-//   Quiet mode plan (bias −1), 22:00 lights-out, onset 23:00, wake 08:30: ON 18 at 21:30 · nothing at 22:00 or 23:00 ·
-//   set 20 at 03:30 (onset + 4 h 30, the ONE command while asleep) · OFF at 09:00 (wake + 30). Reasoning in curve.ts.
+export const DEFAULT_CURVE: TemperatureCurve   // id 'steady-18-5-v1', minC 16, maxC 24, every phase fan 'auto', from lights-out:
+//   precool −30 18.5 · onset 0 18.5 · deep +30 18.5 · middle +270 18.5 · late +360 18.5 · wake +630 18.5
+//   No warming: the room must not warm while either sleeper may still be in deep sleep (stages are not live overnight).
+//   Quiet mode plan, 22:00 lights-out, wake 08:30: ON at 21:30 (set 18 with bias −1, set 17 with the live bias −2) ·
+//   NOTHING at 22:00, at sleep onset or while asleep (asleepCount 0) · OFF at 09:00 (wake + 30).
+export const ONE_BEEP_V2: TemperatureCurve     // 'one-beep-v2' (default 2026-10-30 morning): precool −30 19 · onset 0 19 (from
+//   LIGHTS-OUT) · deep +30 19 · middle +270 21 = THE warming step · late +360 21 · wake +570 21 (from SLEEP ONSET)
 export const ONE_BEEP_V1: TemperatureCurve     // 'one-beep-v1' (default 2026-10-29): same, every phase from lights-out (wake +510)
 export const CURVE_V1: TemperatureCurve        // 'default-v1': precool −90, ramp, 3 beeps while asleep
+export const BUILTIN_CURVES                    // [DEFAULT_CURVE, ONE_BEEP_V2, ONE_BEEP_V1, CURVE_V1]
 // CurvePhase.fan?: FanSpeed (optional): the phase's fan for setAll remotes; omitted = 'high' for precool, 'low' after.
 // fanFor(remote, phaseName, curve?) applies it (a ladder remote is always 'auto').
 // CurvePhase.anchor?: 'lightsOut' | 'sleepOnset' (optional, default 'lightsOut'): what startMin counts from.
@@ -29,8 +32,8 @@ export function resolveCurve(curve, lightsOut, sleepOnset?): TemperatureCurve   
 export function anchorCurve(resolved, template, offsetMin): TemperatureCurve    // inverse, for editors
 export function phaseAt(curve, lightsOut, ts, sleepOnset?) / targetAt(curve, lightsOut, ts, sleepOnset?)   // resolve first
 ```
-The backend inserts `one-beep-v2` as the default `curves` row (migration 0011); nights stored with `one-beep-v1` or
-`default-v1` keep them. `nights.sleep_onset` (0011) is the night's expected onset (null = lights-out + 60).
+The backend inserts `steady-18-5-v1` as the default `curves` row (migration 0012); nights stored with `one-beep-v2`,
+`one-beep-v1` or `default-v1` keep them. `nights.sleep_onset` (0011) is the night's expected onset (null = lights-out + 60).
 - Every module is re-exported from `src/index.ts`.
 - Tests go in `packages/core/test/*.test.ts` and run with vitest.
 
@@ -71,6 +74,7 @@ export interface QuietConfig {                     // every field optional; omit
   emergencyThresholdC?: number;                    // default 1.5 °C (bed-height room vs the target quiet mode holds)
   emergencyMinMinutes?: number;                    // default 20
   maxEmergencyPerNight?: number;                   // default 1
+  emergencyWarm?: boolean;                         // default false (2026-10-30): an emergency never WARMS the room while asleep
   maxExtraPerNight?: number;                       // default 1: emergencies + resends while asleep, one shared budget
   rampStrategy?: 'third' | 'midpoint' | 'end';     // default 'third' (see below)
 }
@@ -108,7 +112,9 @@ export function decideAcCommand(input: ControllerInput): AcCommand | null
 // (recoverBias: set 20 for 20.5 °C is bias −1, never the −0.5 rounding residue). Respect minInterval and the nightly
 // cap. Never send a duplicate state. Mark the prior command landed=false if the room didn't move toward the target
 // within ~30 min of a change, and resend it once. Power on from precool
-// until wake+30 min, then OFF.
+// until wake+30 min, then OFF. A pre-cool that stalls (room > target + 2.5 °C and not cooling) is resent at most once
+// and only before lights-out (never a resend of a resend). Quiet mode's emergency only considers readings after
+// lights-out + settleMin (its whole window lies in the asleep period, so the evening pull-down never triggers it).
 // Quiet mode (default) from lights-out + settleMin until the OFF at wake + 30 min — the receiver beeps on every frame:
 //  - only the planned steps from quietSteps(): each non-ramped phase start (deep, late, wake) and ONE step per ramped
 //    phase; a step whose rounded setpoint (or ladder button) would not change under the bias in use is skipped; a step
@@ -125,8 +131,10 @@ export function decideAcCommand(input: ControllerInput): AcCommand | null
 //  - emergency: at most maxEmergencyPerNight, when every reading of the last emergencyMinMinutes is ≥ threshold off the
 //    target quiet mode holds (the staircase, not the ramp), the room is not converging, the last command is ≥ 45 min
 //    old and no planned step in the same direction is due within 30 min. setpoint ± round(deviation), max 2.
+//    Only a too-WARM room is corrected (setpoint down) unless quiet.emergencyWarm: a too-cold room is never warmed asleep.
 //  - resend: only of a planned "curve: …" command that is not a fan-only change.
-//  → at most asleepCount + maxExtraPerNight commands (beeps) while asleep: 1 + 1 for the default curve (3 + 1 for CURVE_V1).
+//  → at most asleepCount + maxExtraPerNight commands (beeps) while asleep: 0 + 1 for the default steady curve (1 + 1 for
+//    one-beep-v1/v2, 3 + 1 for CURVE_V1).
 //  - always: minInterval, the nightly cap (last slot kept for OFF), setpoint within ceil(minC)..floor(maxC) and 16..30.
 //  Reasons: "curve: <phase> start (quiet) …", "curve: <phase> ramp (one step) (quiet) …", "emergency: …", "resend: …".
 
@@ -142,11 +150,14 @@ export function planAcSchedule(input: { curve; lightsOut: Ms; wake: Ms; remote: 
 // Pure: the schedule the controller plans (constant bias: biasC rounded, default −1; no misses or emergencies; each
 // command at least minInterval after the previous one; same step rules as above). The controller's planned steps while
 // asleep match it in number; their setpoints may differ by 1 °C once the bias is measured (more after an emergency).
-// Default (one-beep-v2) curve, quiet ON: precool 18 at −30 · (onset, deep skipped: same setpoint and fan) · middle 20 at
-// sleep onset + 270 · (late, wake skipped) · OFF at wake + 30 → 1 while asleep (one-beep-v1: middle at lights-out + 270;
-// 3 + 1 extra for CURVE_V1: precool 20 · onset 19 · deep 18 · middle ramp step 20 at +280 · late 21 · OFF).
-// test/integration.test.ts checks plan vs. controller per command on simulated nights, whose expected onset varies
-// (lights-out + 30 / 60 / 90 min, NightPlan.expectedOnset → Night.sleepOnset), and that the warming step is at onset + 270.
+// Default (steady-18-5-v1) curve, quiet ON: precool at −30 (set 18 with bias −1, 17 with −2) · every later phase skipped
+// (same setpoint and fan) · OFF at wake + 30 → 0 while asleep, whatever the sleep onset. one-beep-v2: precool 18 · middle 20
+// at sleep onset + 270 · OFF → 1 while asleep (one-beep-v1: middle at lights-out + 270; 3 + 1 extra for CURVE_V1:
+// precool 20 · onset 19 · deep 18 · middle ramp step 20 at +280 · late 21 · OFF).
+// test/integration.test.ts checks plan vs. controller per command on simulated nights (expected onset lights-out + 30 /
+// 60 / 90 min): the steady curve plans nothing while asleep, the controller sends no planned step while asleep, at most
+// one safety net (a resend, or an emergency that cools), and every emergency lowers the setpoint.
+// test/control.test.ts: ideal nights (bed = setpoint + 1 / 2 / 1.5) send exactly the plan; one-beep-v2 keeps its own block.
 ```
 
 ## metrics/: analysis (owner: metrics agent)
@@ -188,8 +199,10 @@ export class SwitchBotClient { /* listDevices, getStatus, sendCommand, setAll, c
 export class SwitchBotError extends Error { status?: number; statusCode?: number }
 export function acStateToSetAllParam(state: AcState): string   // "19,2,1,on"
 export function toSwitchBotCommand(cmd: AcCommand): { commandType: 'command' | 'customize'; command: string; parameter: string }
-export function parseMeterStatus(body: unknown, receivedAt: Ms): RoomReading | null
-export function parseWebhookEvent(body: unknown, receivedAt: Ms): { deviceMac: string; deviceType: string; reading: RoomReading | null } | null
+// CO2 < CO2_PLAUSIBLE_MIN (300 ppm, e.g. the 0 ppm warm-up artifact) gives no reading unless opts.co2Fallback (the
+// previous valid CO2) is passed; then temp/RH are kept with that CO2. plausibleCo2(ppm) is the shared check.
+export function parseMeterStatus(body: unknown, receivedAt: Ms, opts?: { co2Fallback?: number | null }): RoomReading | null
+export function parseWebhookEvent(body: unknown, receivedAt: Ms, opts?: { co2Fallback?: number | null }): { deviceMac: string; deviceType: string; reading: RoomReading | null } | null
 // health/ (Google Health API v4)
 export class GoogleHealthClient { /* listDataPoints(type, filter, pageToken), paginate; identity; pairedDevices */ }
 export function googleAuthUrl(...): string; export async function exchangeCode(...); export async function refreshAccessToken(...)

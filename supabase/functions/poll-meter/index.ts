@@ -1,10 +1,16 @@
 // Minute poll of the Meter Pro CO2 (backstop for the change-based webhook). Called by pg_cron.
+// A webhook row for the same minute wins: the poll only inserts (ON CONFLICT DO NOTHING), so source stays 'webhook'.
+// A 0 ppm warm-up artifact keeps temp/RH with the last valid CO2 (≤ 30 min old), else the minute is skipped.
+// A frozen cloud value (hub unplugged / meter offline: GET /status keeps returning the last cached value) is not stored
+// once it has repeated for 15 min with no webhook row (_shared/readings.ts isFrozen): the gap makes the controller's
+// coverage checks return null instead of acting on stale data, and the app shows the readings as stale.
 import { SwitchBotError } from '../../../packages/core/src/switchbot/client.ts';
 import { parseMeterStatus } from '../../../packages/core/src/switchbot/parse.ts';
 import { requireCron } from '../_shared/auth.ts';
 import { discoverDevices, knownDeviceId } from '../_shared/devices.ts';
 import { envNumber } from '../_shared/env.ts';
 import { json, serve } from '../_shared/http.ts';
+import { frozenPoll, recentCo2 } from '../_shared/readings.ts';
 import { readingToRow } from '../_shared/rows.ts';
 import { serviceClient } from '../_shared/supabase.ts';
 import { errorStatus, switchBotSession } from '../_shared/switchbot.ts';
@@ -43,15 +49,29 @@ serve(async (req) => {
       deviceId = found.meter;
     }
     const body = await sb.client.getStatus(deviceId);
-    const reading = parseMeterStatus(body, now);
+    let reading = parseMeterStatus(body, now);
+    if (!reading && parseMeterStatus(body, now, { co2Fallback: 420 })) {
+      // Only the CO2 is implausible (warm-up artifact).
+      const fb = await recentCo2(db, deviceId, now);
+      reading = fb === null ? null : parseMeterStatus(body, now, { co2Fallback: fb });
+      if (!reading) {
+        await sb.finish('skipped:co2-artifact', JSON.stringify(body).slice(0, 300));
+        return json({ skipped: 'co2 artifact', body });
+      }
+    }
     if (!reading) {
       await sb.finish('error:parse', JSON.stringify(body).slice(0, 300));
       return json({ ok: false, error: 'unparseable status' }, 502);
     }
     reading.ts = floorMinute(reading.ts);
+    if (await frozenPoll(db, deviceId, reading, now)) {
+      await sb.finish('skipped:stale', `unchanged ${reading.tempC}°C ${reading.rh}% ${reading.co2} ppm for 15+ min, no webhook: meter/hub offline?`);
+      return json({ skipped: 'stale', reading });
+    }
     const [dev, up] = await Promise.all([
       db.from('devices').upsert({ device_id: deviceId, kind: 'meter', name: 'Meter Pro CO2' }, { onConflict: 'device_id', ignoreDuplicates: true }),
-      db.from('readings').upsert(readingToRow(deviceId, reading), { onConflict: 'device_id,ts' }),
+      // Never overwrite a webhook (or earlier poll) row for this minute.
+      db.from('readings').upsert(readingToRow(deviceId, reading), { onConflict: 'device_id,ts', ignoreDuplicates: true }),
     ]);
     if (dev.error) console.error('devices', dev.error.message);
     if (up.error) throw new Error(`readings: ${up.error.message}`);

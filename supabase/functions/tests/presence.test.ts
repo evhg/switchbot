@@ -1,4 +1,4 @@
-import { co2Rising, isAway, needsPresenceGate, PRESENCE_TOKEN, presenceGate, presenceState, presenceToken, since, START_UNTIL_MIN } from '../_shared/presence.ts';
+import { ASLEEP_START_MIN, awayPeriodFor, co2Rising, everyoneAway, isAway, needsPresenceGate, nightAway, PRESENCE_TOKEN, presenceGate, presenceState, presenceToken, since, START_UNTIL_MIN } from '../_shared/presence.ts';
 import { precoolNotice } from '../_shared/push.ts';
 
 function assert(cond: unknown, msg: string): asserts cond {
@@ -112,4 +112,52 @@ Deno.test('co2Rising: +120 ppm over the last hour and at least 550 ppm', () => {
 Deno.test('pre-cool push opens Tonight\'s plan', () => {
   const n = precoolNotice('2026-10-30', 'Erik home since 18:42', 'https://app.example');
   assert(n.navigate === 'https://app.example/settings/plan' && n.tag === 'precool-2026-10-30' && n.body.includes('Away tonight'), JSON.stringify(n));
+});
+
+Deno.test('default presence home: no data pre-cools; only everyone away within 12 h stops it', () => {
+  const home = { ...base, defaultPresence: 'home' as const, people: ['a', 'b'] };
+  const g = presenceGate(home);
+  assert(g.allow && g.status === 'override' && g.reason === 'home by default (household setting)', JSON.stringify(g));
+  // One person away, the other without a signal: still home.
+  assert(presenceGate({ ...home, latest: [you('away', '20:00')] }).allow, 'one away');
+  // Both away within 12 h: nobody home, waits (and starts if someone arrives).
+  const w = presenceGate({ ...home, latest: [you('away', '18:00'), erik('away', '19:30')] });
+  assert(!w.allow && w.status === 'waiting' && w.reason.startsWith('nobody home (You away since 18:00, Erik away since 19:30'), JSON.stringify(w));
+  // Both away, but one signal older than 12 h (a missed "arrive"): home by default.
+  const old = { personId: 'a', name: 'You', state: 'away' as const, at: PRE - 13 * 60 * MIN };
+  assert(presenceGate({ ...home, latest: [old, erik('away', '19:30')] }).allow, 'stale away');
+  assert(everyoneAway([you('away', '18:00'), erik('away', '19:30')], ['a', 'b'], PRE) && !everyoneAway([], ['a', 'b'], PRE), 'everyoneAway');
+  // A fresh home signal still reads as started (with the push), the overrides still win.
+  assert(presenceGate({ ...home, latest: [erik('home', '18:42')] }).status === 'started', 'fresh home');
+  assert(presenceGate({ ...home, override: 'away' }).status === 'away', 'away tonight');
+  // Never outside pre-cool start … lights-out + 3 h.
+  assert(!presenceGate({ ...home, now: PRE - MIN }).allow, 'before precool');
+  assert(presenceGate({ ...home, now: LO + (START_UNTIL_MIN + 5) * MIN }).status === 'skipped', 'too late');
+});
+
+Deno.test('away periods: evening dates, inclusive; "Home tonight" wins for one night', () => {
+  const bkk = { id: 1, from: '2026-11-05', to: '2026-11-06', note: 'Bangkok' };
+  // Night keys are wake dates: the evening of 5 Nov is the night ending 6 Nov.
+  assert(awayPeriodFor([bkk], '2026-11-05') === null, 'evening of 4 Nov: home');
+  assert(awayPeriodFor([bkk], '2026-11-06') === bkk && awayPeriodFor([bkk], '2026-11-07') === bkk, 'evenings 5 and 6 Nov: away');
+  assert(awayPeriodFor([bkk], '2026-11-08') === null, 'evening of 7 Nov: home again');
+  const g = presenceGate({ ...base, defaultPresence: 'home', awayPeriod: bkk, latest: [you('home', '18:00')] });
+  assert(!g.allow && g.status === 'away' && g.reason === 'away: Bangkok, evenings 5 Nov–6 Nov', JSON.stringify(g));
+  assert(presenceGate({ ...base, defaultPresence: 'home', awayPeriod: bkk, override: 'home' }).allow, 'home tonight wins');
+  assert(nightAway(null, [], bkk) !== null && nightAway('home', [], bkk) === null && nightAway('away', [], null) !== null && nightAway(null, [], null) === null, 'nightAway');
+});
+
+Deno.test('past lights-out + 15 min only a late arrival starts the AC (a failed 21:30 start never beeps while asleep)', () => {
+  const home = { ...base, defaultPresence: 'home' as const, people: ['a', 'b'] };
+  const at = (m: number) => LO + m * MIN;
+  assert(presenceGate({ ...home, now: at(ASLEEP_START_MIN) }).allow, 'default: still at lights-out + 15');
+  const d = presenceGate({ ...home, now: at(ASLEEP_START_MIN + 5) });
+  assert(!d.allow && d.status === 'skipped' && d.reason.includes('no beep while asleep'), JSON.stringify(d));
+  assert(!presenceGate({ ...base, override: 'home', now: at(60) }).allow, 'Home tonight: not after settle');
+  // A home signal from before the pre-cool start (they were home all evening) does not start it late either.
+  assert(!presenceGate({ ...home, now: at(60), latest: [erik('home', '18:42')] }).allow, 'early signal');
+  // Someone arriving at 23:30 does.
+  const a = presenceGate({ ...home, now: at(95), latest: [erik('home', '18:42'), you('home', '23:30')] });
+  assert(a.allow && a.status === 'started' && a.reason === 'You home since 23:30', JSON.stringify(a));
+  assert(presenceGate({ ...base, override: 'home', now: at(95), latest: [you('home', '23:30')] }).allow, 'Home tonight + arrival');
 });

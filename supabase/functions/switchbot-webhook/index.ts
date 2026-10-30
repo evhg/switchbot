@@ -2,12 +2,14 @@
 // https://<ref>.supabase.co/functions/v1/switchbot-webhook/<secret>. SwitchBot doesn't sign deliveries, so the
 // secret path segment is the authentication. It matches either the WEBHOOK_SECRET function secret (optional) or
 // the Vault secret `switchbot_webhook_secret` (migration 0008, checked through a service_role-only RPC).
-// Replies 200 at once and writes in the background.
+// Replies 200 at once and writes in the background. A webhook reading replaces a poll row for the same minute
+// (poll-meter never overwrites a webhook row). A 0 ppm warm-up artifact keeps temp/RH with the last valid CO2.
 import { timingSafeEqual } from '../../../packages/core/src/health/signature.ts';
 import { normalizeMac, parseWebhookEvent } from '../../../packages/core/src/switchbot/parse.ts';
 import { urlSecretMatches } from '../_shared/auth.ts';
 import { optEnv } from '../_shared/env.ts';
 import { background, json, serve } from '../_shared/http.ts';
+import { recentCo2 } from '../_shared/readings.ts';
 import { readingToRow } from '../_shared/rows.ts';
 import { type Db, serviceClient } from '../_shared/supabase.ts';
 import { floorMinute } from '../_shared/time.ts';
@@ -51,7 +53,12 @@ serve(async (req) => {
 
 async function store(body: unknown, receivedAt: number) {
   const db = serviceClient();
-  const ev = parseWebhookEvent(body, receivedAt);
+  let ev = parseWebhookEvent(body, receivedAt);
+  if (ev && !ev.reading && parseWebhookEvent(body, receivedAt, { co2Fallback: 420 })?.reading) {
+    // Only the CO2 is implausible (warm-up artifact): reuse the last valid value, or skip the reading.
+    const fb = await recentCo2(db, normalizeMac(ev.deviceMac), receivedAt);
+    if (fb !== null) ev = parseWebhookEvent(body, receivedAt, { co2Fallback: fb });
+  }
   const ctx = (body as { eventType?: unknown; context?: { deviceMac?: unknown } } | null) ?? {};
   const raw = await db.from('raw_switchbot').insert({
     received_at: new Date(receivedAt).toISOString(),

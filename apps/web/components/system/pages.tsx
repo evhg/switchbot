@@ -11,8 +11,9 @@ import { DEFAULT_PEOPLE, anchorCurve, resolveCurve } from '@sleep-lab/core';
 import { MAX_NAME_LENGTH, useData, useLive, type DataMode } from '@/lib/data/context.tsx';
 import { SIM_NIGHTS, SIM_SEED } from '@/lib/data/sim.ts';
 import { hasRealData, useAuth } from '@/lib/auth.tsx';
-import { functionsUrl, supabaseClient, supabaseConfigured, supabaseUserEmail } from '@/lib/data/supabase.ts';
+import { supabaseClient, supabaseConfigured, supabaseUserEmail } from '@/lib/data/supabase.ts';
 import { usePlannedCurve } from '@/lib/curve-store.ts';
+import { startGoogleConnect, useBandSync, useOAuthResult, useSyncNow } from '@/lib/bands.ts';
 import { onsetAfterLightsOut } from '@/lib/tonight.ts';
 import { dayLabel, fmt, hm, ictDate, MIN, shortDate } from '@/lib/format.ts';
 import { enablePush, pushSupported } from '@/lib/push.ts';
@@ -45,6 +46,7 @@ import {
   useQuietMode,
   useTonightTags,
 } from './model.ts';
+import { ago } from './bands.tsx';
 import { PresencePage, TonightBlock } from './presence.tsx';
 import s from './system.module.css';
 
@@ -72,7 +74,13 @@ export function PlanPage({ back = true }: { back?: boolean }) {
   const ph = curve.phases;
   const times = planTimes(curve, pc.lightsOut, pc.wake);
   const [quiet, setQuiet] = useQuietMode();
-  const plan = aircon(curve, pc.lightsOut, quiet, undefined, pc.wake, pc.sleepOnset);
+  // Set points with the backend's measured bias (ac_state.bias_c) when signed in.
+  const plan = aircon(curve, pc.lightsOut, quiet, pc.tonight.biasC, pc.wake, pc.sleepOnset);
+  const firstAsleep = plan.steps.find((st) => st.asleep);
+  const asleepNote =
+    plan.asleepCount === 0
+      ? 'The plan sends nothing while you sleep: the room holds its temperature until the aircon goes off.'
+      : `The first command while you sleep is at ${firstAsleep?.at ?? '…'}.`;
   // The editor shows the curve on tonight's clock: phases that count from sleep onset are placed at tonight's onset.
   const onsetOffset = onsetAfterLightsOut(pc.lightsOut, pc.sleepOnset);
   const shown = useMemo(() => resolveCurve(curve, 0, onsetOffset * MIN), [curve, onsetOffset]);
@@ -106,7 +114,7 @@ export function PlanPage({ back = true }: { back?: boolean }) {
     >
       <div className={s.planGrid}>
         <div className={s.planMain}>
-          <TonightBlock t={pc.tonight} />
+          <TonightBlock t={pc.tonight} asleepNote={asleepNote} />
           <div className={s.summary}>
             <Readouts n={3}>
               <Readout label="Starts" value={<span className="num">{clock(times.starts)}</span>} />
@@ -161,7 +169,7 @@ export function PlanPage({ back = true }: { back?: boolean }) {
             <p className="cap">
               The aircon’s receiver beeps on every command.{' '}
               {quiet
-                ? `Quiet mode changes the setting only at these planned steps while you sleep (a glide is one step), plus at most one extra command: a resend if a step doesn’t take, or a correction if the room stays 1.5° off for 20 min. A set point can end up 1° different once the room’s offset is measured.`
+                ? `Quiet mode changes the setting only at these planned steps while you sleep (a glide is one step), plus at most one extra command: a resend if a step doesn’t take, or a cooling correction if the room stays 1.5° too warm for 20 min. It never warms the room while you sleep. A set point can end up 1° different once the room’s offset is measured.`
                 : 'Preview only: the aircon stays in quiet mode, which is set on the server. Without it, the controller would also follow each glide degree by degree and correct whenever the room drifts, so more beeps.'}{' '}
               Half-degree targets are sent rounded. The switch only changes this preview.
             </p>
@@ -518,19 +526,8 @@ export function DataPage() {
 
 const HEALTH_READS = ['Sleep stages', 'Heart rate and resting heart rate', 'Heart-rate variability', 'Blood oxygen', 'Breathing rate', 'Skin temperature', 'Steps'];
 
-/**
- * Google consent starts at the google-oauth Edge Function. The browser navigates there (a redirect chain can't carry
- * an Authorization header), so the signed-in user's access token goes in the query; the function verifies it, looks
- * up that user's household person and binds the callback's refresh token to it. The token is short-lived (1 h).
- */
-export function googleConnectUrl(accessToken: string, email: string | null): string {
-  const q = new URLSearchParams({ access_token: accessToken });
-  if (email) q.set('login_hint', email);
-  return `${functionsUrl()}/google-oauth/start?${q.toString()}`;
-}
-
 /** people.google_health_user_id is set by the OAuth callback; members may read it. */
-function useHealthLinks(enabled: boolean): Record<string, boolean> | null {
+function useHealthLinks(enabled: boolean, nonce = 0): Record<string, boolean> | null {
   const [links, setLinks] = useState<Record<string, boolean> | null>(null);
   useEffect(() => {
     if (!enabled) return setLinks(null);
@@ -545,20 +542,47 @@ function useHealthLinks(enabled: boolean): Record<string, boolean> | null {
     return () => {
       alive = false;
     };
-  }, [enabled]);
+  }, [enabled, nonce]);
   return links;
 }
 
+/**
+ * Google consent starts at the google-oauth Edge Function: the app POSTs /google-oauth/start with the signed-in
+ * user's access token, the function binds a one-time state to that user's household person and returns Google's
+ * consent URL, and the browser goes there. The callback stores the refresh token and comes back to this page with
+ * ?google=connected (or google=error&reason=…).
+ */
 export function HealthPage() {
   const { dataset, latest } = useData();
   const auth = useAuth();
   const member = auth.status === 'signed-in' && Boolean(auth.probe?.member);
+  const writer = member && (auth.probe?.role === 'owner' || auth.probe?.role === 'member');
   const me = member ? auth.probe?.personId ?? null : null;
-  const links = useHealthLinks(member);
+  const [nonce, setNonce] = useState(0);
+  const links = useHealthLinks(member, nonce);
+  const { bands } = useBandSync(member, nonce);
   const shown = (dataset ?? latest)?.people;
   const people = shown?.length ? shown : DEFAULT_PEOPLE;
   const token = auth.session?.access_token ?? null;
-  const connected = me ? Boolean(links?.[me]) : false;
+  const connected = me ? Boolean(links?.[me] || bands?.[me]?.lastSyncOk) : false;
+  const result = useOAuthResult();
+  const [starting, setStarting] = useState(false);
+  const [startErr, setStartErr] = useState<string | null>(null);
+  const sync = useSyncNow(token);
+  const anyConnected = Boolean(links && Object.values(links).some(Boolean)) || Boolean(bands && Object.values(bands).some((b) => b.lastSyncOk));
+
+  const connect = async () => {
+    if (!token) return;
+    setStarting(true);
+    setStartErr(null);
+    const r = await startGoogleConnect(token);
+    if ('url' in r) {
+      window.location.assign(r.url);
+      return;
+    }
+    setStarting(false);
+    setStartErr(r.error);
+  };
 
   let action: ReactNode;
   let foot: ReactNode;
@@ -579,33 +603,55 @@ export function HealthPage() {
   } else if (!auth.settled) {
     action = <Skel w={180} />;
     foot = null;
-  } else if (!member || !me) {
+  } else if (!writer || !me) {
     action = (
       <Button variant="primary" disabled>
         Connect Google Health
       </Button>
     );
-    foot = !member ? 'This account isn’t in the household yet.' : 'This account isn’t linked to a person yet. Ask the owner to set person_id in household_members.';
+    foot = !member ? 'This account isn’t in the household yet.' : !writer ? 'This account is read-only.' : 'This account isn’t linked to a person yet. Ask the owner to set person_id in household_members.';
   } else {
     action = (
-      <a className="btn primary" href={token ? googleConnectUrl(token, auth.email) : undefined} aria-disabled={!token || undefined} rel="noopener">
-        {connected ? 'Reconnect Google Health' : 'Connect Google Health'}
-      </a>
+      <div className={s.actions}>
+        <Button variant={connected ? 'secondary' : 'primary'} disabled={!token || starting} onClick={connect}>
+          {starting ? 'Opening Google…' : connected ? 'Reconnect Google Health' : 'Connect Google Health'}
+        </Button>
+        {anyConnected && (
+          <Button disabled={!token || sync.busy} onClick={() => sync.run().then(() => setNonce((n) => n + 1))}>
+            {sync.busy ? 'Syncing…' : 'Sync now'}
+          </Button>
+        )}
+      </div>
     );
-    foot = `Read-only. Connects your band to ${people.find((p) => p.id === me)?.name ?? `person ${me}`}. The other person connects from their own phone.`;
+    foot = (
+      <>
+        {`Read-only. Connects your band to ${people.find((p) => p.id === me)?.name ?? `person ${me}`}. The other person connects from their own phone, signed in as themselves. Google shows an “unverified app” screen once: tap Advanced › Go to the app.`}{' '}
+        {(startErr || sync.msg) && <span className="sig">{startErr ?? sync.msg}</span>}
+      </>
+    );
   }
 
   return (
     <SubPage title="Google Health" lede="Sleep and overnight vitals from both Fitbit Air bands.">
-      <Group label="Bands">
+      {result && (
+        <p className={s.status}>
+          <Status tone={result.ok ? 'on' : 'alert'}>{result.text}</Status>
+        </p>
+      )}
+      <Group label="Bands" footer="Synced every hour and on Sync now. Sleep usually appears an hour or two after waking, once the phone app has synced the band.">
         {people.map((p) => {
           const linked = links ? links[p.id] : undefined;
+          const b = bands?.[p.id];
+          const on = Boolean(linked || b?.lastSyncOk);
+          const sub = b?.lastSyncAt
+            ? `Fitbit Air · checked ${ago(b.lastSyncAt)}${b.bandSeenAt ? ` · band synced ${ago(b.bandSeenAt)}` : ''}${b.lastSyncOk === false && b.lastError ? ` · ${b.lastError.slice(0, 120)}` : ''}`
+            : 'Fitbit Air';
           return (
             <Row
               key={p.id}
               title={p.id === me && p.name !== 'You' ? `${p.name} (you)` : p.name}
-              sub="Fitbit Air"
-              value={linked === undefined ? <Status>Not connected</Status> : linked ? <Status tone="on">Connected</Status> : <Status>Not connected</Status>}
+              sub={sub}
+              value={on ? <Status tone={b?.lastSyncOk === false ? 'alert' : 'on'}>{b?.lastSyncOk === false ? 'Sync errors' : 'Connected'}</Status> : <Status>Not connected</Status>}
             />
           );
         })}

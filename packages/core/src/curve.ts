@@ -8,7 +8,38 @@ export const DEFAULT_SLEEP_ONSET_MIN = 60;
 export const MAX_SLEEP_ONSET_MIN = 180;
 
 /**
- * "One beep per night", anchored to sleep onset (default since 2026-10-30). Same shape as one-beep-v1, but the sleep
+ * "Steady 18.5" (default since 2026-10-30, evening). The household prefers ~18.5 °C (Walker: ~18 °C) and does not want
+ * the room to warm while either of them may still be in deep sleep. The watches' sleep stages are not available live
+ * during the night, so the controller cannot know when deep sleep is over: the curve is flat instead of warming.
+ *   precool  −30 min from lights-out  18.5 °C   ON at 21:30 (fan auto), the only evening command
+ *   onset      0                      18.5 °C   same target and fan → no command at lights-out
+ *   deep     +30                      18.5 °C   same → no command
+ *   middle   +270                     18.5 °C   same → no warming step: NO command while asleep
+ *   late     +360                     18.5 °C   same → no command
+ *   wake     +630                     18.5 °C   (08:30 for a 22:00 lights-out) same → no command; OFF at wake + 30
+ * Every phase counts from lights-out (nothing to anchor to sleep onset: nothing changes during sleep).
+ * Setpoint = round(18.5 + bias): 17 with the bias −2 measured on the first real night (set 17 → bed 18.5–19.9 °C), 18
+ * with the untuned default −1. minC 16 leaves the emergency correction (cooling only while asleep, see QuietConfig)
+ * one degree below a 17 setpoint.
+ */
+export const DEFAULT_CURVE: TemperatureCurve = {
+  id: 'steady-18-5-v1',
+  name: 'Steady 18.5 °C (default)',
+  minC: 16,
+  maxC: 24,
+  phases: [
+    { name: 'precool', startMin: -30, targetC: 18.5, fan: 'auto' },
+    { name: 'onset', startMin: 0, targetC: 18.5, fan: 'auto' },
+    { name: 'deep', startMin: 30, targetC: 18.5, fan: 'auto' },
+    { name: 'middle', startMin: 270, targetC: 18.5, fan: 'auto' },
+    { name: 'late', startMin: 360, targetC: 18.5, fan: 'auto' },
+    { name: 'wake', startMin: 630, targetC: 18.5, fan: 'auto' },
+  ],
+};
+
+/**
+ * "One beep per night", anchored to sleep onset (default 2026-10-30 morning → evening; nights stored with
+ * 'one-beep-v2' keep it). Same shape as one-beep-v1, but the sleep
  * phases count from the night's expected sleep onset instead of lights-out: they get into bed at 22:00 and fall
  * asleep around 23:00, and the deep window and the warming step belong to sleep, not to bedtime.
  *   precool  −30 min from lights-out  19 °C   ON (set 18) at 21:30, the only evening command
@@ -20,9 +51,9 @@ export const MAX_SLEEP_ONSET_MIN = 180;
  *   wake     +570    from sleep onset 21 °C   (08:30 for a 23:00 onset) same target → no command; OFF at wake + 30
  * Setpoints with the default bias −1: 18 → 20. Why +4 h 30 and 21 °C: see ONE_BEEP_V1 (RESEARCH.md §6).
  */
-export const DEFAULT_CURVE: TemperatureCurve = {
+export const ONE_BEEP_V2: TemperatureCurve = {
   id: 'one-beep-v2',
-  name: 'One beep, from sleep onset (default)',
+  name: 'One beep, from sleep onset (v2)',
   minC: 17,
   maxC: 24,
   phases: [
@@ -87,7 +118,7 @@ export const CURVE_V1: TemperatureCurve = {
 };
 
 /** Built-in curves by id (a stored night's curve_id), for readers without the curves table. */
-export const BUILTIN_CURVES: readonly TemperatureCurve[] = [DEFAULT_CURVE, ONE_BEEP_V1, CURVE_V1];
+export const BUILTIN_CURVES: readonly TemperatureCurve[] = [DEFAULT_CURVE, ONE_BEEP_V2, ONE_BEEP_V1, CURVE_V1];
 
 /** Does any phase count from sleep onset? */
 export function usesSleepOnset(curve: TemperatureCurve): boolean {

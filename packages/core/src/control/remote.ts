@@ -17,6 +17,11 @@ export interface QuietConfig {
   /** Default 1. */
   maxEmergencyPerNight?: number;
   /**
+   * May an emergency correction WARM the room (raise the setpoint) while asleep? Default false (decided 2026-10-30):
+   * never warm the room while someone may be in deep sleep; an emergency only cools a room that is too warm.
+   */
+  emergencyWarm?: boolean;
+  /**
    * Extra commands (emergency corrections and resends together) allowed while asleep, on top of the planned steps.
    * Default 1, so a night has at most planned steps + 1 beeps while asleep.
    */
@@ -39,6 +44,7 @@ export const DEFAULT_QUIET: ResolvedQuiet = {
   emergencyThresholdC: 1.5,
   emergencyMinMinutes: 20,
   maxEmergencyPerNight: 1,
+  emergencyWarm: false,
   maxExtraPerNight: 1,
   rampStrategy: 'third',
 };

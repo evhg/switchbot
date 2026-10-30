@@ -60,6 +60,7 @@ All timestamps are `timestamptz` (UTC). A night is keyed by the **ICT wake-up da
 | `push_subscriptions` | Web Push endpoints per user | `register_push_subscription()` RPC |
 | `oauth_tokens` | Per person: **Vault secret id** of the refresh token, scopes, `needs_reconsent` | google-oauth |
 | `oauth_states` | Single-use OAuth `state` values (15 min) | google-oauth |
+| `band_sync` | Per person: last google-health-sync run (`last_sync_at`, `last_sync_ok`, `last_error`), band → Google sync time (`device_last_sync_at` from `pairedDevices`, `newest_point_at` = newest wearable point), `devices`, `last_manual_sync_at` (Sync now rate limit). Members read it (migration 0015) | google-health-sync |
 | `api_quota`, `api_quota_log` | Daily call counters (SwitchBot, Google) and one log row per invocation | functions |
 
 Views and functions:
@@ -102,7 +103,7 @@ The only per-project value is `project_url`, which Postgres can't discover by it
 
 **Key migration.** Supabase retires the legacy JWT keys at the end of 2026. The functions prefer `SUPABASE_SERVICE_ROLE_KEY` while it exists and fall back to `SUPABASE_SECRET_KEYS.default`, and they accept either as a service credential, so switching keys needs no code change. `scripts/seed-supabase.ts` still takes the key in `SUPABASE_SERVICE_ROLE_KEY` (an `sb_secret_…` value works there).
 
-**Missing configuration.** A required secret that isn't set makes a function answer `503 {"error":"not configured","missing":"<NAME>"}` after authentication (never before it). `switchbot-webhook` answers 404 to any path that matches neither `WEBHOOK_SECRET` nor the Vault secret, `google-health-webhook` 401 while its secret is unset, and `google-oauth/start` shows a "Not configured" page. `ac-curve` is a dry run unless `DRY_RUN` is explicitly `false`/`0`/`no`/`off`; an unset or unrecognised value keeps it dry, and a request can force a dry run but never a live one.
+**Missing configuration.** A required secret that isn't set makes a function answer `503 {"error":"not configured","missing":"<NAME>"}` after authentication (never before it). `switchbot-webhook` answers 404 to any path that matches neither `WEBHOOK_SECRET` nor the Vault secret, `google-health-webhook` 401 while its secret is unset, and `google-oauth/start` answers `503 … "missing":"GOOGLE_CLIENT_ID"` (or `GOOGLE_CLIENT_SECRET`) to a signed-in member, which the PWA shows as "Google sign-in isn't set up on the server yet". `ac-curve` sends real IR only when `household_settings.ac_live` is true (migration 0012, toggled in the app) and the `DRY_RUN` secret does not force a dry run: unset or `false`/`0`/`no`/`off` leaves the decision to `ac_live`, any other value forces dry. A request can force a dry run (`{"dryRun":true}`) but never a live one, and `{"at": …}` (a simulated moment) is always a dry run that writes nothing.
 
 ## Secrets
 
@@ -117,7 +118,7 @@ Until a function's required secrets are set it answers `503 {"error":"not config
 | `METER_DEVICE_ID` | poll-meter, ac-curve, nightly-report | Meter Pro CO2 `deviceId` (MAC without colons). Use `SIM-METER` in Phase 0 |
 | `AC_DEVICE_ID` | ac-curve | The IR remote's `deviceId` from `listDevices().infraredRemoteList` |
 | `WEBHOOK_SECRET` | switchbot-webhook | **Optional.** The path secret lives in Vault (`switchbot_webhook_secret`, migration 0008). Set this only to also accept a URL with a secret you chose |
-| `DRY_RUN` | ac-curve | Defaults to **true**. Set `false` only after the remote is verified |
+| `DRY_RUN` | ac-curve | Optional kill switch since 0012: any value other than unset/`false`/`0`/`no`/`off` forces a dry run. Live vs dry is otherwise `household_settings.ac_live` (System › Tonight's plan › Aircon control) |
 | `SWITCHBOT_DAILY_BUDGET` | all SwitchBot calls | Default 5000; the server limit is 10,000 |
 | `SWITCHBOT_AC_RESERVE` | poll-meter | Default 300. Polling stops when fewer calls are left, keeping room for aircon commands |
 | `POLL_SKIP_IF_FRESH_S` | poll-meter | Default 0 (off). For example, 50 skips the poll when a webhook reading is that fresh |
@@ -125,8 +126,8 @@ Until a function's required secrets are set it answers `503 {"error":"not config
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | google-oauth, google-health-sync | OAuth client of type "Web application" |
 | `GOOGLE_HEALTH_WEBHOOK_SECRET` | google-health-webhook | The subscriber's `endpointAuthorization.secret` |
 | `GOOGLE_HEALTH_SIGNATURE` | google-health-webhook | `off` / `log` (default) / `enforce`. The ECDSA verifier is best effort |
-| `OAUTH_START_SECRET` | google-oauth | Guards `/google-oauth/start` |
-| `APP_URL` | nightly-report, google-oauth, ac-curve | The PWA origin, for the live app `https://sleep-lab-lac.vercel.app` (push tap target) |
+| `OAUTH_START_SECRET` | google-oauth | **Optional, legacy.** Enables the `GET /start?person=&key=` setup link. Not needed: the PWA starts consent with the member's own sign-in |
+| `APP_URL` | nightly-report, google-oauth, ac-curve | The PWA origin (push tap target; google-oauth redirects back to `<APP_URL>/settings/health`). google-oauth falls back to `https://sleep-lab-git-claude-determined-ride-59txro-evhg.vercel.app` when unset |
 | `ANTHROPIC_API_KEY` | nightly-report | Optional. Without it, reports are rule-only |
 | `ANTHROPIC_MODEL` | nightly-report | Default `claude-opus-5-5` |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | nightly-report | Base64url raw keys. The PWA uses the same public key as `applicationServerKey` |
@@ -253,6 +254,46 @@ Decided 2026-10-29: bedtime 22:00 every day, pre-cool at 21:30 **only if someone
 - **App**: Tonight's plan shows lights out, an editable "Asleep by" (`set_sleep_onset`) and wake (`set_night`), Home / Away /
   Unknown with who and since when, the one-tap override (`set_presence_override`) and the pre-cool line.
 
+## Steady 18.5 °C, live switch, home by default, away dates (migrations 0012–0014)
+
+Decided 2026-10-30, after the first real night (aircon at 17 °C by hand: bed 18.5–19.9 °C, CO₂ plateau ~930 ppm, RH
+53–55 %): ~18.5 °C all night (Walker: ~18 °C), the room must not warm while either of them may still be in deep sleep
+(the watches' stages are not live overnight), and "let the plan run for real".
+
+- **Curve** `steady-18-5-v1` (`DEFAULT_CURVE` since 0012): pre-cool at lights-out − 30 min (21:30) to 18.5 °C, fan auto;
+  every later phase 18.5 °C → no command at lights-out, at sleep onset or while asleep; OFF at wake + 30 (09:00).
+  `minC` 16, so a cooling emergency still has a degree below set 17. Upcoming real nights on one-beep-v1/v2 whose
+  pre-cool had not started moved to it; stored nights keep their curve.
+- **Bias** `ac_state.bias_c = −2` (0012, only when unset): set 17 held the bed at 18.5–19.9 °C, so 18.5 °C needs set 17.
+- **Emergency while asleep only cools** (core `QuietConfig.emergencyWarm`, default false): a room ≥ target + 1.5 °C for
+  20 min gets one command (setpoint − round(deviation)); a too-cold room is never warmed while asleep.
+- **`public.household_settings`** (one row, id 1; household read; `set_household_settings(p_ac_live, p_default_presence)`
+  for owner/member): `ac_live` (default false) and `default_presence` (`home` | `unknown`, default `unknown`). 0014 set
+  `ac_live = true`, `default_presence = 'home'`.
+- **`public.away_periods`** (`from_date`, `to_date` = evening dates, inclusive; `note`; `active`): the night ending on D is
+  away when D − 1 is in range → AC off all night, like "Away tonight" ("Home tonight" wins for one night). Owner/member:
+  `add_away_period(from, to, note)` and `set_away_period_active(id, false)` ("Remove" in the app; rows are never
+  removed). Seeded: Bangkok, evenings 5–6 Nov 2026 (home again the evening of 7 Nov).
+- **Gate order** (`_shared/presence.ts`): Away tonight / travel → away · Home tonight → home · away period → away · a
+  fresh phone `home` → started (push) · `default_presence = 'home'` → home ("home by default", no push) unless every
+  person's latest phone signal is `away` and ≤ 12 h old → waits · otherwise the 0009 rules (stale home + CO₂, no data → off).
+- **No beep once asleep (follow-up, 2026-10-30)**: the AC is only *started* until lights-out + 15 min (quiet mode's
+  settle; `ASLEEP_START_MIN`) unless a phone `home` signal newer than the pre-cool start (a real late arrival) opens it,
+  until lights-out + 3 h as before. "Home by default", "Home tonight" and stale home + CO₂ close at 22:15, so a 21:30
+  ON that failed (hub offline; retried after 20, 40, 60 min) never beeps after they fell asleep. Before lights-out the
+  closed loop resends a stalled pre-cool at most once (never a resend of a resend, none after lights-out); the one
+  cooling emergency only looks at readings after lights-out + 15 (earliest 22:35).
+- **Frozen meter (poll-meter)**: with the hub unplugged, SwitchBot's GET /status keeps returning the last cached value.
+  When the newest 15 rows are polls with exactly the same temperature, RH and CO₂ and no webhook row arrived in 30 min,
+  the poll stores nothing (`api_quota_log.status = 'skipped:stale'`); the gap makes the controller's coverage checks
+  return null instead of acting on stale data. The first changed value is stored again.
+- **Simulation**: `{"at":"2026-10-30T21:30:00+07:00"}` (or epoch ms) evaluates ac-curve as of that moment: always dry,
+  nothing stored (no command row, gate status or landing), the decision is in the response. E.g.
+  `select private.invoke_edge_function('ac-curve', '{"dryRun":true,"at":"2026-10-30T21:30:00+07:00"}', 30000);` then
+  read `net._http_response`.
+- **App**: Tonight's plan shows "Home by default" and "Aircon control: Live / Dry-run" switches and the Away dates list
+  (add / remove); the plan uses the backend's bias for its set points.
+
 ## Sleep onset (migration 0011)
 
 Decided 2026-10-29: in bed at 22:00 every day, asleep around 23:00, up around 08:30.
@@ -277,12 +318,13 @@ Decided 2026-10-29: in bed at 22:00 every day, asleep around 23:00, up around 08
 | Job | Cron (UTC) | ICT | What |
 |---|---|---|---|
 | `sleeplab-poll-meter` | `* * * * *` | every minute | Meter status poll (backstop for the change-based webhook) |
-| `sleeplab-ac-curve` | `*/5 * * * *` | every 5 min | Controller from precool (lights-out − 90 min) to wake + 90 min. Outside that window, or when the night has `ac_enabled = false`, it only sends OFF if the assumed live state is still ON ("ensure off"). Failed live sends back off (20, 40, 60 min) |
+| `sleeplab-ac-curve` | `*/5 * * * *` | every 5 min | Controller from precool (lights-out − 30 min with the default curve) to wake + 90 min. Outside that window, or when the night has `ac_enabled = false`, it only sends OFF if the assumed live state is still ON ("ensure off"). Failed live sends back off (20, 40, 60 min) |
 | `sleeplab-health-sync-morning` | `20 0-2 * * *` | 07:20, 08:20, 09:20 | Google Health pulls after typical wake times |
 | `sleeplab-nightly-report` | `*/15 0-7,23 * * *` | every 15 min, 06:00–14:45 | `{"auto":true}`: first report + push once wake + 60 min has passed and every connected person's sleep has synced (or at wake + 4 h), silent regenerate when late sleep data arrives, final silent regenerate after max(12:00, wake + 2 h) for the morning ACH. Tracked in `reports.pushed_at / people_count / final` |
 | `sleeplab-health-sync-1030` | `30 3 * * *` | 10:30 | Late syncs and reprocessed stages |
 | `sleeplab-health-sync-1400` | `0 7 * * *` | 14:00 | Afternoon backstop |
-| `sleeplab-health-sync-queue` | `*/10 * * * *` | every 10 min | Drains webhook-queued jobs (no-op when empty) |
+| `sleeplab-health-sync-queue` | `*/10 * * * *` | every 10 min | Drains webhook- and OAuth-queued jobs (no-op when empty); a fresh connection backfills 14 days here |
+| `sleeplab-health-sync-hourly` | `45 * * * *` | every hour at :45 | Light pull (`hours: 6`, `sleepDays: 2`) that keeps `band_sync` fresh for the Presence page (migration 0015) |
 | `sleeplab-housekeeping` | `17 20 * * *` | 03:17 | Prunes `cron.job_run_details` (7 d), `api_quota_log` (60 d), old jobs and OAuth states |
 
 - **The report regenerates after late data** automatically (see `sleeplab-nightly-report`). To regenerate by hand, call `nightly-report` with `{"date": "YYYY-MM-DD"}` (no push unless `"push": true`). Owners and members can do it with their JWT for the last 7 days; `viewer` members are read-only everywhere (also in `set_night`). Scheduled callers use `x-cron-secret`.
@@ -338,17 +380,39 @@ Follow [SETUP.md](SETUP.md) for the hardware order (Hub Mini → Meter Pro CO2 �
 
 ## Google Health (Phase 2)
 
-1. **Google Cloud project.**
-   - Enable the Google Health API.
-   - Set the OAuth consent screen to **External** and publish it **"In production" (unverified)**. In Testing mode, refresh tokens die after 7 days.
-   - Add the three `googlehealth.*.readonly` scopes.
-   - Create a Web OAuth client with this exact authorized redirect URI (live project):
+### Google Cloud setup (once, about 15 minutes, on a laptop)
+
+1. **Project.** Go to https://console.cloud.google.com/ › project picker › **New project**, name it `sleep-lab`, **Create**, and select it.
+2. **Enable the API.** **APIs & Services › Library**, search **Google Health API**, open it, **Enable**.
+3. **OAuth consent screen** (**APIs & Services › OAuth consent screen**, called **Google Auth Platform** in the newer console):
+   - **Get started** / **Branding**: app name `Sleep Lab`, user support email `cath.tunti@gmail.com`, developer contact `cath.tunti@gmail.com`.
+   - **Audience**: user type **External**.
+   - **Audience › Test users › Add users**: `cath.tunti@gmail.com` and `verspui@gmail.com` (or whichever Google accounts carry the Fitbit/Google Health profiles).
+   - **Data Access › Add or remove scopes**: paste these three and **Update**, **Save**:
+     `https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly`
+     `https://www.googleapis.com/auth/googlehealth.sleep.readonly`
+     `https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly`
+   - **Audience › Publishing status › Publish app** › Confirm, so the status reads **In production**. Do not submit for verification. In Testing, refresh tokens expire after 7 days; in production (unverified, ≤ 100 users) they last until revoked. Each person sees "Google hasn't verified this app" once: **Advanced › Go to Sleep Lab (unsafe)**.
+4. **OAuth client.** **APIs & Services › Credentials › Create credentials › OAuth client ID** (or **Clients › Create client**):
+   - Application type **Web application**, name `sleep-lab-supabase`.
+   - **Authorized redirect URIs › Add URI**, exactly:
      `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/google-oauth/callback`
-     (in general `https://<ref>.supabase.co/functions/v1/google-oauth/callback`, or `<PUBLIC_FUNCTIONS_URL>/google-oauth/callback`).
-   - Put its id and secret into the `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` function secrets.
-2. **Connect each person.** Each person opens `https://<ref>.supabase.co/functions/v1/google-oauth/start?person=a&key=<OAUTH_START_SECRET>` (then `person=b`) and clicks through the unverified-app warning once.
-   - The callback stores the refresh token in Vault and records `healthUserId`.
-   - It also queues a 14-day backfill, which the 10-minute queue job picks up.
+     (in general `https://<ref>.supabase.co/functions/v1/google-oauth/callback`, or `<PUBLIC_FUNCTIONS_URL>/google-oauth/callback`). No JavaScript origins are needed.
+   - **Create**, then copy the **Client ID** and **Client secret** (the secret is shown once; download the JSON if offered).
+5. **Supabase secrets.** https://supabase.com/dashboard/project/vaelokyqjdsxveqvdtbo/functions/secrets › **Add new secret**:
+   - `GOOGLE_CLIENT_ID` = the client ID (`…apps.googleusercontent.com`)
+   - `GOOGLE_CLIENT_SECRET` = the client secret (`GOCSPX-…`)
+   - optional `APP_URL` = the PWA origin you use on the phones (default `https://sleep-lab-git-claude-determined-ride-59txro-evhg.vercel.app`).
+   Secrets apply to the next call; nothing needs redeploying.
+6. **Each person, on their own phone:** make sure the Google Health (Fitbit) app is signed in with the same Google account, then open the PWA signed in as themselves › **System › Google Health › Connect Google Health** › pick the Google account › Advanced › Go to Sleep Lab › tick all three permissions › Continue. The app comes back to the same page with "Connected". The 14-day backfill arrives within about 10 minutes (queue job); **Sync now** pulls the last 36 h at once.
+
+### How connecting works
+
+1. **Start (`POST /google-oauth/start`).** The PWA sends `Authorization: Bearer <the user's Supabase access token>`. The function verifies it with the service client (`auth.getUser`), reads `household_members` (owner/member only; viewers get 403) and binds a single-use `oauth_states` row to that user's `person_id`. The owner may pass `{"person":"b"}` to connect someone else. It returns `{url}` (Google consent with `access_type=offline`, `prompt=consent`, the three read-only scopes and the user's email as `login_hint`) and the PWA navigates there.
+   - The legacy `GET /start?person=a&key=<OAUTH_START_SECRET>` link works only while `OAUTH_START_SECRET` is set.
+2. **Callback.** Consumes the state (15 min TTL), exchanges the code, stores the refresh token in Vault (`store_google_refresh_token`), records `healthUserId` when `/users/me/identity` answers, queues a 14-day backfill job, and redirects to `<APP_URL>/settings/health?google=connected&person=a` (`&profile=missing` when the account has no Google Health profile yet). Failures redirect with `google=error&reason=denied|expired|exchange|no_refresh_token|store|no_code`; the page shows a sentence for each.
+3. **Sync now.** `POST /google-health-sync` with the member's bearer token runs a full sync of every connected person, at most once per 2 min per person (`band_sync.last_manual_sync_at`, claimed atomically); otherwise `429`. `409` when nobody is connected yet.
+
 3. **Webhook subscriber** (optional; the three daily pulls work without it).
    - Create a subscriber on the project **number** with `POST https://health.googleapis.com/v4/projects/<number>/subscribers?subscriberId=sleep-lab`.
    - Set `endpointUri` to `https://<ref>.supabase.co/functions/v1/google-health-webhook`.
@@ -358,7 +422,17 @@ Follow [SETUP.md](SETUP.md) for the hardware order (Hub Mini → Meter Pro CO2 �
 4. **What a sync pulls, per person:**
    - The last 36 h of `heart-rate`, `heart-rate-variability` and `oxygen-saturation` (`dataSourceFamily=google-wearables`).
    - The last 7 days of `sleep` (filtered on `end_time`), `respiratory-rate-sleep-summary` and the `daily-*` types (resting HR, daily HRV, SpO₂, respiratory rate, sleep temperature derivations).
-   - Everything returned is appended to `raw_health` before parsing.
+   - `steps` from local midnight at the start of that window (whole ICT days, into `health_vitals_daily.steps`).
+   - Everything returned is appended to `raw_health` before parsing; derived rows go to `health_hr`, `health_hrv`, `health_spo2`, `sleep_sessions`, `health_daily` and `health_vitals_daily` (steps, resting HR, daily HRV).
+   - `GET /users/me/pairedDevices` (best effort: it may need a scope the app doesn't request; a 403 is logged in `band_sync.last_error` and not fatal).
+   - Afterwards `band_sync` gets the run's outcome, `device_last_sync_at` (newest `lastSyncTime`) and `newest_point_at` (newest heart-rate/HRV/SpO₂/steps point). Both only move forward.
+5. **Presence hint (not a gate).** `public.band_sync` is the place a presence gate can read later: `greatest(device_last_sync_at, newest_point_at)` per person is when the band last reached Google through its phone. It says nothing about where the phone was, and Fitbit data isn't live overnight, so nothing switches the aircon on it today; System › Presence shows it as "Fitbit bands (hint only)".
+
+### Meter data rules
+
+- **CO₂ warm-up artifact.** After a restart or hub reconnect the Meter Pro reports 0 ppm for a while. `parseMeterStatus` / `parseWebhookEvent` treat CO₂ < 300 ppm (`CO2_PLAUSIBLE_MIN`) as implausible: with `{co2Fallback}` (the device's newest plausible CO₂ from the last 30 min, `_shared/readings.ts`) the row keeps temp/RH with that CO₂, otherwise the sample is skipped (`readings.co2` stays NOT NULL). The metrics (`toMinuteGrid`, room metrics, CO₂ fits and forecasts) also ignore CO₂ < 300 in rows already stored.
+- **Webhook wins.** `poll-meter` inserts with `ON CONFLICT DO NOTHING`, so a webhook row for the same minute keeps its values and `source = 'webhook'`; a webhook arriving after the poll still replaces the poll row.
+- **Split nights.** `typicalSleepOnset` first merges a person's sessions less than 2 h apart (Fitbit sometimes splits one night around a long awakening), except a short doze (< 90 min) an hour or more before bed, then takes the first non-awake start.
 
 ## Nightly report and Claude
 
@@ -436,7 +510,7 @@ Live project `sleep-lab` (ref `vaelokyqjdsxveqvdtbo`, region `ap-southeast-1`, U
 | Vault `cron_secret` | Created by 0002 when it runs |
 | pg_cron jobs | None until 0002 runs; then the eight `sleeplab-*` jobs in [Schedules](#schedules-pg_cron-runs-in-utc-ict--utc7) |
 | `0008_switchbot_webhook_secret` | Applied 2026-10-29: Vault `switchbot_webhook_secret` + the two service_role-only RPCs. The SwitchBot webhook was registered by `switchbot-admin` the same day (enabled, `deviceList: ALL`) |
-| Edge Functions | All 8 deployed with `verify_jwt = false`: `switchbot-webhook`, `switchbot-admin`, `poll-meter`, `ac-curve`, `google-health-sync`, `google-health-webhook`, `google-oauth`, `nightly-report`. They reject unauthenticated calls and answer "not configured" until their secrets exist; `ac-curve` stays in dry run unless `DRY_RUN=false` |
+| Edge Functions | All 8 deployed with `verify_jwt = false`: `switchbot-webhook`, `switchbot-admin`, `poll-meter`, `ac-curve`, `google-health-sync`, `google-health-webhook`, `google-oauth`, `nightly-report`. They reject unauthenticated calls and answer "not configured" until their secrets exist; `ac-curve` is live since 2026-10-30 (`household_settings.ac_live = true`, migration 0014; `DRY_RUN` unset) |
 | Function secrets | None set yet (see [Secrets](#secrets)) |
 | Auth settings | **Manual** (see [Household and sign-in](#household-and-sign-in)) |
 | Vercel env | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` set for production, preview and development |
@@ -449,8 +523,8 @@ Until 0002 is applied, cron isn't scheduled and `x-cron-secret` requests are rej
 | What | URL |
 |---|---|
 | Google OAuth redirect URI (Google Cloud console) | `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/google-oauth/callback` |
-| Google OAuth start (per person) | `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/google-oauth/start?person=a&key=<OAUTH_START_SECRET>` |
+| Google OAuth start | `POST https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/google-oauth/start` with the member's bearer token (the PWA's Connect button) |
 | SwitchBot webhook (registered by `switchbot-admin`) | `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/switchbot-webhook/<vault switchbot_webhook_secret>` |
 | Google Health subscriber endpoint | `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/google-health-webhook` |
 
-**Known mismatch.** The PWA's "Connect Google Health" button opens `google-oauth/start?access_token=<user JWT>&login_hint=<email>`, but the deployed function only accepts `?person=…&key=<OAUTH_START_SECRET>`. Until `/start` also accepts a member's JWT (verify with `auth.getUser`, map to `household_members.person_id`, 403 otherwise), connect with the `key` URL above.
+**Google Health (2026-10-30).** `google-oauth` accepts the signed-in member's token (`POST /start`, see [How connecting works](#how-connecting-works)); the old `?access_token=` mismatch is gone. Migration `0015_band_sync` is applied (table + hourly sync job). Waiting on the user: the Google Cloud project and the `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` secrets ([Google Cloud setup](#google-cloud-setup-once-about-15-minutes-on-a-laptop)).

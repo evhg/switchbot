@@ -1,4 +1,5 @@
 import type { Ms, RoomReading } from '../types.ts';
+import { plausibleCo2 } from '../switchbot/parse.ts';
 import { HOUR, MIN, goldenMin, median, rollingMedian, sortByTs } from './util.ts';
 
 export const DEFAULT_OUTDOOR_CO2 = 425;
@@ -13,7 +14,7 @@ export const lpsToPpmPerHour = (lps: number, volumeM3: number) => (lps * 3.6e6) 
 interface Series { t: number[]; y: number[] }
 
 function series(readings: readonly RoomReading[]): Series & { ts: Ms[] } {
-  const rs = sortByTs(readings).filter((r) => Number.isFinite(r.co2) && Number.isFinite(r.ts));
+  const rs = sortByTs(readings).filter((r) => plausibleCo2(r.co2) && Number.isFinite(r.ts));
   const t0 = rs[0]?.ts ?? 0;
   return { ts: rs.map((r) => r.ts), t: rs.map((r) => (r.ts - t0) / HOUR), y: rs.map((r) => r.co2) };
 }
@@ -202,7 +203,7 @@ export function forecastCo2(
 ): { ts: Ms; co2: number }[] {
   const cout = opts.outdoorCo2 ?? DEFAULT_OUTDOOR_CO2;
   const vol = opts.volumeM3 ?? DEFAULT_VOLUME_M3;
-  const rs = sortByTs(readings).filter((r) => Number.isFinite(r.co2));
+  const rs = sortByTs(readings).filter((r) => plausibleCo2(r.co2));
   const last = rs[rs.length - 1];
   if (!last || untilTs <= last.ts) return [];
   const recent = rs.filter((r) => r.ts >= last.ts - 4 * HOUR);
@@ -242,7 +243,7 @@ export function forecastCo2Occupied(
 ): { ts: Ms; co2: number }[] {
   const cout = opts.outdoorCo2 ?? DEFAULT_OUTDOOR_CO2;
   const vol = opts.volumeM3 ?? DEFAULT_VOLUME_M3;
-  const rs = sortByTs(readings).filter((r) => Number.isFinite(r.co2));
+  const rs = sortByTs(readings).filter((r) => plausibleCo2(r.co2));
   const last = rs[rs.length - 1];
   if (!last || untilTs <= last.ts) return [];
   const ach = Math.max(0.02, opts.ach);

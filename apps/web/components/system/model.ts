@@ -64,10 +64,10 @@ export const PHASE_NAME: Record<CurvePhaseName, string> = {
 export const PHASE_ABOUT: Record<CurvePhaseName, string> = {
   precool: 'Cools the room before you get into bed.',
   onset: 'Comfortable while you fall asleep. Always starts at lights out.',
-  deep: 'Coolest stretch, timed for the first sleep cycles: in the default plan from 30 min after you fall asleep.',
-  middle: 'The middle of the night. In the default plan this is the one warming step, 4 h 30 after you fall asleep, the only command while you sleep.',
-  late: 'A little warmer for the REM-rich last hours.',
-  wake: 'A warm room to wake up into.',
+  deep: 'Coolest stretch, timed for the first sleep cycles. The default plan holds 18.5° all night, so deep sleep is never warmed.',
+  middle: 'The middle of the night. The default plan keeps it at 18.5°, like the rest of the night: no command while you sleep.',
+  late: 'The REM-rich last hours. Older plans warmed up here; the default stays at 18.5°.',
+  wake: 'Wake. The aircon goes off 30 min later.',
 };
 
 export const NIGHT_MODE_HOURS = '21:00 – 07:00';
@@ -179,7 +179,7 @@ export function aircon(curve: TemperatureCurve, lightsOut: number, quiet = true,
   const t = planTimes(curve, lightsOut, wakeMin);
   const lo = PLAN_DAY + lightsOut * MIN;
   const wake = lo + (t.wake - lightsOut) * MIN;
-  // Onset-anchored curves (the default) count the deep window and the warming step from the expected sleep onset.
+  // Onset-anchored curves (one-beep-v2) count the deep window and the warming step from the expected sleep onset.
   const sleepOnset = sleepOnsetMin === undefined ? undefined : lo + onsetAfterLightsOut(lightsOut, sleepOnsetMin) * MIN;
   const plan = planAcSchedule({
     curve,

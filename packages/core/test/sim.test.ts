@@ -168,8 +168,8 @@ describe('room physics', () => {
 describe('AC log', () => {
   it('is realistic and respects the remote profile', () => {
     const counts = nights.map((n) => n.ac.length);
-    // Quiet mode + the one-beep default curve: precool, ONE planned step while asleep, OFF (plus rare resends).
-    expect(median(counts)).toBeGreaterThanOrEqual(3);
+    // Quiet mode + the steady default curve: precool and OFF, nothing planned while asleep (plus rare resends).
+    expect(median(counts)).toBeGreaterThanOrEqual(2);
     expect(median(counts)).toBeLessThanOrEqual(6);
     let missed = 0;
     let flagged = 0;

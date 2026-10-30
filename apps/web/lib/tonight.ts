@@ -8,6 +8,10 @@
  * precool_reason written by the ac-curve function), `presence_latest` (iPhone Shortcuts events) and the last hour of CO₂;
  * writes the wake time with the existing set_night RPC, the expected sleep onset with set_sleep_onset (migration 0011)
  * and "Home tonight / Away tonight" with set_presence_override (migration 0009). Otherwise (simulator, signed out) the same values live on this device.
+ * Since 2026-10-30 also the household settings (migration 0012: ac_live = "Aircon control: Live / Dry-run",
+ * default_presence = home by default) and the away periods (0013, e.g. Bangkok), with set_household_settings,
+ * add_away_period and set_away_period_active (removing = switching a row off), and ac_state.bias_c for the plan's set
+ * points.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from './auth.tsx';
@@ -20,8 +24,9 @@ export const DEFAULT_LIGHTS_OUT = 22 * 60;
 /** Wake until set: 08:30 every day. */
 export const DEFAULT_WAKE = 8 * 60 + 30;
 /**
- * Expected sleep onset until set: lights out + 60 min (23:00). The default curve counts the deep window and the one
- * warming step from it (onset + 4 h 30 = 03:30). The backend learns it from the watches for new nights when it can.
+ * Expected sleep onset until set: lights out + 60 min (23:00). Onset-anchored curves (one-beep-v2) count the deep window
+ * and their warming step from it; the default steady 18.5 curve does not change while asleep. The backend learns it
+ * from the watches for new nights when it can.
  */
 export const DEFAULT_SLEEP_ONSET = DEFAULT_LIGHTS_OUT + 60;
 /** Sleep onset can be set from lights out to lights out + 3 h (the backend clamps to the same range). */
@@ -32,6 +37,18 @@ export const PRECOOL_BEFORE_MIN = 30;
 export const START_UNTIL_MIN = 180;
 /** A 'home' signal older than this is stale: it only starts the pre-cool together with rising CO₂ (backend rule). */
 export const STALE_HOME_H = 48;
+/** Home by default: everyone's latest signal 'away' and newer than this = nobody home (backend AWAY_FRESH_H). */
+export const AWAY_FRESH_H = 12;
+
+export type DefaultPresence = 'home' | 'unknown';
+
+/** public.away_periods: evening dates (inclusive) nobody sleeps at home. */
+export interface AwayPeriod {
+  id: number;
+  from: string;
+  to: string;
+  note: string | null;
+}
 
 export type PresenceState = 'home' | 'away';
 export type Override = PresenceState | null;
@@ -78,6 +95,19 @@ export interface Tonight {
   precool: { tone: 'on' | 'off' | 'alert'; text: string };
   /** CO₂ rising in the evening while nobody is marked home: a hint only, it never starts the aircon. */
   co2Hint: { rise: number; ppm: number } | null;
+  /** household_settings.ac_live (null = not loaded / not signed in): real IR commands vs. dry-run logging. */
+  acLive: boolean | null;
+  defaultPresence: DefaultPresence;
+  /** Active away periods that have not ended yet, oldest first. */
+  awayPeriods: AwayPeriod[];
+  /** The away period covering tonight, if any. */
+  awayTonight: AwayPeriod | null;
+  /** ac_state.bias_c (setpoint − bed target) when stored, for the plan's set points. */
+  biasC: number | undefined;
+  setAcLive: (on: boolean) => Promise<string | null>;
+  setDefaultPresence: (p: DefaultPresence) => Promise<string | null>;
+  addAway: (from: string, to: string, note: string) => Promise<string | null>;
+  removeAway: (id: number) => Promise<string | null>;
   setWake: (min: number) => Promise<string | null>;
   /** Minute of day, or null for the default (lights out + 60 min). */
   setSleepOnset: (min: number | null) => Promise<string | null>;
@@ -124,13 +154,39 @@ export function since(at: number, now: number): string {
 const isStale = (p: PersonPresence, now: number) => now - p.at > STALE_HOME_H * 60 * MIN;
 const name = (p: PersonPresence, now: number) => `${p.name} ${p.state} since ${since(p.at, now)}`;
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const dm = (d: string) => `${Number(d.slice(8, 10))} ${MONTHS[Number(d.slice(5, 7)) - 1]}`;
+/** "Bangkok · evenings 5–6 Nov" (backend awayLabel, shorter). */
+export function awayLabel(p: AwayPeriod): string {
+  const range = p.from === p.to ? `evening of ${dm(p.from)}` : `evenings ${dm(p.from)} – ${dm(p.to)}`;
+  return p.note ? `${p.note} · ${range}` : range;
+}
+/** The away period covering the night ending on `date` (its evening is date − 1), or null. */
+export const awayPeriodFor = (periods: readonly AwayPeriod[], date: string) => {
+  const evening = addDays(date, -1);
+  return periods.find((p) => p.from <= evening && evening <= p.to) ?? null;
+};
+
 /** Mirror of the backend's presence gate (supabase/functions/_shared/presence.ts) for the app's status lines. */
-export function tonightStatus(override: Override, tags: readonly string[], presence: readonly PersonPresence[], now = Date.now()): Tonight['status'] {
+export function tonightStatus(
+  override: Override,
+  tags: readonly string[],
+  presence: readonly PersonPresence[],
+  now = Date.now(),
+  o: { defaultPresence?: DefaultPresence; awayPeriod?: AwayPeriod | null; people?: readonly string[] } = {},
+): Tonight['status'] {
   if (override === 'away' || tags.includes('travel')) return { state: 'away', text: 'Away tonight (set in the app)' };
   if (override === 'home') return { state: 'home', text: 'Home tonight (set in the app)' };
+  if (o.awayPeriod) return { state: 'away', text: `Away: ${awayLabel(o.awayPeriod)}` };
   const home = presence.filter((p) => p.state === 'home');
   const fresh = home.filter((p) => !isStale(p, now));
   if (fresh.length) return { state: 'home', text: fresh.map((p) => name(p, now)).join(' · ') };
+  if (o.defaultPresence === 'home') {
+    const ids = o.people?.length ? o.people : presence.map((p) => p.personId);
+    const allAway = ids.length > 0 && ids.every((id) => presence.some((p) => p.personId === id && p.state === 'away' && now - p.at >= 0 && now - p.at <= AWAY_FRESH_H * 60 * MIN));
+    if (allAway) return { state: 'away', text: presence.map((p) => name(p, now)).join(' · ') };
+    return { state: 'home', text: presence.length ? `Home by default · ${presence.map((p) => name(p, now)).join(' · ')}` : 'Home by default (household setting)' };
+  }
   if (home.length) {
     return { state: 'unknown', text: `${home.map((p) => name(p, now)).join(' · ')}. Signal older than ${STALE_HOME_H} h: tap “Home tonight” if you are` };
   }
@@ -149,7 +205,7 @@ export function precoolLine(o: {
   const start = lightsOut - PRECOOL_BEFORE_MIN * MIN;
   const until = lightsOut + START_UNTIL_MIN * MIN;
   if (!acEnabled) return { tone: 'off', text: 'Aircon switched off for tonight' };
-  if (status.state === 'away') return status.text.startsWith('Away tonight') ? { tone: 'off', text: 'No pre-cool: away tonight' } : now < start
+  if (status.state === 'away') return status.text.startsWith('Away tonight') ? { tone: 'off', text: 'No pre-cool: away tonight' } : status.text.startsWith('Away: ') ? { tone: 'off', text: `No pre-cool: ${status.text.slice(6)}` } : now < start
       ? { tone: 'off', text: `Pre-cool at ${hm(start)} only if someone is home by then (until ${hm(until)})` }
       : now <= until
         ? { tone: 'alert', text: `Pre-cool waiting: nobody home. It starts if someone arrives before ${hm(until)}` }
@@ -208,6 +264,9 @@ export function useTonight(people: readonly { id: string; name: string }[]): Ton
   const [night, setNight] = useState<TonightNight | null>(null);
   const [presenceRows, setPresenceRows] = useState<Row[]>([]);
   const [co2, setCo2] = useState<{ ts: number; co2: number }[]>([]);
+  const [settings, setSettings] = useState<{ acLive: boolean; defaultPresence: DefaultPresence } | null>(null);
+  const [awayPeriods, setAwayPeriods] = useState<AwayPeriod[]>([]);
+  const [biasC, setBiasC] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
@@ -222,8 +281,11 @@ export function useTonight(people: readonly { id: string; name: string }[]): Ton
       db.from('nights').select('date,lights_out,wake,sleep_onset,tags,ac_enabled,presence_override,precool_status,precool_reason,precool_at').eq('date', date).maybeSingle(),
       db.from('presence_latest').select('person_id,state,at'),
       db.from('readings').select('ts,co2').neq('source', 'sim').gte('ts', new Date(Date.now() - 70 * MIN).toISOString()).order('ts').limit(200),
+      db.from('household_settings').select('ac_live,default_presence').eq('id', 1).maybeSingle(),
+      db.from('away_periods').select('id,from_date,to_date,note').eq('active', true).gte('to_date', addDays(date, -1)).order('from_date'),
+      db.from('ac_state').select('bias_c').limit(1).maybeSingle(),
     ])
-      .then(([n, p, r]) => {
+      .then(([n, p, r, hs, ap, st]) => {
         if (off) return;
         if (n.error) throw new Error(n.error.message);
         const row = n.data as Row | null;
@@ -245,6 +307,11 @@ export function useTonight(people: readonly { id: string; name: string }[]): Ton
         );
         setPresenceRows(p.error ? [] : ((p.data ?? []) as Row[]));
         setCo2(r.error ? [] : ((r.data ?? []) as Row[]).map((x) => ({ ts: ms(x.ts), co2: Number(x.co2) })));
+        const h = hs.error ? null : (hs.data as Row | null);
+        setSettings(h ? { acLive: h.ac_live === true, defaultPresence: h.default_presence === 'home' ? 'home' : 'unknown' } : null);
+        setAwayPeriods(ap.error ? [] : ((ap.data ?? []) as Row[]).map((x) => ({ id: Number(x.id), from: String(x.from_date), to: String(x.to_date), note: typeof x.note === 'string' ? x.note : null })));
+        const b = st.error ? null : (st.data as Row | null)?.bias_c;
+        setBiasC(typeof b === 'number' && Number.isFinite(b) ? b : undefined);
         setError(p.error ? p.error.message : null);
       })
       .catch((e: unknown) => !off && setError(e instanceof Error ? e.message : String(e)))
@@ -275,7 +342,9 @@ export function useTonight(people: readonly { id: string; name: string }[]): Ton
   const sleepOnsetMin = storedOnset !== null && validSleepOnset(lightsOutMin, storedOnset) ? storedOnset : (lightsOutMin + 60) % 1440;
   const override: Override = live ? night?.override ?? null : date ? localOverride[date] ?? null : null;
   const tags = live ? night?.tags ?? [] : [];
-  const status = tonightStatus(override, tags, presence, now);
+  const defaultPresence: DefaultPresence = live && settings ? settings.defaultPresence : 'unknown';
+  const awayTonight = live && date ? awayPeriodFor(awayPeriods, date) : null;
+  const status = tonightStatus(override, tags, presence, now, { defaultPresence, awayPeriod: awayTonight, people: people.map((p) => p.id) });
   const times = date ? nightTimes(date, lightsOutMin, wakeMin) : null;
   const precool = times
     ? precoolLine({
@@ -340,7 +409,57 @@ export function useTonight(people: readonly { id: string; name: string }[]): Ton
     [date, live, canWrite, setLocalOverride, refresh],
   );
 
-  return { date, live, canWrite, loading, error, lightsOutMin, wakeMin, sleepOnsetMin, override, presence, status, precool, co2Hint, setWake, setSleepOnset, setOverride, refresh };
+  const rpc = useCallback(
+    async (fn: string, args: Record<string, unknown>): Promise<string | null> => {
+      if (!live) return 'Sign in as a household member first.';
+      if (!canWrite) return 'Your household role is read-only.';
+      const { error: e } = await supabaseClient().rpc(fn, args);
+      if (e) return e.message;
+      refresh();
+      return null;
+    },
+    [live, canWrite, refresh],
+  );
+  const setAcLive = useCallback((on: boolean) => rpc('set_household_settings', { p_ac_live: on }), [rpc]);
+  const setDefaultPresence = useCallback((p: DefaultPresence) => rpc('set_household_settings', { p_default_presence: p }), [rpc]);
+  const addAway = useCallback(
+    (from: string, to: string, note: string) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return Promise.resolve('Pick both dates.');
+      if (to < from) return Promise.resolve('The last evening must be on or after the first.');
+      return rpc('add_away_period', { p_from: from, p_to: to, p_note: note.trim() || null });
+    },
+    [rpc],
+  );
+  const removeAway = useCallback((id: number) => rpc('set_away_period_active', { p_id: id, p_active: false }), [rpc]);
+
+  return {
+    date,
+    live,
+    canWrite,
+    loading,
+    error,
+    lightsOutMin,
+    wakeMin,
+    sleepOnsetMin,
+    override,
+    presence,
+    status,
+    precool,
+    co2Hint,
+    acLive: live && settings ? settings.acLive : null,
+    defaultPresence,
+    awayPeriods: live ? awayPeriods : [],
+    awayTonight,
+    biasC: live ? biasC : undefined,
+    setWake,
+    setSleepOnset,
+    setOverride,
+    setAcLive,
+    setDefaultPresence,
+    addAway,
+    removeAway,
+    refresh,
+  };
 }
 
 // ───────────────────────────── presence tokens (System › Presence) ─────────────────────────────

@@ -1,4 +1,5 @@
 import type { Ms, RoomReading } from '../types.ts';
+import { plausibleCo2 } from '../switchbot/parse.ts';
 
 export const MIN = 60_000;
 export const HOUR = 3_600_000;
@@ -55,7 +56,8 @@ export function ictTime(date: string, hour: number): Ms {
 
 /**
  * Regular 1-min grid of the readings. Gaps ≤ maxFillMin are linearly interpolated,
- * longer gaps stay NaN. Duplicate minutes are averaged.
+ * longer gaps stay NaN. Duplicate minutes are averaged. Implausible CO2 (< 300 ppm, the meter's 0 ppm warm-up
+ * artifact) counts as a missing CO2 sample; temp and RH of that reading are kept.
  */
 export interface MinuteGrid { t0: Ms; co2: number[]; rh: number[]; temp: number[] }
 
@@ -66,15 +68,19 @@ export function toMinuteGrid(readings: readonly RoomReading[], maxFillMin = 5): 
   const n = Math.round((rs[rs.length - 1]!.ts - t0) / MIN) + 1;
   const acc = { co2: new Array<number>(n).fill(0), rh: new Array<number>(n).fill(0), temp: new Array<number>(n).fill(0) };
   const cnt = new Array<number>(n).fill(0);
+  const cntCo2 = new Array<number>(n).fill(0);
   for (const r of rs) {
     const i = clamp(Math.round((r.ts - t0) / MIN), 0, n - 1);
-    acc.co2[i]! += r.co2;
+    if (plausibleCo2(r.co2)) {
+      acc.co2[i]! += r.co2;
+      cntCo2[i]!++;
+    }
     acc.rh[i]! += r.rh;
     acc.temp[i]! += r.tempC;
     cnt[i]!++;
   }
-  const fill = (a: number[]) => {
-    const out = a.map((v, i) => (cnt[i] ? v / cnt[i]! : NaN));
+  const fill = (a: number[], c = cnt) => {
+    const out = a.map((v, i) => (c[i] ? v / c[i]! : NaN));
     let last = -1;
     for (let i = 0; i < n; i++) {
       if (!Number.isFinite(out[i]!)) continue;
@@ -86,7 +92,7 @@ export function toMinuteGrid(readings: readonly RoomReading[], maxFillMin = 5): 
     }
     return out;
   };
-  return { t0, co2: fill(acc.co2), rh: fill(acc.rh), temp: fill(acc.temp) };
+  return { t0, co2: fill(acc.co2, cntCo2), rh: fill(acc.rh), temp: fill(acc.temp) };
 }
 
 /** Centred rolling median over ±half samples, skipping NaN. */
