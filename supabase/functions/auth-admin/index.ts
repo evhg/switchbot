@@ -13,7 +13,7 @@ import { serviceClient } from '../_shared/supabase.ts';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Login tokens only ever go to the app itself.
-const REDIRECT_HOST = /^(sleep-lab-lac\.vercel\.app|sleep-lab-[a-z0-9-]+-evhg\.vercel\.app)$/;
+const REDIRECT_HOST = /^(sleep\.cathnivore\.com|sleep-lab-lac\.vercel\.app|sleep-lab-[a-z0-9-]+-evhg\.vercel\.app)$/;
 
 function allowedRedirect(raw: unknown): string | undefined {
   if (typeof raw !== 'string') return undefined;

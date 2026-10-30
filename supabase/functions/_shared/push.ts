@@ -5,7 +5,7 @@ import type { Db } from './supabase.ts';
 import { loadVapidKeys } from './vapid.ts';
 import { declarativePayload, type NotificationContent, sendWebPush } from './webpush.ts';
 
-export const appUrl = () => (optEnv('APP_URL') ?? '').replace(/\/$/, '');
+export const appUrl = () => (optEnv('APP_URL') ?? 'https://sleep.cathnivore.com').replace(/\/$/, '');
 
 /** "Pre-cool started" notice; tapping it opens Tonight's plan, where "Away tonight" switches the aircon off. */
 export function precoolNotice(date: string, reason: string, base = appUrl()): NotificationContent {
