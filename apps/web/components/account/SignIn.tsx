@@ -3,7 +3,8 @@
  * Sign in for real data (Supabase Auth), on one calm column:
  *   password  email + password (primary; the password is set once, signed in, from System › General › Account or here)
  *   email     email → "Send code" (signInWithOtp, shouldCreateUser: false, so only invited addresses get a code)
- *   code      the 6-digit code from the email (verifyOtp) — or tap the link in the same email on this device
+ *   code      the 6-digit code from the email (verifyOtp; needs {{ .Token }} in the project's Magic Link email template)
+ *             — or the link in the same email, which opens in the browser (not in the installed home-screen app)
  * Links land back on /signin: #access_token (email / admin magic links, implicit flow) is picked up by supabase-js;
  * ?token_hash=…&type=… is verified here. After any sign-in, a member continues to ?next; an account that isn't in
  * the household yet stays here on the household-code step.
@@ -46,9 +47,12 @@ export function SignIn() {
   const pending = useRef(false);
   const [linkError, setLinkError] = useState<string | null>(null);
   const codeRef = useRef<HTMLInputElement>(null);
+  /** Installed home-screen app: email links open in the browser, whose storage (and session) is separate. */
+  const [standalone, setStandalone] = useState(false);
 
   // Read the query and the magic-link hash once, before supabase-js consumes the hash.
   useEffect(() => {
+    setStandalone(window.matchMedia?.('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone === true);
     const q = new URLSearchParams(window.location.search);
     const h = new URLSearchParams(window.location.hash.replace(/^#/, ''));
     const linkErr = h.get('error_description') ?? q.get('error_description');
@@ -250,7 +254,8 @@ export function SignIn() {
             'We’ll email you a one-time code. Only invited addresses can sign in.'
           ) : (
             <>
-              We sent a code to <span className={s.who}>{email.trim()}</span>. Enter it here, or tap the link in the same email on this device.
+              We emailed <span className={s.who}>{email.trim()}</span>. Type the code from the email here.{' '}
+              {standalone ? 'A link in the email opens in the browser, not in this app.' : 'If the email only has a link, open it in this browser.'}
             </>
           )
         }
@@ -301,7 +306,7 @@ export function SignIn() {
           }}
           noValidate
         >
-          {emailField('Only invited addresses can sign in.')}
+          {emailField(standalone ? 'Only invited addresses can sign in. Type the code from the email here: links open in the browser, not in this app.' : 'Only invited addresses can sign in.')}
           <div className={s.actions}>
             <Button type="submit" variant="primary" disabled={busy}>
               {busy ? 'Sending…' : 'Send code'}
@@ -349,6 +354,19 @@ export function SignIn() {
               {cooldown > 0 ? `New code in ${cooldown} s` : 'Send a new code'}
             </Button>
           </div>
+          <p className={s.note}>
+            No code in the email?{' '}
+            <button
+              type="button"
+              className="btn text sm"
+              onClick={() => {
+                setStep('password');
+                setErr(null);
+              }}
+            >
+              Use your password instead
+            </button>
+          </p>
           <p className={s.note}>
             Wrong address?{' '}
             <button

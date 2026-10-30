@@ -199,9 +199,10 @@ The SQL alternative still works: `insert into household_members (user_id, person
 | Where | Setting |
 |---|---|
 | Authentication → Sign In / Providers → *User Signups* | **Allow new users to sign up: off.** Invites still work. (Email provider stays on.) |
-| Authentication → URL Configuration → *Site URL* | `https://sleep-lab-lac.vercel.app` |
-| Authentication → URL Configuration → *Redirect URLs* | `https://sleep-lab-lac.vercel.app/**`, `https://sleep-lab-git-claude-determined-ride-59txro-evhg.vercel.app/**`, `https://sleep-lab-*-evhg.vercel.app/**` (all previews), `http://localhost:3000/**` |
-| Authentication → Emails → Templates → *Magic Link* | Add the code so the email works on another device, e.g. `<p>Your code: <strong>{{ .Token }}</strong></p>` next to the existing `{{ .ConfirmationURL }}` link |
+| Authentication → URL Configuration → *Site URL* | `https://sleep.cathnivore.com` (on 2026-10-30 it was still `http://localhost:3000`: every email link went there and was used up on a dead page) |
+| Authentication → URL Configuration → *Redirect URLs* | `https://sleep.cathnivore.com/**`, `https://sleep-lab-lac.vercel.app/**`, `https://sleep-lab-git-claude-determined-ride-59txro-evhg.vercel.app/**`, `https://sleep-lab-*-evhg.vercel.app/**` (all previews), `http://localhost:3000/**` |
+| Authentication → Emails → Templates → *Magic Link* | **Required for the code step:** the default template has only the link. Add the code, e.g. `<p>Your code: <strong>{{ .Token }}</strong></p>` next to the `{{ .ConfirmationURL }}` link. The installed iOS app can only use the code (or a password): links open in Safari, whose storage is separate |
+| (why) | The app sends `emailRedirectTo = <current origin>/signin`; an origin not on the Redirect URLs list is silently replaced by the Site URL |
 | Authentication → Emails → SMTP (optional) | The built-in sender is rate-limited (a few emails per hour) and meant for testing; add custom SMTP if codes stop arriving |
 
 **Vercel env** (project `sleep-lab`, all three environments; already set): `NEXT_PUBLIC_SUPABASE_URL=https://vaelokyqjdsxveqvdtbo.supabase.co` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` = the project's publishable key (`sb_publishable_…`, public by design; RLS protects the data). They take effect on the next deployment. Optional: `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (= `VAPID_PUBLIC_KEY`), `NEXT_PUBLIC_FUNCTIONS_URL`, `NEXT_PUBLIC_METER_DEVICE_ID`.
@@ -277,9 +278,15 @@ Decided 2026-10-30, after the first real night (aircon at 17 °C by hand: bed 18
 - **No beep once asleep (follow-up, 2026-10-30)**: the AC is only *started* until lights-out + 15 min (quiet mode's
   settle; `ASLEEP_START_MIN`) unless a phone `home` signal newer than the pre-cool start (a real late arrival) opens it,
   until lights-out + 3 h as before. "Home by default", "Home tonight" and stale home + CO₂ close at 22:15, so a 21:30
-  ON that failed (hub offline; retried after 20, 40, 60 min) never beeps after they fell asleep. Before lights-out the
-  closed loop resends a stalled pre-cool at most once (never a resend of a resend, none after lights-out); the one
-  cooling emergency only looks at readings after lights-out + 15 (earliest 22:35).
+  ON that failed (hub offline; retried after 20, 40, 60 min) never beeps after they fell asleep. Until the expected
+  sleep onset the controller resends a stalled command (room > target + 2.5 °C, not cooling) at most twice a night
+  (2026-10-31); the one cooling emergency only looks at readings after lights-out + 15 (earliest 22:35).
+- **Aircon not responding (2026-10-31)**: SwitchBot's statusCode 100 only means the cloud accepted the command (IR is
+  one-way), so ac-curve logs the literal request and response of every live send (`switchbot send`). A command counts
+  as landed only when the pull-down starts within 20 min of it (a manual fix with the handheld remote is not credited),
+  judged after 30 min in both the controller and ac-curve. After two unanswered power-on commands with the room still
+  hot, the household gets one push per night (only before the expected sleep onset) ("Aircon isn't cooling"), recorded as an `ac_missed` event with
+  `detail.notice = 'unresponsive'`; a dry run only logs it.
 - **Frozen meter (poll-meter)**: with the hub unplugged, SwitchBot's GET /status keeps returning the last cached value.
   When the newest 15 rows are polls with exactly the same temperature, RH and CO₂ and no webhook row arrived in 30 min,
   the poll stores nothing (`api_quota_log.status = 'skipped:stale'`); the gap makes the controller's coverage checks

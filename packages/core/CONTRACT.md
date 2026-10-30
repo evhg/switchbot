@@ -110,10 +110,14 @@ export function decideAcCommand(input: ControllerInput): AcCommand | null
 // small integer offset (−2..+2) learned from the bed-height error (the ducted unit's return-air sensor differs from
 // the bed); between calls it is carried by the last command, recovered exactly from its setpoint and target
 // (recoverBias: set 20 for 20.5 °C is bias −1, never the −0.5 rounding residue). Respect minInterval and the nightly
-// cap. Never send a duplicate state. Mark the prior command landed=false if the room didn't move toward the target
-// within ~30 min of a change, and resend it once. Power on from precool
-// until wake+30 min, then OFF. A pre-cool that stalls (room > target + 2.5 °C and not cooling) is resent at most once
-// and only before lights-out (never a resend of a resend). Quiet mode's emergency only considers readings after
+// cap (minInterval allows 30 s of cron jitter: INTERVAL_SLACK_MS). Never send a duplicate state. Mark the prior command
+// landed=false if the room didn't move toward the target within LANDING_MIN (30) min of a change, and resend it once.
+// evaluateLanding (cooling): the pull-down must start ≤ 20 min after the command (a later drop, e.g. the handheld
+// remote, is not credited) and the mean of the last 5 readings must be clamp(0.15 × gap, 0.3, 0.8) °C below the start.
+// Power on from precool until wake+30 min, then OFF. A command that stalls (room > target + 2.5 °C and not cooling) is
+// resent at most MAX_STALLED_RESENDS (2) times a night counting every resend, only before the expected sleep onset
+// (also in quiet mode, outside its asleep extra budget; after lights-out never warmer than the state sent); without
+// `tonight` never a resend of a resend. Reason "resend: room …". Quiet mode's emergency only considers readings after
 // lights-out + settleMin (its whole window lies in the asleep period, so the evening pull-down never triggers it).
 // Quiet mode (default) from lights-out + settleMin until the OFF at wake + 30 min — the receiver beeps on every frame:
 //  - only the planned steps from quietSteps(): each non-ramped phase start (deep, late, wake) and ONE step per ramped
@@ -158,6 +162,12 @@ export function planAcSchedule(input: { curve; lightsOut: Ms; wake: Ms; remote: 
 // 60 / 90 min): the steady curve plans nothing while asleep, the controller sends no planned step while asleep, at most
 // one safety net (a resend, or an emergency that cools), and every emergency lowers the setpoint.
 // test/control.test.ts: ideal nights (bed = setpoint + 1 / 2 / 1.5) send exactly the plan; one-beep-v2 keeps its own block.
+
+export function acUnresponsive(input: ControllerInput): { roomC; targetC; since: Ms; commands: number } | null
+// ≥ 2 power-on commands in a row without landed=true, the last ≥ 20 min old, room > target + 2.5 °C and not cooling.
+// ac-curve sends one push per night, only before the expected sleep onset ("Aircon isn't cooling"), and stores an ac_missed event (detail.notice = 'unresponsive').
+// Incident 2026-10-31 (set 17 ignored, room flat at 27.3): 21:30 ON · 21:50 resend · 22:10 resend + push · then nothing
+// until the one cooling emergency (test/control.test.ts "incident 2026-10-31").
 ```
 
 ## metrics/: analysis (owner: metrics agent)

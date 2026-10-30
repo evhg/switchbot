@@ -19,7 +19,10 @@
 // "Away tonight" (or the travel tag), or an active away period covering tonight's evening (public.away_periods), keeps
 // the AC off all night, like ac_enabled = false. household_settings.default_presence = 'home' counts the household as
 // home unless every phone said "away" within 12 h (_shared/presence.ts).
-import { decideAcCommand, evaluateLanding, offCommand } from '../../../packages/core/src/control/controller.ts';
+// Unresponsive aircon (2026-10-31): when two power-on commands in a row got no response and the room stays hot
+// (acUnresponsive), the household gets one push per night (deduplicated by an ac_missed event with
+// detail.notice = 'unresponsive'): resends cannot fix a wrong IR template or a receiver that missed the frame.
+import { acUnresponsive, type ControllerInput, decideAcCommand, evaluateLanding, LANDING_MIN, minIntervalPassed, offCommand } from '../../../packages/core/src/control/controller.ts';
 import { DEFAULT_REMOTE, type RemoteProfile, withQuiet } from '../../../packages/core/src/control/remote.ts';
 import { toSwitchBotCommand } from '../../../packages/core/src/switchbot/ac.ts';
 import type { AcCommand, AcState } from '../../../packages/core/src/types.ts';
@@ -42,7 +45,7 @@ import {
   recordGate,
   START_UNTIL_MIN,
 } from '../_shared/presence.ts';
-import { precoolNotice, pushToAll } from '../_shared/push.ts';
+import { precoolNotice, pushToAll, unresponsiveNotice } from '../_shared/push.ts';
 import { must, serviceClient } from '../_shared/supabase.ts';
 import { errorStatus, switchBotSession } from '../_shared/switchbot.ts';
 import { addDays, iso, MIN, nightDateFor } from '../_shared/time.ts';
@@ -116,7 +119,7 @@ serve(async (req) => {
     if (!lastCommand?.state.power) {
       return json({ skipped: !night.ac_enabled ? 'ac disabled for this night' : away ? awayWhy : 'outside night window', ...mode, night: night.date, curve: curve.id, sleepOnset: iso(sleepOnset) });
     }
-    if (now - lastCommand.ts < remote.minIntervalMin * MIN) return json({ skipped: 'ensure off: waiting for minInterval', ...mode, night: night.date });
+    if (!minIntervalPassed(now, lastCommand.ts, remote)) return json({ skipped: 'ensure off: waiting for minInterval', ...mode, night: night.date });
     const reason = !night.ac_enabled
       ? 'ensure off: AC disabled for this night'
       : away
@@ -142,8 +145,9 @@ serve(async (req) => {
 
   const recent = await loadRoom(db, meterId, now - 90 * MIN, now + MIN);
 
-  // Landing check of the previous command (40 min of data after it), stored even when nothing new is sent.
-  if (!simulate && lastCommand && lastRow?.id && (lastCommand.landed === null || lastCommand.landed === undefined) && now - lastCommand.ts >= 40 * MIN) {
+  // Landing check of the previous command (LANDING_MIN of data after it, as in the controller), stored even when
+  // nothing new is sent.
+  if (!simulate && lastCommand && lastRow?.id && (lastCommand.landed === null || lastCommand.landed === undefined) && now - lastCommand.ts >= LANDING_MIN * MIN) {
     const landed = evaluateLanding(lastCommand, recent.filter((r) => r.ts >= lastCommand.ts));
     if (landed !== null) {
       lastCommand.landed = landed;
@@ -152,7 +156,7 @@ serve(async (req) => {
   }
   const landedBefore = lastCommand?.landed;
 
-  const input = {
+  const input: ControllerInput = {
     now,
     lightsOut,
     wake,
@@ -170,6 +174,7 @@ serve(async (req) => {
   if (!simulate && lastCommand && lastRow?.id && landedBefore == null && typeof lastCommand.landed === 'boolean') {
     await markLanded(db, lastRow.id, lastCommand.landed, night.date, lastCommand);
   }
+  if (!simulate) await notifyUnresponsive(db, night.date, input, cmd, dryRun);
   // Presence gate: only the command that turns the AC on for the night (pre-cool, or a late start) is gated.
   if (needsPresenceGate(cmd, tonight)) {
     const presence = await loadPresence(db);
@@ -188,7 +193,7 @@ serve(async (req) => {
     if (!simulate) await recordGate(db, night, gate, now);
     if (!gate.allow) {
       // An AC still assumed ON (e.g. last morning's OFF failed) is switched off rather than left running for nobody.
-      if (lastCommand?.state.power && now - lastCommand.ts >= remote.minIntervalMin * MIN) {
+      if (lastCommand?.state.power && minIntervalPassed(now, lastCommand.ts, remote)) {
         const off = offCommand(now, remote, lastCommand.state, `ensure off: pre-cool gate closed (${gate.reason})`);
         if (off) return await send(db, { acId, dryRun, simulate, dryReason, cmd: off, nightDate: night.date, stateRow, commandsTonight });
       }
@@ -248,13 +253,17 @@ async function send(
   let error: string | null = null;
   if (!dryRun) {
     const sb = await switchBotSession(db, 'ac-curve');
+    // Log the literal request and response: statusCode 100 only means the cloud accepted it, IR is one-way.
+    const req = toSwitchBotCommand(cmd);
     try {
-      await sb.client.sendCommand(acId, toSwitchBotCommand(cmd));
+      const res = await sb.client.sendCommand(acId, req);
+      console.log('switchbot send', JSON.stringify({ request: req, response: res ?? null, reason: cmd.reason }));
       sentOk = true;
       await sb.finish('ok', cmd.reason);
     } catch (e) {
       sentOk = false;
       error = e instanceof Error ? e.message : String(e);
+      console.log('switchbot send failed', JSON.stringify({ request: req, error }));
       await sb.finish(errorStatus(e), error);
     }
   }
@@ -290,4 +299,35 @@ async function markLanded(db: Db, id: number, landed: boolean, nightDate: string
     );
     if (e.error) console.error('events', e.error.message);
   }
+}
+
+/**
+ * One push per night when the aircon seems to ignore us (acUnresponsive), also while quiet mode allows no more IR.
+ * Deduplicated by an ac_missed event (detail.notice = 'unresponsive'), which also puts it on the night's timeline.
+ * A dry run only logs it.
+ */
+async function notifyUnresponsive(db: Db, nightDate: string, input: ControllerInput, cmd: AcCommand | null, dryRun: boolean) {
+  const u = acUnresponsive(input);
+  if (!u) return;
+  const resending = !!cmd?.state.power && cmd.reason.startsWith('resend');
+  if (dryRun) {
+    console.log('ac unresponsive (dry run, no push)', JSON.stringify({ ...u, resending }));
+    return;
+  }
+  const seen = await db.from('events').select('id').eq('night_date', nightDate).eq('kind', 'ac_missed').contains('detail', { notice: 'unresponsive' }).limit(1);
+  if (seen.error) return console.error('events', seen.error.message);
+  if (seen.data?.length) return;
+  const sp = input.lastCommand?.state.setpointC ?? 0;
+  const e = await db.from('events').insert(
+    eventToRow(nightDate, {
+      kind: 'ac_missed',
+      start: u.since,
+      confidence: 0.9,
+      detail: { notice: 'unresponsive', commands: u.commands, roomC: Math.round(u.roomC * 10) / 10, targetC: u.targetC, setpointC: sp },
+    }, 'controller'),
+  );
+  if (e.error) return console.error('events', e.error.message);
+  const n = unresponsiveNotice(nightDate, { roomC: u.roomC, targetC: u.targetC, setpointC: sp, sinceMin: Math.round((input.now - u.since) / MIN), commands: u.commands, resending });
+  const p = background(pushToAll(db, n, 'ac-unresponsive').then((r) => console.log('unresponsive push', JSON.stringify(r))));
+  if (p) await p;
 }

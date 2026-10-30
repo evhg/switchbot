@@ -153,6 +153,9 @@ const db = supabaseClient;
  */
 export async function supabaseSignIn(email: string, redirectPath = '/signin'): Promise<string | null> {
   if (!supabaseConfigured()) return 'Supabase is not configured.';
+  // The link in the email returns to this origin's /signin. It must match an entry in the project's Auth → URL
+  // Configuration → Redirect URLs: otherwise Supabase silently sends the link to the Site URL instead (2026-10-30:
+  // http://localhost:3000, a dead page that used up the link).
   const emailRedirectTo = typeof window !== 'undefined' ? `${window.location.origin}${redirectPath}` : undefined;
   const { error } = await db().auth.signInWithOtp({ email: email.trim(), options: { shouldCreateUser: false, emailRedirectTo } });
   return error ? friendlyAuthError(error.message) : null;

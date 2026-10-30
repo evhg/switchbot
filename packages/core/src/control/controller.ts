@@ -9,7 +9,22 @@ const DEFAULT_OFFSET_C = 1;
 /** Only act when the predicted bed temperature is this far off target. */
 const DEADBAND_C = 0.6;
 const SETTLE_MIN = 45;
-const LANDING_MIN = 30;
+/** A command is judged this long after it was sent (controller and ac-curve alike). */
+export const LANDING_MIN = 30;
+/** A cooling command only counts as landed when the pull-down starts within this many minutes of it. */
+const LANDING_ONSET_MIN = 20;
+/**
+ * Cron ticks fire a second or two late, so a command sent at 21:50:01 would miss the 22:10:00 tick by 1.5 s and
+ * minInterval would become 25 min. Allow this much slack (well under a tick).
+ */
+export const INTERVAL_SLACK_MS = 30_000;
+/**
+ * Resends per night because the room is still hot and not cooling (the AC ignored the frame): spaced by minInterval,
+ * only while people are still awake (before the expected sleep onset). Each is one beep.
+ */
+export const MAX_STALLED_RESENDS = 2;
+/** An unanswered power-on command counts as ignored by the AC this long after it was sent. */
+const UNRESPONSIVE_AFTER_MIN = 20;
 /** Quiet mode: a measured bias replaces the one in use only when it differs by more than this (no flip-flop around x.5). */
 const BIAS_HYSTERESIS_C = 0.75;
 /** Room this far above target and not cooling (before/around lights-out) = the AC probably isn't on. */
@@ -44,6 +59,27 @@ export interface ControllerInput {
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
 const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
 
+/** Has minInterval passed since `lastTs` (with INTERVAL_SLACK_MS for cron jitter)? */
+export function minIntervalPassed(now: Ms, lastTs: Ms, remote: RemoteProfile): boolean {
+  return now - lastTs >= remote.minIntervalMin * MIN - INTERVAL_SLACK_MS;
+}
+
+/** Until when people are assumed awake: the expected sleep onset (default lights-out + 60 min). */
+const awakeUntil = (input: ControllerInput) => Math.max(input.lightsOut, input.sleepOnset ?? input.lightsOut + 60 * MIN);
+/** A resend because the room stayed hot (stalledAbove), as opposed to one after a failed landing check. */
+const isStalledResend = (c: AcCommand) => c.reason.startsWith('resend: room ');
+
+/**
+ * May a stalled resend go out now? Only before the expected sleep onset and at most MAX_STALLED_RESENDS resends of
+ * any kind tonight. Without `tonight` (cannot count): never a resend of a resend.
+ */
+function stalledResendAllowed(input: ControllerInput): boolean {
+  const { now, lastCommand, tonight } = input;
+  if (!lastCommand || now >= awakeUntil(input)) return false;
+  if (!tonight) return !lastCommand.reason.startsWith('resend');
+  return tonight.filter((c) => c.reason.startsWith('resend')).length < MAX_STALLED_RESENDS;
+}
+
 function sameState(a: AcState, b: AcState): boolean {
   if (!a.power && !b.power) return true;
   return a.power === b.power && a.setpointC === b.setpointC && a.mode === b.mode && a.fan === b.fan;
@@ -71,6 +107,9 @@ function stalledAbove(recent: RoomReading[], now: Ms, target: number): number | 
 /**
  * Did the room respond to `cmd`? Looks at readings 20–40 min after it. Expects warming after OFF, cooling
  * when the room was well above setpoint + offset, warming when well below. null = not enough data yet.
+ * Cooling must start within LANDING_ONSET_MIN of the command (a later drop, e.g. someone using the handheld remote,
+ * is not credited to it) and reach a drop that grows with the gap (0.3–0.8 °C), judged on the mean of the last
+ * readings so one low sample cannot decide it.
  */
 export function evaluateLanding(
   cmd: AcCommand,
@@ -83,12 +122,15 @@ export function evaluateLanding(
   const t0 = mean(win.slice(0, 3).map((r) => r.tempC));
   const later = win.filter((r) => r.ts >= cmd.ts + 20 * MIN).map((r) => r.tempC);
   if (later.length === 0) return null;
-  const lo = Math.min(...later);
   const hi = Math.max(...later);
   if (!cmd.state.power) return hi - t0 >= 0.3;
   const expected = cmd.state.setpointC + (opts.offsetC ?? DEFAULT_OFFSET_C);
   const gap = expected - t0;
-  if (gap <= -0.7) return t0 - lo >= 0.3;
+  if (gap <= -0.7) {
+    const firstDrop = win.find((r) => r.tempC <= t0 - 0.3);
+    if (!firstDrop || firstDrop.ts - cmd.ts > LANDING_ONSET_MIN * MIN) return false;
+    return t0 - mean(later.slice(-5)) >= clamp(-gap * 0.15, 0.3, 0.8) - 1e-9;
+  }
   if (gap >= 0.7) return hi - t0 >= 0.2;
   return Math.abs(mean(later) - expected) <= 1;
 }
@@ -128,7 +170,7 @@ export function decideAcCommand(input: ControllerInput): AcCommand | null {
   const onFrom = lightsOut + firstStart * MIN;
   const offAt = wake + 30 * MIN;
   if (now < onFrom) return null;
-  if (lastCommand && now - lastCommand.ts < remote.minIntervalMin * MIN) return null;
+  if (lastCommand && !minIntervalPassed(now, lastCommand.ts, remote)) return null;
   if (commandsTonight >= remote.maxCommandsPerNight) return null;
 
   // Landing check (mutates the prior command so the log shows it).
@@ -171,12 +213,13 @@ export function decideAcCommand(input: ControllerInput): AcCommand | null {
     return makeCommand(now, desired, remote, `curve: ${phase} start, ${target.toFixed(1)}°C (set ${sp}, bias ${bias >= 0 ? '+' : ''}${bias})`);
   }
   const cur = lastCommand.state;
-  // Precool: if the last command hasn't been confirmed and the room is still hot and not cooling, the IR frame was
-  // probably lost — re-send the full state at minInterval instead of waiting to settle. Once (never a resend of a
-  // resend) and only before lights-out: they are in bed after it, and the receiver beeps.
-  if (lastCommand.landed !== true && !lastCommand.reason.startsWith('resend') && now < lightsOut) {
+  // If the last command hasn't been confirmed and the room is still hot and not cooling, the IR frame was probably lost
+  // or ignored: re-send the full state at minInterval instead of waiting to settle. At most MAX_STALLED_RESENDS a
+  // night and only before the expected sleep onset (the receiver beeps); after lights-out never warmer than now.
+  if (lastCommand.landed !== true && stalledResendAllowed(input)) {
     const above = stalledAbove(recent, now, target);
-    if (above !== null) return makeCommand(now, desired, remote, `resend: room ${above.toFixed(1)}° above target and not cooling`);
+    const state = now >= lightsOut ? { ...desired, setpointC: Math.min(desired.setpointC, cur.setpointC) } : desired;
+    if (above !== null) return makeCommand(now, state, remote, `resend: room ${above.toFixed(1)}° above target and not cooling`);
   }
   const predicted = settledMean ?? cur.setpointC + offset;
   const err = predicted - target;
@@ -278,7 +321,8 @@ function decideQuiet(input: ControllerInput, quiet: ResolvedQuiet): AcCommand | 
   const tonight = input.tonight ?? (lastCommand ? [lastCommand] : []);
   const asleep = tonight.filter((c) => c.ts >= from);
   const emergencies = asleep.filter((c) => c.reason.startsWith('emergency')).length;
-  const extras = emergencies + asleep.filter((c) => c.reason.startsWith('resend')).length;
+  // Stalled resends before the expected sleep onset (people still awake) have their own cap, not this budget.
+  const extras = emergencies + asleep.filter((c) => c.reason.startsWith('resend') && !(isStalledResend(c) && c.ts < awakeUntil(input))).length;
   const extraLeft = input.tonight !== undefined && extras < quiet.maxExtraPerNight;
   const limits = setpointLimits(curve);
   const { lo, hi } = limits;
@@ -304,6 +348,14 @@ function decideQuiet(input: ControllerInput, quiet: ResolvedQuiet): AcCommand | 
   const fanOnly = prev !== undefined && prev.state.power && prev.state.setpointC === cur.setpointC;
   if (lastCommand.landed === false && lastCommand.reason.startsWith('curve:') && !fanOnly && extraLeft) {
     return { ...lastCommand, ts: now, state: { ...lastCommand.state }, reason: `resend: no response to "${lastCommand.reason}"`, landed: null };
+  }
+
+  // Still awake and the AC ignored the last command(s): the same capped stalled resend as before quiet mode, of the
+  // state we already sent (cooling only).
+  if (lastCommand.landed !== true && stalledResendAllowed(input)) {
+    const held = heldTarget(input, steps, now);
+    const above = held === null ? null : stalledAbove(input.recent, now, held);
+    if (above !== null) return { ...lastCommand, ts: now, state: { ...cur }, reason: `resend: room ${above.toFixed(1)}° above target and not cooling (quiet)`, landed: null };
   }
 
   if (step && lastCommand.ts < step.ts && now < stepDeadline(step, from) && !carriedStepSuperseded(step, nextStep, now, from)) {
@@ -348,4 +400,43 @@ function decideQuiet(input: ControllerInput, quiet: ResolvedQuiet): AcCommand | 
   );
   if (!cmd || sameState(cur, cmd.state) || (lastCommand.button !== undefined && cmd.button === lastCommand.button)) return null;
   return cmd;
+}
+
+export interface AcUnresponsive {
+  /** Room (last 5 min) and the target it should be heading for. */
+  roomC: number;
+  targetC: number;
+  /** First command of the unanswered streak. */
+  since: Ms;
+  /** Power-on commands in a row that the room did not respond to. */
+  commands: number;
+}
+
+/**
+ * The AC seems to ignore us: at least two power-on commands in a row without a confirmed landing, the last one
+ * ≥ UNRESPONSIVE_AFTER_MIN old, and the room still far above target and not cooling. Resends cannot fix a wrong IR
+ * template or a missed receiver; ac-curve tells the household (push) once per night,
+ * and only before the expected sleep onset, so an alert never wakes anyone.
+ */
+export function acUnresponsive(input: ControllerInput): AcUnresponsive | null {
+  const curve = usesSleepOnset(input.curve) ? resolveCurve(input.curve, input.lightsOut, input.sleepOnset) : input.curve;
+  const { now, lastCommand, recent, lightsOut } = input;
+  if (!lastCommand?.state.power || lastCommand.landed === true) return null;
+  // A phone alert must not wake anyone: only while people are still awake.
+  if (now >= awakeUntil(input)) return null;
+  if (now - lastCommand.ts < UNRESPONSIVE_AFTER_MIN * MIN - INTERVAL_SLACK_MS) return null;
+  const target = targetAt(curve, lightsOut, now);
+  if (target === null) return null;
+  const above = stalledAbove(recent, now, target);
+  if (above === null) return null;
+  let commands = 1;
+  let since = lastCommand.ts;
+  const earlier = (input.tonight ?? []).filter((c) => c.ts < lastCommand.ts);
+  for (let i = earlier.length - 1; i >= 0; i--) {
+    const c = earlier[i]!;
+    if (!c.state.power || c.landed === true) break;
+    commands++;
+    since = c.ts;
+  }
+  return commands >= 2 ? { roomC: target + above, targetC: target, since, commands } : null;
 }

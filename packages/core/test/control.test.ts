@@ -9,6 +9,8 @@ import {
   DEFAULT_CURVE,
   DEFAULT_LADDER_REMOTE,
   DEFAULT_REMOTE,
+  MAX_STALLED_RESENDS,
+  acUnresponsive,
   decideAcCommand,
   evaluateLanding,
   offCommand,
@@ -157,16 +159,26 @@ describe('decideAcCommand', () => {
     expect(decideAcCommand(input({ now, lastCommand: last, commandsTonight: 2, recent: cooling }))?.reason ?? '').not.toMatch(/^resend/);
   });
 
-  it('resends a stalled pre-cool at most once, and never after lights-out', () => {
-    const last = on(LO - 60 * MIN, 19, 'high', 'curve: precool start');
+  it(`resends a stalled pre-cool at most ${MAX_STALLED_RESENDS} times a night, and never after the expected sleep onset`, () => {
+    expect(MAX_STALLED_RESENDS).toBe(2);
     const hot = (now: number) => flat(now - 30 * MIN, now - MIN, 31);
-    // A resend of a resend: no.
-    const resent = on(LO - 35 * MIN, 19, 'high', 'resend: room 9.0° above target and not cooling');
-    const now = LO - 10 * MIN;
-    expect(decideAcCommand(input({ now, lastCommand: resent, commandsTonight: 2, recent: hot(now), tonight: [last, resent] }))?.reason ?? '').not.toMatch(/^resend/);
-    // After lights-out (in bed, before quiet mode): no stalled resend either.
-    const after = LO + 10 * MIN;
-    expect(decideAcCommand(input({ now: after, remote: LOUD, lastCommand: { ...last, landed: true }, commandsTonight: 1, recent: hot(after) }))?.reason ?? '').not.toMatch(/^resend: room/);
+    const last = on(LO - 80 * MIN, 19, 'high', 'curve: precool start');
+    const r1 = on(LO - 55 * MIN, 19, 'high', 'resend: room 9.0° above target and not cooling');
+    // A second resend (of a resend) while the room is still hot: yes.
+    expect(decideAcCommand(input({ now: LO - 35 * MIN, lastCommand: r1, commandsTonight: 2, recent: hot(LO - 35 * MIN), tonight: [last, r1] }))?.reason).toMatch(/^resend: room/);
+    // A third: no.
+    const r2 = on(LO - 35 * MIN, 19, 'high', 'resend: room 9.0° above target and not cooling');
+    expect(decideAcCommand(input({ now: LO - 10 * MIN, lastCommand: r2, commandsTonight: 3, recent: hot(LO - 10 * MIN), tonight: [last, r1, r2] }))?.reason ?? '').not.toMatch(/^resend/);
+    // Without `tonight` it cannot count: never a resend of a resend.
+    expect(decideAcCommand(input({ now: LO - 35 * MIN, lastCommand: r1, commandsTonight: 2, recent: hot(LO - 35 * MIN) }))?.reason ?? '').not.toMatch(/^resend/);
+    // After lights-out but before the expected sleep onset (still awake): yes, never warmer than the state sent.
+    const onset = on(LO, 19, 'high', 'curve: onset start');
+    const after = LO + 25 * MIN;
+    const awake = decideAcCommand(input({ now: after, remote: LOUD, lastCommand: onset, commandsTonight: 2, recent: hot(after), tonight: [last, onset], sleepOnset: LO + 60 * MIN }));
+    expect(awake?.reason).toMatch(/^resend: room/);
+    expect(awake!.state.setpointC).toBeLessThanOrEqual(19);
+    // After the expected sleep onset: no.
+    expect(decideAcCommand(input({ now: after, remote: LOUD, lastCommand: onset, commandsTonight: 2, recent: hot(after), tonight: [last, onset], sleepOnset: LO + 20 * MIN }))?.reason ?? '').not.toMatch(/^resend: room/);
   });
 
   it('offCommand uses the learned OFF button on a ladder remote', () => {
@@ -197,6 +209,23 @@ describe('evaluateLanding', () => {
     const up = on(LO, 22);
     expect(evaluateLanding(up, flat(LO, LO + 40 * MIN, (ts) => 19 + ((ts - LO) / MIN) * 0.03))).toBe(true);
     expect(evaluateLanding(up, flat(LO, LO + 40 * MIN, 19))).toBe(false);
+  });
+  it('needs a bigger drop for a bigger gap, judged on the last readings, not one low sample', () => {
+    const hot = on(LO, 17); // room 27, expected 18: gap 9 → needs 0.8 °C
+    expect(evaluateLanding(hot, flat(LO, LO + 40 * MIN, (ts) => 27 - Math.min(1.2, ((ts - LO) / MIN) * 0.06)))).toBe(true);
+    expect(evaluateLanding(hot, flat(LO, LO + 40 * MIN, (ts) => 27 - Math.min(0.4, ((ts - LO) / MIN) * 0.06)))).toBe(false);
+    // Starts on time but stalls 0.4 °C down; one low sample at 38 min must not decide it.
+    expect(evaluateLanding(hot, flat(LO, LO + 40 * MIN, (ts) => (ts === LO + 38 * MIN ? 25.5 : 27 - Math.min(0.4, ((ts - LO) / MIN) * 0.06))))).toBe(false);
+  });
+  it('does not credit a drop that starts > 20 min after the command (incident 2026-10-31: the handheld remote)', () => {
+    // Resend at 21:50:01 (set 17), room flat at 27.2–27.3, the user used the handheld remote at ~22:22.
+    const t = Date.UTC(2026, 9, 31, 14, 50, 1, 460);
+    const cmd = on(t, 17, 'low', 'resend: room 8.7° above target and not cooling');
+    const room = flat(t + 60_000, t + 32 * MIN, (ts) => (ts < t + 15 * MIN ? 27.2 : 27.3)).concat(
+      [27.0, 26.8, 26.6].map((tempC, i) => ({ ts: t + (33 + i) * MIN, tempC, rh: 55, co2: 410, source: 'sim' as const })),
+    );
+    expect(evaluateLanding(cmd, room.filter((r) => r.ts <= t + 30 * MIN))).toBe(false);
+    expect(evaluateLanding(cmd, room)).toBe(false);
   });
   it('expects warming after OFF', () => {
     const off: AcCommand = { ...cmd, state: { ...cmd.state, power: false } };
@@ -599,5 +628,54 @@ describe('steady-18-5-v1 default curve: no command while asleep', () => {
     for (const m of [15, 30, 34]) expect(decideAcCommand({ ...base, now: LO22 + m * MIN, recent: warm(LO22 + m * MIN) })).toBeNull();
     // 22:35: the window is 22:15–22:35, all asleep → the one cooling emergency.
     expect(decideAcCommand({ ...base, now: LO22 + 35 * MIN, recent: warm(LO22 + 35 * MIN) })?.reason).toMatch(/^emergency/);
+  });
+});
+
+describe('incident 2026-10-31: the aircon ignored setAll 17 (steady-18-5-v1, bias −2)', () => {
+  const LO22 = Date.UTC(2026, 9, 31, 15, 0); // 22:00 ICT
+  const WAKE830 = LO22 + 630 * MIN;
+  const c1: AcCommand = { ts: LO22 - 30 * MIN, state: { power: true, setpointC: 17, mode: 'cool', fan: 'auto' }, via: 'setAll', reason: 'curve: precool start, 18.5°C (set 17, bias -2)', landed: null };
+  const c2: AcCommand = { ...c1, ts: LO22 - 10 * MIN + 1460, reason: 'resend: room 8.7° above target and not cooling' };
+  const hot = (now: number) => flat(now - 60 * MIN, now - MIN, 27.3);
+  const base = { lightsOut: LO22, wake: WAKE830, sleepOnset: LO22 + 60 * MIN, curve: DEFAULT_CURVE, remote: DEFAULT_REMOTE, biasC: -2 };
+
+  it('resends once more at 22:10 (minInterval allows the late cron tick), then stops at the cap', () => {
+    const now = LO22 + 10 * MIN;
+    const cmd = decideAcCommand({ ...base, now, lastCommand: { ...c2 }, commandsTonight: 2, tonight: [c1, c2], recent: hot(now) });
+    expect(cmd?.reason).toMatch(/^resend: room 8\.8° above target/);
+    expect(cmd?.state).toEqual(c1.state);
+    const c3 = { ...cmd!, ts: now };
+    for (const m of [30, 35, 45]) {
+      const t = LO22 + m * MIN;
+      expect(decideAcCommand({ ...base, now: t, lastCommand: { ...c3 }, commandsTonight: 3, tonight: [c1, c2, c3], recent: hot(t) })).toBeNull();
+    }
+  });
+
+  it('in quiet mode before sleep onset: the capped stalled resend of the same state, outside the asleep extra budget', () => {
+    const c2late = { ...c2, ts: LO22 - 5 * MIN };
+    const now = LO22 + 15 * MIN;
+    const cmd = decideAcCommand({ ...base, now, lastCommand: { ...c2late }, commandsTonight: 2, tonight: [c1, c2late], recent: hot(now) });
+    expect(cmd?.reason).toMatch(/^resend: room .*\(quiet\)$/);
+    expect(cmd?.state).toEqual(c1.state);
+    // The one cooling emergency of the night is still available once the room has stayed hot.
+    const c3 = { ...cmd!, ts: now };
+    const later = LO22 + 60 * MIN;
+    expect(decideAcCommand({ ...base, now: later, lastCommand: { ...c3 }, commandsTonight: 3, tonight: [c1, c2late, c3], recent: hot(later) })?.reason).toMatch(/^emergency/);
+  });
+
+  it('acUnresponsive: two unanswered commands, room hot and flat; null once it cools or after one command', () => {
+    const now = LO22 + 10 * MIN;
+    const u = acUnresponsive({ ...base, now, lastCommand: c2, commandsTonight: 2, tonight: [c1, c2], recent: hot(now) });
+    expect(u).toEqual({ roomC: expect.closeTo(27.3, 5), targetC: 18.5, since: c1.ts, commands: 2 });
+    // Only the precool so far: a single frame may simply have been missed; the resend comes first.
+    expect(acUnresponsive({ ...base, now: c2.ts, lastCommand: c1, commandsTonight: 1, tonight: [c1], recent: hot(c2.ts) })).toBeNull();
+    // Cooling by 1 °C: fine.
+    const cooling = flat(now - 60 * MIN, now - MIN, (ts) => 27.3 - Math.max(0, (ts - (now - 20 * MIN)) / MIN) * 0.05);
+    expect(acUnresponsive({ ...base, now, lastCommand: c2, commandsTonight: 2, tonight: [c1, c2], recent: cooling })).toBeNull();
+    // The last command landed: fine.
+    expect(acUnresponsive({ ...base, now, lastCommand: { ...c2, landed: true }, commandsTonight: 2, tonight: [c1, c2], recent: hot(now) })).toBeNull();
+    // Asleep (past the expected onset, lights-out + 60 min): no alert that could wake anyone.
+    const late = LO22 + 70 * MIN;
+    expect(acUnresponsive({ ...base, now: late, lastCommand: c2, commandsTonight: 2, tonight: [c1, c2], recent: hot(late) })).toBeNull();
   });
 });

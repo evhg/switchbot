@@ -17,6 +17,25 @@ export function precoolNotice(date: string, reason: string, base = appUrl()): No
   };
 }
 
+/**
+ * "Aircon isn't cooling": the room stayed hot after `commands` power-on commands in a row. Resends can't fix a wrong
+ * IR template or a missed receiver, so a person checks the unit (or uses the handheld remote).
+ */
+export function unresponsiveNotice(
+  date: string,
+  o: { roomC: number; targetC: number; setpointC: number; sinceMin: number; commands: number; resending: boolean },
+  base = appUrl(),
+): NotificationContent {
+  const tries = o.commands + (o.resending ? 1 : 0);
+  return {
+    title: 'Aircon isn’t cooling',
+    body: `Room ${o.roomC.toFixed(1)} °C, target ${o.targetC.toFixed(1)} °C, ${o.sinceMin} min after it was set to ${o.setpointC} (sent ${tries}×). ` +
+      `Check the aircon is on, cooling at ${o.setpointC}, or set it with the remote.`,
+    navigate: `${base}/settings/plan`,
+    tag: `ac-unresponsive-${date}`,
+  };
+}
+
 export interface PushSummary {
   skipped?: string;
   subscriptions?: number;
