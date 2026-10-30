@@ -1,4 +1,4 @@
-import { targetAt } from '../curve.ts';
+import { MANUAL_COMFORT_TARGET_C, scoringCurve, targetAt } from '../curve.ts';
 import type { Night, NightReport, ScoreDriver, TemperatureCurve } from '../types.ts';
 import { lpsToPpmPerHour } from './co2.ts';
 import { RECOVERY_WEIGHTS, personNightBreakdown } from './person.ts';
@@ -16,11 +16,15 @@ const signed = (x: number, unit: string) => `${Math.abs(Math.round(x))} ${unit} 
 const ACH_FOR_1000 = lpsToPpmPerHour(0.0062, 120) / (1000 - 425);
 
 /** Deterministic report: metrics, signed score drivers, a headline and 2–4 plain-English insights. */
-export function buildRuleReport(night: Night, history: Night[], curve: TemperatureCurve): NightReport {
-  const { metrics: room, parts } = roomNightBreakdown(night, curve);
+export function buildRuleReport(night: Night, history: Night[], plan: TemperatureCurve): NightReport {
+  const { metrics: room, parts } = roomNightBreakdown(night, plan);
+  // A night run by hand is judged against the steady comfort target (scoringCurve), never against a plan that didn't run.
+  const manual = parts.manual;
+  const curve = scoringCurve(night, plan);
+  const band = `${(MANUAL_COMFORT_TARGET_C - 0.75).toFixed(1)}–${(MANUAL_COMFORT_TARGET_C + 0.75).toFixed(1)} °C`;
   const people = night.people.map((p) => personNightBreakdown(night, p.personId, history));
   const past = history.filter((h) => h.date < night.date).sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 30);
-  const pastRoom = past.filter((h) => h.room.length).map((h) => roomNightBreakdown(h, curve).metrics).filter((m) => Number.isFinite(m.sleepAirScore));
+  const pastRoom = past.filter((h) => h.room.length).map((h) => roomNightBreakdown(h, plan).metrics).filter((m) => Number.isFinite(m.sleepAirScore));
   const roomOk = parts.coverage >= MIN_ROOM_COVERAGE;
 
   const W = SLEEP_AIR_WEIGHTS;
@@ -32,7 +36,9 @@ export function buildRuleReport(night: Night, history: Night[], curve: Temperatu
       points: pts(W.co2, parts.co2),
     },
     {
-      label: `On the temperature curve ${pct(room.minutesTempInTarget / nightMin)} of the night (first 4 h avg ${room.tempEarlyMean.toFixed(1)} °C)`,
+      label: manual
+        ? `In the ${band} comfort band ${pct(room.minutesTempInTarget / nightMin)} of the night (first 4 h avg ${room.tempEarlyMean.toFixed(1)} °C)`
+        : `On the temperature curve ${pct(room.minutesTempInTarget / nightMin)} of the night (first 4 h avg ${room.tempEarlyMean.toFixed(1)} °C)`,
       points: pts(W.temp, parts.temp),
     },
     {
@@ -40,7 +46,7 @@ export function buildRuleReport(night: Night, history: Night[], curve: Temperatu
       points: pts(W.rh, parts.rh),
     },
     {
-      label: room.minutesTempOver24 > 0 ? `Room above 24 °C for ${fmtDuration(room.minutesTempOver24)}` : `Steady temperature (±${parts.tempSd.toFixed(1)} °C around the curve)`,
+      label: room.minutesTempOver24 > 0 ? `Room above 24 °C for ${fmtDuration(room.minutesTempOver24)}` : manual ? `Steady temperature (±${parts.tempSd.toFixed(1)} °C)` : `Steady temperature (±${parts.tempSd.toFixed(1)} °C around the curve)`,
       points: pts(W.stability, parts.stability),
     },
   ];
@@ -80,6 +86,18 @@ export function buildRuleReport(night: Night, history: Night[], curve: Temperatu
   } else {
     insights.push(`Mean CO₂ was ${fmtPpm(room.co2Mean)} ppm with a peak of ${fmtPpm(room.co2Max)} ppm.`);
   }
+  if (manual && roomOk) {
+    insights.push(`The aircon was run by hand (Sleep Lab sent no commands), so temperature is scored against the steady ${MANUAL_COMFORT_TARGET_C} °C comfort target, not the stored plan.`);
+  }
+  if (room.achMorning === null && roomOk && room.achPlateau != null && room.achPlateauPpm != null) {
+    const a = room.achPlateau.toFixed(2);
+    const need = ACH_FOR_1000.toFixed(2);
+    insights.push(
+      room.achPlateauKind === 'upper_bound'
+        ? `CO₂ was still rising at wake (${fmtPpm(room.achPlateauPpm)} ppm), so fresh air was at most ${a} air changes per hour; about ${need} keeps two sleepers under 1000 ppm.`
+        : `CO₂ levelled off near ${fmtPpm(room.achPlateauPpm)} ppm, about ${a} air changes per hour; about ${need} keeps two sleepers under 1000 ppm.`,
+    );
+  }
   if (room.achMorning !== null) {
     insights.push(
       room.achMorning < ACH_FOR_1000
@@ -105,10 +123,12 @@ export function buildRuleReport(night: Night, history: Night[], curve: Temperatu
   const earlyTarget = mean(early);
   if (roomOk && Number.isFinite(earlyTarget) && Number.isFinite(room.tempEarlyMean)) {
     const diff = room.tempEarlyMean - earlyTarget;
+    const what = manual ? 'comfort target' : 'target';
+    // Only about the first 4 h, so it never claims the night "tracked the curve" while the headline says it didn't.
     insights.push(
-      Math.abs(diff) <= 0.75
-        ? `The first 4 h tracked the cool curve (avg ${room.tempEarlyMean.toFixed(1)} °C vs ${earlyTarget.toFixed(1)} °C target).`
-        : `The first 4 h averaged ${room.tempEarlyMean.toFixed(1)} °C, ${Math.abs(diff).toFixed(1)} °C ${diff > 0 ? 'warmer' : 'cooler'} than the ${earlyTarget.toFixed(1)} °C target.`,
+      Math.abs(diff) <= 0.25
+        ? `The first 4 h averaged ${room.tempEarlyMean.toFixed(1)} °C, on the ${earlyTarget.toFixed(1)} °C ${what}.`
+        : `The first 4 h averaged ${room.tempEarlyMean.toFixed(1)} °C, ${Math.abs(diff).toFixed(1)} °C ${diff > 0 ? 'warmer' : 'cooler'} than the ${earlyTarget.toFixed(1)} °C ${what}.`,
     );
   }
 

@@ -90,3 +90,9 @@
   .cell, .wedges, .bar { transition: none !important; opacity: 1 !important; transform: none !important; }
   .col, .meterFill { animation: none !important; }
 }
+
+/* Freshness of the live reading: a quiet dot when live, hollow when stale; stale values step back. */
+.nowLabel i.liveDot { background: var(--text-2); }
+.nowLabel i.staleDot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+.stale { opacity: .5; }
+.staleKids > * { opacity: .5; }

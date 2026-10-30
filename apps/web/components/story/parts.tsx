@@ -3,6 +3,8 @@
 // the chart heading (the title is the finding), hypnogram marks and a measured box for SVG charts.
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { SleepStage } from '@sleep-lab/core';
+import type { NightGap } from '@/lib/data/types.ts';
+import { gapLabel } from './real.ts';
 import { Chapter, Reveal } from '../motion.tsx';
 import s from './story.module.css';
 
@@ -127,3 +129,50 @@ export function HypnoBlocks({
 }
 
 export const cssVars = (o: Record<string, string | number>) => o as CSSProperties;
+
+/**
+ * Stretches without trustworthy data, drawn as quiet filled bands with a short label ("No data", "Stale, left out").
+ * Never coloured: missing data is not a finding. Labels only where the band is wide enough to hold them.
+ */
+export function GapBands({
+  gaps,
+  x,
+  from,
+  to,
+  y0,
+  y1,
+  labelY,
+}: {
+  gaps: readonly NightGap[];
+  x: (t: number) => number;
+  from: number;
+  to: number;
+  y0: number;
+  y1: number;
+  /** Baseline of the label; omit for no labels. */
+  labelY?: number;
+}) {
+  return (
+    <g aria-hidden>
+      {gaps.map((g, i) => {
+        if (g.end <= from || g.start >= to) return null;
+        const a = x(Math.max(from, g.start));
+        const b = x(Math.min(to, g.end));
+        if (b - a < 1) return null;
+        const label = gapLabel(g);
+        return (
+          <g key={i}>
+            <rect x={a} y={y0} width={b - a} height={Math.max(0, y1 - y0)} fill="var(--surface-2)" opacity={0.85} />
+            <line x1={a} x2={a} y1={y0} y2={y1} stroke="var(--hairline-2)" strokeDasharray="2 3" />
+            <line x1={b} x2={b} y1={y0} y2={y1} stroke="var(--hairline-2)" strokeDasharray="2 3" />
+            {labelY !== undefined && b - a >= label.length * 7.4 + 12 && (
+              <text x={(a + b) / 2} y={labelY} textAnchor="middle" className={s.gapLabel}>
+                {label}
+              </text>
+            )}
+          </g>
+        );
+      })}
+    </g>
+  );
+}

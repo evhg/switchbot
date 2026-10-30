@@ -203,6 +203,12 @@ export interface Night {
   ac: AcCommand[];
   /** Curve that was active that night. */
   curveId: string;
+  /**
+   * True when the aircon was run by hand: the controller sent no live command that night (none at all, or only
+   * dry-run logs). Room metrics then score temperature against the steady comfort target (manualComfortCurve), not
+   * against the stored plan, which never ran. Undefined = controlled (simulated nights, older callers).
+   */
+  manual?: boolean;
   events: RoomEvent[];
   people: PersonNight[];
   tags: TagKey[];
@@ -237,6 +243,14 @@ export interface RoomNightMetrics {
   minutesRhInBand: number;
   /** Fitted next-morning decay ACH, null if no clean decay window. */
   achMorning: number | null;
+  /**
+   * Overnight ventilation from the end-of-night CO₂ level (core plateauAch, last 90 min before wake), null when it
+   * can't be estimated. Kind 'upper_bound' = CO₂ was still rising, so the true value is lower. Used by the occupancy
+   * detector, the report and the app whenever there is no morning decay (achMorning).
+   */
+  achPlateau?: number | null;
+  achPlateauKind?: 'plateau' | 'upper_bound' | null;
+  achPlateauPpm?: number | null;
   /** 0..100 */
   sleepAirScore: number;
   acCommands: number;

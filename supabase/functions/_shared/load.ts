@@ -207,25 +207,30 @@ export interface LoadNightOptions {
   roomBucketMin?: number;
   /** Include stored events (the report recomputes them for the target night). */
   withEvents?: boolean;
+  /** Room readings already loaded (e.g. cleaned by the night analysis); skips the readings query. */
+  room?: RoomReading[];
 }
 
 export async function loadNight(db: Db, row: NightRow, opts: LoadNightOptions): Promise<Night> {
   const { from, to } = nightWindow(row.date);
   const [room, outdoor, ac, events, people] = await Promise.all([
-    loadRoom(db, opts.deviceId, from, to, opts.roomBucketMin ?? 0),
+    opts.room ? Promise.resolve(opts.room) : loadRoom(db, opts.deviceId, from, to, opts.roomBucketMin ?? 0),
     db.from('outdoor_readings').select('ts,temp_c,rh').gte('ts', iso(from)).lt('ts', iso(to)).order('ts').limit(1000),
     db.from('ac_commands').select('*').eq('night_date', row.date).order('ts'),
     opts.withEvents ? db.from('events').select('*').eq('night_date', row.date).order('start_ts') : Promise.resolve({ data: [], error: null }),
     Promise.all(opts.personIds.map((p) => loadPersonNight(db, p, row.date))),
   ]);
+  const acRows = must(ac, 'ac_commands') as AcCommandRow[];
   return {
     date: row.date,
+    // Run by hand = no live command was sent (none, or dry-run logs only): scored against the comfort target.
+    manual: !acRows.some((c) => !c.dry_run && c.sent_ok !== false),
     lightsOut: Date.parse(row.lights_out),
     wake: Date.parse(row.wake),
     ...(rowSleepOnset(row) !== undefined ? { sleepOnset: rowSleepOnset(row)! } : {}),
     room,
     outdoor: (must(outdoor, 'outdoor_readings') as { ts: string; temp_c: number; rh: number }[]).map(rowToOutdoor),
-    ac: effectiveCommands(must(ac, 'ac_commands') as AcCommandRow[]).map(rowToCommand),
+    ac: effectiveCommands(acRows).map(rowToCommand),
     curveId: row.curve_id ?? DEFAULT_CURVE.id,
     events: (must(events, 'events') as EventRow[]).map(rowToEvent),
     people: people.filter((p): p is PersonNight => p !== null),

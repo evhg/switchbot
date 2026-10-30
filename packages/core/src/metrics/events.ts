@@ -1,11 +1,15 @@
 import type { Ms, RoomEvent, RoomReading } from '../types.ts';
-import { DEFAULT_OUTDOOR_CO2, fitDecayAch } from './co2.ts';
+import { DEFAULT_OUTDOOR_CO2, fitDecayAch, plateauAch } from './co2.ts';
 import { HOUR, MIN, clamp, ictHour, lineSse, median, rollingMedian, theilSen, toMinuteGrid, type MinuteGrid } from './util.ts';
 
 /** One sleeping adult (~0.0031 L/s) in 120 m³ adds ≈ 93 ppm/h; rounded up for awake-ish periods. */
 const PERSON_PPM_H = 95;
 /** Fastest "normal" ventilation; a drop faster than this decay implies an opened door. */
 const DOOR_ACH = 1.0;
+/** A shower's peak RH and temperature bump are measured within this many minutes of its onset. */
+const SHOWER_MEASURE_MIN = 15;
+/** Ventilation for the occupancy loss term when nothing better is known. */
+const DEFAULT_OCCUPANCY_ACH = 0.15;
 
 const r1 = (x: number) => Math.round(x * 10) / 10;
 const r2c = (x: number) => Math.round(x * 100) / 100;
@@ -47,11 +51,27 @@ function detectShowers(g: MinuteGrid): RoomEvent[] {
       if (recent >= 0 && v - rh[recent]! >= 4) { end = recent; break; }
       if (v > rh[peak]!) peak = k;
     }
+    // Peak RH and the temperature bump belong to the shower itself: measure them within SHOWER_MEASURE_MIN of the
+    // onset, and stop early once the temperature climbs for more than 3 min in a row (the aircon switching off at
+    // wake warms the room and lets RH drift up for an hour; that is not the shower).
+    const cap = Math.min(n - 1, start + SHOWER_MEASURE_MIN, peak + 5);
     let tBase = g.temp[low]!;
-    let tMax = tBase;
-    for (let k = low; k <= Math.min(n - 1, peak + 5); k++) if (g.temp[k]! > tMax) tMax = g.temp[k]!;
+    let tMax = Number.isFinite(tBase) ? tBase : -Infinity;
+    let mPeak = i;
+    let climb = 0;
+    for (let k = low; k <= cap; k++) {
+      const tk = g.temp[k]!;
+      const tPrev = g.temp[k - 1];
+      if (k > i && Number.isFinite(tk) && tPrev !== undefined && Number.isFinite(tPrev)) {
+        climb = tk > tPrev ? climb + 1 : tk < tPrev ? 0 : climb;
+        if (climb > 3) break;
+      }
+      if (Number.isFinite(tk) && tk > tMax) tMax = tk;
+      if (k >= i && Number.isFinite(rh[k]!) && rh[k]! > rh[mPeak]!) mPeak = k;
+    }
     if (!Number.isFinite(tBase)) tBase = tMax;
-    const rise = Math.max(rh[peak]! - pre, rise0);
+    if (!Number.isFinite(tMax)) tMax = tBase;
+    const rise = Math.max(rh[mPeak]! - pre, rise0);
     const tempBump = tMax - tBase >= 0.3;
     const prev = out[out.length - 1];
     const startTs = g.t0 + start * MIN;
@@ -61,7 +81,7 @@ function detectShowers(g: MinuteGrid): RoomEvent[] {
       start: startTs,
       ...(end >= 0 ? { end: g.t0 + end * MIN } : {}),
       confidence: r2c(clamp(0.55 + 0.02 * (rise - 10) + (tempBump ? 0.15 : 0) + (end >= 0 ? 0.1 : 0), 0, 0.97)),
-      detail: { preRh: Math.round(pre), peakRh: Math.round(rh[peak]!), riseRh: Math.round(rise), tempBumpC: r1(tMax - tBase) },
+      detail: { preRh: Math.round(pre), peakRh: Math.round(rh[mPeak]!), riseRh: Math.round(rise), tempBumpC: r1(Number.isFinite(tMax - tBase) ? tMax - tBase : 0) },
     });
     i = end >= 0 ? end : peak + 30;
   }
@@ -171,7 +191,7 @@ function occupancyLevels(persons: readonly number[]): Segment[] {
   return segs;
 }
 
-function detectOccupancy(g: MinuteGrid, readings: RoomReading[], doors: RoomEvent[], outdoor: number, lightsOut?: Ms, wake?: Ms): RoomEvent[] {
+function detectOccupancy(g: MinuteGrid, readings: RoomReading[], doors: RoomEvent[], outdoor: number, lightsOut?: Ms, wake?: Ms, nightAch?: number | null): RoomEvent[] {
   const n = g.co2.length;
   if (n < 90) return [];
   const c = g.co2;
@@ -180,7 +200,12 @@ function detectOccupancy(g: MinuteGrid, readings: RoomReading[], doors: RoomEven
   // Ventilation estimate for the loss term, from decays outside door openings.
   const doorFree = readings.filter((r) => !doors.some((d) => r.ts >= d.start - 2 * MIN && r.ts <= (d.end ?? d.start) + 15 * MIN));
   const decay = fitDecayAch(doorFree, { outdoorCo2: outdoor });
-  const k = decay && decay.ach >= 0.05 && decay.ach <= 1.2 ? decay.ach : 0.15;
+  // Mass balance dC/dt = G·n/V − ACH·(C − Cout): without the loss term a room nearing equilibrium (CO₂ rising ever
+  // more slowly overnight) would read as people leaving. ACH: a measured decay, else the night's estimate (the
+  // end-of-night plateau), else a sealed-room default.
+  const inRange = (x: number | null | undefined): x is number => typeof x === 'number' && x >= 0.05 && x <= 1.2;
+  const achFrom: 'decay' | 'plateau' | 'default' = decay && inRange(decay.ach) ? 'decay' : inRange(nightAch) ? 'plateau' : 'default';
+  const k = achFrom === 'decay' ? decay!.ach : achFrom === 'plateau' ? nightAch! : DEFAULT_OCCUPANCY_ACH;
   const raw = slope.map((s, i) => (s + k * Math.max(0, cs[i]! - outdoor)) / PERSON_PPM_H);
   for (const d of doors) {
     const lo = Math.round((d.start - g.t0) / MIN) - 20;
@@ -232,6 +257,7 @@ function detectOccupancy(g: MinuteGrid, readings: RoomReading[], doors: RoomEven
       riseRatePpmH: Math.round(median(slope.slice(startIdx + 20, startIdx + 60).filter(Number.isFinite))),
       persons: r1(medP),
       achUsed: Math.round(k * 100) / 100,
+      achFrom,
       ...(preOccupied ? { roomOccupiedFrom: g.t0 + entryIdx * MIN } : {}),
     },
   });
@@ -309,13 +335,15 @@ function roomEmpty(g: MinuteGrid, segs: Segment[], slope: number[], readings: Ro
  * faster than ACH 1 decay), in_bed / both_in_bed / out_of_bed (CO₂ generation regimes from a 40-min
  * Theil–Sen slope plus ventilation loss), room_empty (daytime decay toward baseline).
  */
-export function detectEvents(readings: RoomReading[], opts: { lightsOut?: Ms; wake?: Ms } = {}): RoomEvent[] {
+export function detectEvents(readings: RoomReading[], opts: { lightsOut?: Ms; wake?: Ms; ach?: number | null } = {}): RoomEvent[] {
   const g = toMinuteGrid(readings);
   if (!g) return [];
   const outdoor = DEFAULT_OUTDOOR_CO2;
   const doors = detectDoors(g, outdoor);
   // Humid outdoor air rushing in through an opened door looks like a shower; a shower never drops CO₂.
   const showers = detectShowers(g).filter((s) => !doors.some((d) => Math.abs(d.start - s.start) <= 5 * MIN));
-  const occ = detectOccupancy(g, readings, doors, outdoor, opts.lightsOut, opts.wake);
+  // The night's ventilation estimate: given by the caller, else from where CO₂ ended the night (plateauAch).
+  const ach = opts.ach !== undefined ? opts.ach : opts.wake !== undefined ? (plateauAch(readings, opts.wake)?.ach ?? null) : null;
+  const occ = detectOccupancy(g, readings, doors, outdoor, opts.lightsOut, opts.wake, ach);
   return [...showers, ...doors, ...occ].sort((a, b) => a.start - b.start);
 }

@@ -5,10 +5,13 @@
 // This file owns the data wiring (components/story/model.ts), the phone top bar (current scene + progress line),
 // the desktop "On this page" rail and the drill-in sheets. Browsing another night re-tells that night from the top.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_CURVE, SLEEP_AIR_WEIGHTS, SLEEP_SCORE_WEIGHTS, type PersonNightMetrics } from '@sleep-lab/core';
-import { personColor, personName, useData, useNightDetail, useSelectedNight, withNames } from '@/lib/data/context.tsx';
+import { DEFAULT_CURVE, MANUAL_COMFORT_TARGET_C, SLEEP_AIR_WEIGHTS, SLEEP_SCORE_WEIGHTS, type PersonNightMetrics } from '@sleep-lab/core';
+import { personColor, personName, useData, useNightDetail, useNightInfo, useSelectedNight, withNames } from '@/lib/data/context.tsx';
+import { curveById, fetchNightCurveId } from '@/lib/data/supabase.ts';
+import { tonightDate } from '@/lib/tonight.ts';
 import { usePlannedCurve } from '@/lib/curve-store.ts';
-import { dayLabel, dur, fmt, hm, tidyReport } from '@/lib/format.ts';
+import { dayLabel, dur, fmt, hm, ictDate as ictDateOf, ictMidnight as ictMidnightOf, tidyReport } from '@/lib/format.ts';
+import { clock, planTimes } from '../system/model.ts';
 import { EVENT_LABEL, EventGlyph, NightStrip } from '../charts/NightStrip.tsx';
 import { Waterfall } from '../charts/Waterfall.tsx';
 import { subscribeScroll, useActiveChapter } from '../motion.tsx';
@@ -21,6 +24,8 @@ import { Drivers, type DriverRow } from '../story/Drivers.tsx';
 import { LightsOut } from '../story/LightsOut.tsx';
 import { buildStory, co2CrossAt, co2PeakAt, nightSteps, whoLabel } from '../story/model.ts';
 import { TheAir } from '../story/TheAir.tsx';
+import { ConnectHealthCard } from '../story/ConnectHealth.tsx';
+import { qualityNote, roomVerdict } from '../story/real.ts';
 import { TheNight } from '../story/TheNight.tsx';
 import { Tonight, tonightCopy } from '../story/Tonight.tsx';
 import { Verdict, VerdictSkeleton, type HeroPerson } from '../story/Verdict.tsx';
@@ -101,10 +106,23 @@ function useStoryTopbar() {
 export function TodayScreen() {
   useStoryChrome({ topbar: true });
   useStoryTopbar();
-  const { latest, progress, date, setDate } = useData();
+  const { latest, progress, date, setDate, sourceKind } = useData();
   const sel = useSelectedNight();
   const { detail: rawDetail } = useNightDetail(date);
-  const [plan] = usePlannedCurve();
+  const info = useNightInfo(date);
+  const [localPlan] = usePlannedCurve();
+  const live = sourceKind === 'supabase';
+  // Real household: tonight's plan is the curve on tonight's nights row (the backend's default when there is none yet).
+  const [tonightCurve, setTonightCurve] = useState<string | null>(null);
+  useEffect(() => {
+    if (!live) return;
+    let alive = true;
+    fetchNightCurveId(tonightDate()).then((id) => alive && setTonightCurve(id), () => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [live]);
+  const plan = live ? curveById(tonightCurve, latest?.curves) : localPlan;
   const [sheet, setSheet] = useState<SheetKind>(null);
   const dataset = latest;
   // useNightDetail keeps the previous night's detail while the next loads: never mix nights.
@@ -121,10 +139,13 @@ export function TodayScreen() {
     window.scrollTo({ top: 0, behavior: 'auto' });
   }, [date]);
 
+  // The night is told against the curve it was planned with (the simulator's nights all use the default).
+  const curve = useMemo(() => (sel ? curveById(sel.night.curveId, dataset?.curves) : DEFAULT_CURVE), [sel, dataset?.curves]);
+  const nightInfo = info && sel && info.date === sel.night.date ? info : null;
   const model = useMemo(
-    () => (sel && dataset ? buildStory(sel.night, dataset.people, (id) => personColor(dataset.people, id), detail, DEFAULT_CURVE) : null),
+    () => (sel && dataset ? buildStory(sel.night, dataset.people, (id) => personColor(dataset.people, id), detail, curve, nightInfo) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sel?.night, dataset?.people, detail],
+    [sel?.night, dataset?.people, detail, curve, nightInfo],
   );
   const room = sel?.room;
   const peakAt = useMemo(() => (sel && room ? co2PeakAt(sel.night, room.co2Max) : 0), [sel, room]);
@@ -161,7 +182,16 @@ export function TodayScreen() {
     const b = detail?.personParts[id]?.recovery.baseline;
     return m && b && Number.isFinite(b.deepMin) ? m.deepMin - b.deepMin : NaN;
   };
-  const verdict = detail ? `${peopleLead(heroPeople, deepVsBase)} ${roomClause(withNames(detail.report.headline, dataset))}`.trim() : null;
+  const roomOnly = model.roomOnly;
+  const everSynced = dataset.nights.some((n) => n.people.length > 0);
+  const manual = model.control === 'manual';
+  const verdict = roomOnly
+    ? roomVerdict(model.series, night.lightsOut, night.wake, room.co2Max, peakAt, crossAt)
+    : detail
+      ? `${peopleLead(heroPeople, deepVsBase)} ${roomClause(withNames(detail.report.headline, dataset))}`.trim()
+      : null;
+  const note = qualityNote(nightInfo, night.lightsOut, night.wake, room.achMorning === null && !model.air.plateau);
+  const report = nightInfo?.report ?? null;
 
   const isPerson = (label: string) => dataset.people.some((p) => label.startsWith(`${p.id}:`));
   const allDrivers = (detail?.report.drivers ?? []).map((d) => ({ ...d, label: tidyReport(d.label) }));
@@ -182,9 +212,9 @@ export function TodayScreen() {
   const tonight = tonightCopy(plan, night, room);
   const glance = [
     { label: 'Lights out', value: hm(night.lightsOut) },
-    { label: 'On the curve', value: `${tonight.onCurve}%` },
+    manual ? { label: 'Aircon', value: 'By hand' } : { label: 'On the curve', value: `${tonight.onCurve}%` },
     { label: 'CO₂ over 1,000', value: room.minutesCo2Over1000 > 0 ? dur(room.minutesCo2Over1000) : 'Never' },
-    { label: 'Tonight', value: tonight.short },
+    { label: 'Tonight', value: live && isLatest ? `Pre-cool ${clock(planTimes(plan, Math.round((night.lightsOut - ictMidnightOf(night.date)) / 60_000) + 1440).starts)}` : tonight.short },
   ];
 
   return (
@@ -199,22 +229,27 @@ export function TodayScreen() {
           glance={glance}
           model={model}
           onFocus={(f) => setSheet(f === 'room' ? { kind: 'room' } : { kind: 'person', id: f })}
+          roomOnly={roomOnly}
+          note={note}
+          side={<ConnectHealthCard everSynced={everSynced} />}
         />
         <LightsOut model={model} />
         <TheNight model={model} steps={steps} onOpenStrip={() => setSheet({ kind: 'strip' })} />
         <TheAir model={model} room={room} history={history} baseline={baseline} peakAt={peakAt} crossAt={crossAt} />
-        <Bodies people={heroPeople} dataset={dataset} index={sel.index} detail={detail} ready={vitalsReady} onHistory={() => setSheet({ kind: 'vitals' })} />
+        {!roomOnly && <Bodies people={heroPeople} dataset={dataset} index={sel.index} detail={detail} ready={vitalsReady} onHistory={() => setSheet({ kind: 'vitals' })} />}
         <Drivers
           rows={driverRows}
           sleepAir={room.sleepAirScore}
           meanRecovery={meanRecovery}
-          insights={(detail?.report.insights ?? []).map((t) => tidyReport(withNames(t, dataset)))}
+          insights={(report?.insights.length ? report.insights : detail?.report.insights ?? []).map((t) => tidyReport(withNames(t, dataset)))}
           loading={!detail}
           onWaterfall={() => setSheet({ kind: 'waterfall' })}
+          note={manual ? `The aircon was run by hand this night, so temperature is scored against the steady ${MANUAL_COMFORT_TARGET_C}° comfort target, not the plan stored for it (${curve.name}).` : null}
+          report={report ? { headline: tidyReport(withNames(report.headline, dataset)), when: report.createdAt ? `${dayLabel(ictDateOf(report.createdAt))} ${hm(report.createdAt)}` : report.generatedBy } : null}
         />
-        <Tonight plan={plan} night={night} room={room} onLatest={!isLatest ? () => setDate(latestDate) : null} />
+        <Tonight plan={plan} night={night} room={room} onLatest={!isLatest ? () => setDate(latestDate) : null} live={live && isLatest} manualLast={manual} />
       </div>
-      <OnThisPage items={SCENES} />
+      <OnThisPage items={roomOnly ? SCENES.filter((x) => x.id !== 'bodies') : SCENES} />
 
       <Sheet
         open={sheet !== null}
@@ -241,7 +276,7 @@ export function TodayScreen() {
               <SubScores
                 items={[
                   { label: 'CO₂', value: detail.roomParts.co2 * 100, weight: SLEEP_AIR_WEIGHTS.co2 },
-                  { label: 'On the curve', value: detail.roomParts.temp * 100, weight: SLEEP_AIR_WEIGHTS.temp },
+                  { label: manual ? 'Comfort band' : 'On the curve', value: detail.roomParts.temp * 100, weight: SLEEP_AIR_WEIGHTS.temp },
                   { label: 'Humidity', value: detail.roomParts.rh * 100, weight: SLEEP_AIR_WEIGHTS.rh },
                   { label: 'Stability', value: detail.roomParts.stability * 100, weight: SLEEP_AIR_WEIGHTS.stability },
                 ]}
@@ -284,7 +319,7 @@ export function TodayScreen() {
         {sheet?.kind === 'strip' && (
           <div className={s.sheetBody}>
             <p className="sec">Both hypnograms over room temperature (plan dashed), humidity and CO₂. Touch the strip to read any minute.</p>
-            <NightStrip night={night} people={dataset.people} curve={DEFAULT_CURVE} events={detail?.events ?? []} />
+            <NightStrip night={night} people={dataset.people} curve={curve} events={detail?.events ?? []} />
             <div className={`cap ${s.glyphKey}`}>
               {(['shower', 'door_open', 'in_bed', 'both_in_bed', 'out_of_bed'] as const).map((k) => (
                 <span key={k}>

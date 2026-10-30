@@ -8,7 +8,7 @@ import { dur, fmt, hm, hourTicks, MIN, shortDate } from '@/lib/format.ts';
 import { linePath, scale } from '../charts/common.tsx';
 import { DrawPath, Reveal } from '../motion.tsx';
 import { Placeholder, useWidth } from '../ui.tsx';
-import { Scene, SceneCols, SceneText, VisHead } from './parts.tsx';
+import { GapBands, Scene, SceneCols, SceneText, VisHead } from './parts.tsx';
 import { valueAt, type StoryModel } from './model.ts';
 import s from './story.module.css';
 
@@ -74,6 +74,7 @@ function Co2Chart({ model, room, peakAt, crossAt }: { model: StoryModel; room: R
               </g>
             ),
           )}
+          <GapBands gaps={model.gaps} x={geo.x} from={model.lo} to={model.wake} y0={pt} y1={H - pb} labelY={H - pb - 10} />
           <path d={geo.area} fill="var(--signal-soft)" className="fade-late" />
           <line x1={0} x2={W - pr} y1={y1000} y2={y1000} stroke="var(--signal)" strokeDasharray="2 3" />
           <text x={W - pr + 10} y={y1000 + 5} className={s.tickSig}>
@@ -113,7 +114,7 @@ function Co2Chart({ model, room, peakAt, crossAt }: { model: StoryModel; room: R
 }
 
 /** Linear 0–0.5 air changes per hour: last night in ink, what two sleepers need as a signal tick. */
-function FreshAir({ ach, need }: { ach: number | null; need: number }) {
+function FreshAir({ ach, need, what = 'last night' }: { ach: number | null; need: number; what?: string }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const W = Math.max(width, 200);
   const max = Math.max(0.5, Math.ceil(Math.max(need, ach ?? 0) * 12) / 10);
@@ -144,13 +145,13 @@ function FreshAir({ ach, need }: { ach: number | null; need: number }) {
             <>
               <rect x={0} y={y - 3} width={x(ach)} height={3} fill="var(--text)" />
               <rect x={x(ach) - 1.5} y={y - 18} width={3} height={22} fill="var(--text)" />
-              <text x={x(ach)} y={y - 26} textAnchor={close && ach < need ? 'end' : 'middle'} className={s.tickInk}>
-                {fmt(ach, 2)} last night
+              <text x={x(ach)} y={y - 26} textAnchor={close ? (ach < need ? 'end' : 'start') : 'middle'} className={s.tickInk}>
+                {fmt(ach, 2)} {what}
               </text>
             </>
           )}
           <rect x={x(need) - 1.5} y={y - 18} width={3} height={22} fill="var(--signal)" />
-          <text x={x(need)} y={y - 26} textAnchor={close && ach !== null && ach < need ? 'start' : 'middle'} className={s.tickSig}>
+          <text x={x(need)} y={y - 26} textAnchor={close && ach !== null ? (ach < need ? 'start' : 'end') : 'middle'} className={s.tickSig}>
             {fmt(need, 2)} needed
           </text>
           <text x={W - 2} y={y + 48} textAnchor="end" className={s.tick}>
@@ -175,7 +176,9 @@ function NightBars({ history }: { history: RoomNightMetrics[] }) {
   const lo = 0;
   const hi = Math.max(1200, ...vals.filter(Number.isFinite)) + 40;
   const y = scale(lo, hi, H - pb, pt);
-  const bw = (W - pr) / history.length;
+  // At least 30 slots, newest on the right, so a short history doesn't turn into a few walls.
+  const bw = (W - pr) / Math.max(30, history.length);
+  const off = (Math.max(30, history.length) - history.length) * bw;
   const lastV = vals.at(-1)!;
   return (
     <div ref={ref} className={s.chart} style={{ height: H }} role="img" aria-label={`Nightly CO₂ average for ${history.length} nights; last night ${fmt(lastV)} ppm`}>
@@ -192,7 +195,7 @@ function NightBars({ history }: { history: RoomNightMetrics[] }) {
             const last = i === history.length - 1;
             const fill = v > 1000 ? 'var(--signal)' : last ? 'var(--text)' : 'var(--hairline-2)';
             return (
-              <rect key={r.date} x={i * bw + bw * 0.18} y={y(v)} width={Math.max(1, bw * 0.64)} height={Math.max(1, y(lo) - y(v))} rx={1.5} fill={fill}>
+              <rect key={r.date} x={off + i * bw + bw * 0.18} y={y(v)} width={Math.max(1, bw * 0.64)} height={Math.max(1, y(lo) - y(v))} rx={1.5} fill={fill}>
                 <title>{`${shortDate(r.date)} · ${fmt(v)} ppm`}</title>
               </rect>
             );
@@ -201,7 +204,7 @@ function NightBars({ history }: { history: RoomNightMetrics[] }) {
           <text x={W - pr + 10} y={y(1000) + 5} className={s.tickSig}>
             1,000
           </text>
-          <text x={0} y={H - 8} className={s.tick}>
+          <text x={off} y={H - 8} className={s.tick}>
             {shortDate(history[0]!.date)}
           </text>
           <text x={W - pr} y={H - 8} textAnchor="end" className={s.tickInk}>
@@ -210,6 +213,25 @@ function NightBars({ history }: { history: RoomNightMetrics[] }) {
         </svg>
       )}
     </div>
+  );
+}
+
+/** Fewer than five nights: a bar chart would be one lonely bar, so list them instead. */
+function ShortHistory({ history }: { history: RoomNightMetrics[] }) {
+  const rows = history.filter((r) => Number.isFinite(r.co2Mean));
+  return (
+    <>
+      <VisHead title={`Nightly CO₂: ${rows.length} night${rows.length === 1 ? '' : 's'} so far`} cap="The 30-night comparison fills in as nights arrive" />
+      <ol className={s.shortHist}>
+        {rows.map((r, i) => (
+          <li key={r.date}>
+            <span>{i === rows.length - 1 ? 'Last night' : shortDate(r.date)}</span>
+            <b className="num">{fmt(r.co2Mean)} ppm</b>
+            <span className="cap">peak {fmt(r.co2Max)}</span>
+          </li>
+        ))}
+      </ol>
+    </>
   );
 }
 
@@ -233,12 +255,26 @@ export function TheAir({
   const past = (baseline ?? []).filter((r) => Number.isFinite(r.co2Mean));
   const avg = past.length ? past.reduce((a, r) => a + r.co2Mean, 0) / past.length : NaN;
   const d = room.co2Mean - avg;
-  const ach = room.achMorning;
+  const plateau = model.air.plateau;
+  // The morning decay is the measurement; without it, the overnight plateau gives an estimate (assumes two sleepers).
+  const ach = room.achMorning ?? plateau?.ach ?? null;
+  const estimated = room.achMorning === null && plateau !== null;
+  // Still rising at wake: the room never reached balance, so the figure is a ceiling, not an estimate.
+  const ceiling = estimated && plateau?.kind === 'upper_bound';
   const need = model.air.achNeeded;
+  const morningGap = model.gaps.find((g) => g.start >= model.wake - 30 * MIN && g.start < model.wake + 4 * 60 * MIN);
   const lede = [
     `Last night averaged ${fmt(room.co2Mean)} ppm`,
     Number.isFinite(d) && past.length >= 3 ? (Math.abs(d) < 25 ? `, in line with your ${past.length}-night mean.` : `, ${fmt(Math.abs(d))} ${d >= 0 ? 'above' : 'below'} your ${past.length}-night mean.`) : '.',
-    ach !== null && ach < need ? ` Two sleepers need about ${fmt(need / Math.max(0.01, ach), 1)}× the fresh air this room got.` : ach !== null ? ' The room got enough fresh air for two sleepers.' : '',
+    ceiling && plateau
+      ? ` CO₂ was still creeping up at wake (${fmt(plateau.ppm)} ppm), so fresh air was at most ${fmt(plateau.ach, 2)} air changes an hour${ach !== null && ach < need ? ', not enough to stay under 1,000' : ', about what two sleepers need, with no room to spare'}.`
+      : estimated && plateau
+      ? ` CO₂ levelled off around ${fmt(plateau.ppm)} ppm: the fresh air leaking in balanced two sleepers${ach !== null && ach >= need ? ', enough to stay under 1,000' : ', not quite enough to stay under 1,000'}.`
+      : ach !== null && ach < need
+        ? ` Two sleepers need about ${fmt(need / Math.max(0.01, ach), 1)}× the fresh air this room got.`
+        : ach !== null
+          ? ' The room got enough fresh air for two sleepers.'
+          : '',
   ].join('');
   const nOver = history ? history.filter((r) => r.co2Mean > 1000).length : 0;
   return (
@@ -253,11 +289,24 @@ export function TheAir({
         </Reveal>
         <div className={s.pair}>
           <Reveal delay={80}>
-            <VisHead title={ach !== null ? `Fresh air last night: ${fmt(ach, 2)}\u00a0air changes an\u00a0hour` : 'Fresh air: not measured this morning'} cap={`Two sleepers need about ${fmt(need, 2)} to stay under 1,000 ppm`} />
-            <FreshAir ach={ach} need={need} />
+            <VisHead
+              title={ach !== null ? `Fresh air last night: ${ceiling ? 'at most ' : estimated ? 'about ' : ''}${fmt(ach, 2)}\u00a0air changes an\u00a0hour` : 'Fresh air: not measured this morning'}
+              cap={
+                ceiling && plateau
+                  ? `A ceiling from the CO₂ level at wake (${fmt(plateau.ppm)} ppm, still rising), assuming two sleepers. They need about ${fmt(need, 2)} to stay under 1,000 ppm.`
+                  : estimated && plateau
+                  ? `Estimated from where CO₂ levelled off (${fmt(plateau.ppm)} ppm), assuming two sleepers. They need about ${fmt(need, 2)} to stay under 1,000 ppm.`
+                  : ach === null && morningGap
+                    ? `Measured from the CO₂ drop after you get up; the meter was offline from ${hm(morningGap.start)}. Two sleepers need about ${fmt(need, 2)}.`
+                    : `Two sleepers need about ${fmt(need, 2)} to stay under 1,000 ppm`
+              }
+            />
+            <FreshAir ach={ach} need={need} what={ceiling ? 'at most' : estimated ? 'estimated' : 'last night'} />
           </Reveal>
           <Reveal delay={140}>
-            {history ? (
+            {history && history.filter((r) => Number.isFinite(r.co2Mean)).length < 5 ? (
+              <ShortHistory history={history} />
+            ) : history ? (
               <>
                 <VisHead title={`${nOver} of the last ${history.length} nights averaged over 1,000\u00a0ppm`} cap="Nightly CO₂ average, nights over 1,000 marked" />
                 <NightBars history={history} />

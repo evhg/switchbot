@@ -64,7 +64,6 @@ export function PlanChart({ plan, last, height }: { plan: TemperatureCurve; last
 
   const hours = hourTicks(lo + startM * MIN, lo + endM * MIN, W < 560 ? 2 : 1);
   const hp = hover !== null ? data[Math.max(0, Math.min(data.length - 1, Math.round((hover - startM) / 5)))] : undefined;
-  const labelEvery = W < 560 ? 2 : 1;
 
   return (
     <div>
@@ -93,16 +92,25 @@ export function PlanChart({ plan, last, height }: { plan: TemperatureCurve; last
             ))}
             <path d={geo.actD} fill="none" stroke="var(--muted)" strokeWidth={1.5} strokeLinejoin="round" />
             <DrawPath d={geo.planD} fill="none" stroke="var(--signal)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-            {geo.nodes.map((n, i) => (
-              <g key={n.m} className="fade-late">
-                <circle cx={n.x} cy={n.y} r={4.5} fill="var(--bg)" stroke="var(--signal)" strokeWidth={2} />
-                {i % labelEvery === 0 && (
-                  <text x={n.x} y={n.y - 12} textAnchor={i === 0 ? 'start' : 'middle'} style={{ fill: 'var(--text)', stroke: 'var(--bg)', strokeWidth: 5, paintOrder: 'stroke', strokeLinejoin: 'round' }}>
-                    {fmt(n.c, 1)}°
-                  </text>
-                )}
-              </g>
-            ))}
+            {(() => {
+              // A node only where the target changes (a steady curve is one node); labels never collide.
+              const changes = geo.nodes.filter((n, i) => i === 0 || Math.abs(n.c - geo.nodes[i - 1]!.c) >= 0.05);
+              let lastX = -Infinity;
+              return changes.map((n, i) => {
+                const label = n.x - lastX >= 48;
+                if (label) lastX = n.x;
+                return (
+                  <g key={n.m} className="fade-late">
+                    <circle cx={n.x} cy={n.y} r={4.5} fill="var(--bg)" stroke="var(--signal)" strokeWidth={2} />
+                    {label && (
+                      <text x={n.x} y={n.y - 12} textAnchor={i === 0 ? 'start' : 'middle'} style={{ fill: 'var(--text)', stroke: 'var(--bg)', strokeWidth: 5, paintOrder: 'stroke', strokeLinejoin: 'round' }}>
+                        {fmt(n.c, 1)}°
+                      </text>
+                    )}
+                  </g>
+                );
+              });
+            })()}
             <line x1={0} x2={W - pr} y1={H - pb} y2={H - pb} stroke="var(--axis)" />
             {hours.map((t) => {
               const x = geo.x((t - lo) / MIN);

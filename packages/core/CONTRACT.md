@@ -217,3 +217,24 @@ export function parseDailyRestingHr(json: unknown): { date: string; bpm: number;
 export function parseDailyHrv(json: unknown): { date: string; averageMs?: number; deepSleepRmssdMs?: number; nonRemHr?: number }[]
 export async function verifyGoogleHealthSignature(...): Promise<boolean>   // best effort; see docs/research/health-data.md
 ```
+
+## metrics/quality.ts (2026-10-30)
+
+```ts
+export function cleanRoomReadings(readings: readonly RoomReading[], opts: CleanOptions): { readings: RoomReading[]; quality: RoomDataQuality }
+// opts: { from, to, lightsOut, wake, frozenMin = 30, co2ChangePpm = 25, gapMin = 5, lowCoverage = 0.8 }
+// Drops runs of identical temp+RH longer than frozenMin when CO2 moved >= co2ChangePpm ('temp_rh') or CO2 is identical
+// too ('all'); keeps identical T/RH with only CO2 noise. Gaps = no row for > gapMin. CO2 < 300 rows are kept and counted.
+// RoomDataQuality: { from, to, rawCount, keptCount, invalidCo2Count, frozen: FrozenStretch[], gaps: DataGap[],
+//   frozenMinutes, frozenNightMinutes, gapMinutes, gapNightMinutes, coverage (0..1, lights-out → wake), coveragePct,
+//   flags: ('frozen_temp_rh'|'frozen_all'|'gap_evening'|'gap_overnight'|'gap_morning'|'low_coverage'|'no_room_data'|'invalid_co2')[] }
+```
+
+## Manual nights and overnight ventilation (2026-10-30)
+
+- `Night.manual?: boolean`: true when the controller sent no live command. `roomNightBreakdown` and `buildRuleReport`
+  then score against `scoringCurve(night, plan)` = `manualComfortCurve()` (flat 18.5 °C). The backend and the app set
+  it the same way, so they get the same score.
+- `RoomNightMetrics.achPlateau / achPlateauKind / achPlateauPpm` come from `plateauAch(readings, wake)`.
+  `detectEvents(readings, {lightsOut, wake, ach?})` uses this value in its occupancy mass balance when there is no
+  measured decay.

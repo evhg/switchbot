@@ -7,7 +7,8 @@ import { fmt, hm, MIN } from '@/lib/format.ts';
 import { linePath, scale } from '../charts/common.tsx';
 import { DrawPath, Reveal } from '../motion.tsx';
 import { EventList, useWidth } from '../ui.tsx';
-import { Scene, SceneCols, SceneText, VisHead } from './parts.tsx';
+import { GapBands, Scene, SceneCols, SceneText, VisHead } from './parts.tsx';
+import { gapWords } from './real.ts';
 import { valueAt, type StoryModel } from './model.ts';
 import s from './story.module.css';
 
@@ -29,8 +30,8 @@ function PrecoolChart({ model, a, b }: { model: StoryModel; a: number; b: number
       if (v !== null) plan.push({ t, v });
     }
     const vs = [...pts.map((p) => p.v), ...plan.map((p) => p.v)].filter(Number.isFinite);
-    const lo = Math.floor(Math.min(...vs) - 0.5);
-    const hi = Math.ceil(Math.max(...vs) + 0.5);
+    const lo = vs.length ? Math.floor(Math.min(...vs) - 0.5) : 18;
+    const hi = vs.length ? Math.ceil(Math.max(...vs) + 0.5) : 22;
     const x = scale(a, b, 0, W - pr);
     const y = scale(lo, hi, H - pb, pt);
     const step = hi - lo > 8 ? 4 : hi - lo > 4 ? 2 : 1;
@@ -64,6 +65,7 @@ function PrecoolChart({ model, a, b }: { model: StoryModel; a: number; b: number
               </text>
             </g>
           ))}
+          <GapBands gaps={model.gaps} x={geo.x} from={a} to={b} y0={pt} y1={H - pb} labelY={pt + 22} />
           {marks.map((t, i) => (
             <line key={i} x1={geo.x(t)} x2={geo.x(t)} y1={pt} y2={H - pb} stroke="var(--hairline)" />
           ))}
@@ -87,30 +89,83 @@ function PrecoolChart({ model, a, b }: { model: StoryModel; a: number; b: number
 }
 
 export function LightsOut({ model }: { model: StoryModel }) {
-  const { start, startTemp, endTemp, target, facts } = model.precool;
-  const cooled = facts.find((f) => /^Cooled/.test(f.text));
+  const { start, startTemp, endTemp, target, facts, cmd } = model.precool;
+  const a = start - 15 * MIN;
+  // Real data can be missing before bed (meter not connected yet, stale cloud values): say so instead of guessing.
+  let seen = 0;
+  for (let t = a; t <= model.lo; t += MIN) if (Number.isFinite(valueAt(model.series, 'temp', t))) seen++;
+  const noData = seen < 10;
+  // Without readings before bed, run the chart on until 40 min after the first real reading, so it shows the room arriving.
+  // (The gap at lights out ends at the first kept reading; the per-minute series pads ±5 min, so don't scan it.)
+  const atLo = model.gaps.find((g) => g.start <= model.lo && g.end > model.lo);
+  const firstAfter: number | null = noData && atLo && atLo.end < model.lo + 3 * 60 * MIN ? atLo.end : null;
+  const b = firstAfter !== null ? Math.max(model.lo + 20 * MIN, firstAfter + 40 * MIN) : model.lo + 20 * MIN;
+  const gapsBefore = model.gaps.filter((g) => g.start < model.lo && g.end > a);
+  // The gap at lights out explains the most (stale values right up to bed); else the first one.
+  const gapBefore = gapsBefore.find((g) => g.start <= model.lo && g.end >= model.lo) ?? gapsBefore[0];
+  const manual = model.control === 'manual';
+  const cooled = cmd ? facts.find((f) => /^Cooled/.test(f.text)) : undefined;
   const ready = cooled && /before bed/.test(cooled.sub);
-  const minsBefore = Math.round((model.lo - start) / MIN);
-  const title = !cooled ? 'The room was still warm at lights out.' : ready ? 'The room was cool before you were in bed.' : 'The room was cool just after lights out.';
+  const minsBefore = cmd ? Math.round((model.lo - start) / MIN) : 0;
+  const tLo = Number.isFinite(endTemp) ? endTemp : NaN;
+  const coolEnough = Number.isFinite(tLo) && target !== null && tLo <= target + 0.75;
+  const title = noData
+    ? 'No readings before bed.'
+    : cmd
+      ? !cooled
+        ? 'The room was still warm at lights out.'
+        : ready
+          ? 'The room was cool before you were in bed.'
+          : 'The room was cool just after lights out.'
+      : coolEnough
+        ? 'The room was already cool at lights out.'
+        : Number.isFinite(tLo)
+          ? `The room was ${deg(tLo)} at lights out.`
+          : 'The room at lights out.';
   const drop = Number.isFinite(startTemp) && Number.isFinite(endTemp) ? startTemp - endTemp : NaN;
   const lede = [
-    minsBefore > 0 ? `The aircon started ${minsBefore} minutes before lights out${target !== null ? `, aiming for ${deg(target)}` : ''}.` : 'There was no pre-cool before lights out.',
-    Number.isFinite(drop) ? `The room went from ${deg(startTemp)} to ${deg(endTemp)}.` : '',
+    cmd
+      ? `The aircon started ${minsBefore} minutes before lights out${target !== null ? `, aiming for ${deg(target)}` : ''}.`
+      : manual
+        ? 'Sleep Lab sent no aircon commands this night: the aircon was run by hand.'
+        : 'There was no pre-cool before lights out.',
+    noData && gapBefore ? `${gapWords(gapBefore)[0]!.toUpperCase()}${gapWords(gapBefore).slice(1)}.` : '',
+    !noData && Number.isFinite(drop) && Math.abs(drop) >= 0.3 ? `The room went from ${deg(startTemp)} to ${deg(endTemp)}.` : '',
   ]
     .filter(Boolean)
     .join(' ');
-  const a = start - 15 * MIN;
-  const b = model.lo + 20 * MIN;
-  const items = facts.map((f) => ({ time: f.lead, title: f.text.replace('Cooled −', 'Cooled '), detail: f.sub }));
-  if (!facts.some((f) => Math.abs(f.t - model.lo) < 2 * MIN))
-    items.push({ time: hm(model.lo), title: 'Lights out', detail: Number.isFinite(endTemp) ? `room ${deg(endTemp)}` : '' });
+  const items = (cmd ? facts : facts.filter((f) => !/^Cooled|above target/.test(f.text))).map((f) => ({ time: f.lead, title: f.text.replace('Cooled −', 'Cooled '), detail: f.sub }));
+  for (const g of gapsBefore) {
+    items.push({
+      time: hm(Math.max(a, g.start)),
+      title: g.kind === 'before-meter' ? 'Meter not connected yet' : g.kind === 'frozen' ? 'Stale readings, left out' : 'No readings',
+      detail: g.kind === 'frozen' ? `the cloud repeated ${g.value ?? 'one value'} until ${hm(g.end)}` : `until ${hm(g.end)}`,
+    });
+  }
+  if (!items.some((it) => it.time === hm(model.lo)))
+    items.push({ time: hm(model.lo), title: 'Lights out', detail: Number.isFinite(endTemp) ? `room ${deg(endTemp)}` : 'no reading yet' });
+  if (firstAfter !== null) {
+    const v = valueAt(model.series, 'temp', firstAfter);
+    items.push({ time: hm(firstAfter), title: 'First real reading', detail: `room ${deg(v)}, CO₂ ${fmt(valueAt(model.series, 'co2', firstAfter))} ppm` });
+  }
+  items.sort((x, y) => x.time.localeCompare(y.time));
   return (
     <Scene id="before" title="Before bed">
-      <SceneCols text={<SceneText label="Before bed" reading={facts[0]?.lead ?? hm(start)} readingCap={minsBefore > 0 ? 'Aircon on for the pre-cool' : 'Lights out'} title={title} lede={lede} />}>
+      <SceneCols
+        text={
+          <SceneText
+            label="Before bed"
+            reading={cmd ? (facts[0]?.lead ?? hm(start)) : hm(model.lo)}
+            readingCap={cmd ? 'Aircon on for the pre-cool' : manual ? 'Lights out · aircon by hand' : 'Lights out'}
+            title={title}
+            lede={lede}
+          />
+        }
+      >
         <Reveal>
           <VisHead
             title={cooled ? cooled.text.replace('−', '') + (ready ? ', ready before bed' : '') : `Room temperature, ${hm(a)} – ${hm(b)}`}
-            cap={`Room temperature, ${hm(a)} – ${hm(b)}${target !== null ? ` · plan ${deg(target)} dashed` : ''}`}
+            cap={`Room temperature, ${hm(a)} – ${hm(b)}${target !== null ? ` · plan ${deg(target)} dashed${cmd ? '' : ' (not run)'}` : ''}`}
           />
           <PrecoolChart model={model} a={a} b={b} />
         </Reveal>

@@ -3,6 +3,7 @@
 // dataset (first paint ≈ simulation time), then history is computed newest → oldest in small chunks that yield
 // to the event loop (with a second preview once the newest night has its 30-night baseline), so 'detail' requests for the newest night are answered in between instead of after.
 import {
+  BUILTIN_CURVES,
   DEFAULT_CURVE,
   DEFAULT_PEOPLE,
   buildRuleReport,
@@ -26,7 +27,10 @@ let nights: Night[] = [];
 /** Detail answers for the current `nights` (cleared whenever the dataset is rebuilt). */
 const detailMemo = new Map<string, NightDetail>();
 
-const curveFor = (_id: string): TemperatureCurve => DEFAULT_CURVE;
+/** Curves stored in the backend (compute requests carry them); otherwise the built-ins. */
+let storedCurves: TemperatureCurve[] = [];
+/** The curve a night was planned with: stored row, else the built-in with that id, else the default. */
+const curveFor = (id: string): TemperatureCurve => storedCurves.find((c) => c.id === id) ?? BUILTIN_CURVES.find((c) => c.id === id) ?? DEFAULT_CURVE;
 
 function clip(n: Night, clipTs: number): Night {
   if (!n.room.length || n.room[n.room.length - 1]!.ts <= clipTs) return n;
@@ -138,7 +142,8 @@ function detail(date: string): NightDetail {
   if (!night) throw new Error(`No night ${date}`);
   const history = nights.slice(Math.max(0, i - 30), i);
   const curve = curveFor(night.curveId);
-  const events = detectEvents(night.room, { lightsOut: night.lightsOut, wake: night.wake });
+  // Real nights carry the backend detector's rows when it wrote any; otherwise detect them here.
+  const events = night.events.length ? night.events : detectEvents(night.room, { lightsOut: night.lightsOut, wake: night.wake });
   const withEvents: Night = { ...night, events };
   const report = buildRuleReport(withEvents, history, curve);
   const { parts: roomParts } = roomNightBreakdown(withEvents, curve);
@@ -179,6 +184,7 @@ export function handle(req: EngineRequest, emit?: EngineEmit): unknown {
     case 'simulate':
       return simulate(req.params, emit);
     case 'compute':
+      storedCurves = req.curves ?? [];
       return compute(req.nights, req.source, req.clipTs);
     case 'detail':
       return detail(req.date);

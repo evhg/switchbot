@@ -100,7 +100,15 @@ export function Verdict({
   model,
   onFocus,
   revealKey,
+  roomOnly = false,
+  note = null,
+  side = null,
 }: {
+  /** No watch data: the room score is the hero reading and `side` (the Google Health card) takes the room's place. */
+  roomOnly?: boolean;
+  /** One calm sentence about missing or left-out data, under the verdict. */
+  note?: string | null;
+  side?: ReactNode;
   label: string;
   score: number;
   verdict: string | null;
@@ -119,7 +127,16 @@ export function Verdict({
           <Reveal as="p" className={`label ${s.heroLabel}`} y={10}>
             {label}
           </Reveal>
-          {/* The people lead: one sleep score each at display size, with recovery and HRV underneath. */}
+          {roomOnly ? (
+            <Reveal delay={60}>
+              <button type="button" className={s.roomHero} onClick={() => onFocus('room')} aria-label={`Room score ${fmt(score)} out of 100, typical ${TYPICAL}. See what drove it`}>
+                <span className={s.who}>Room score</span>
+                <span className={s.personScore}>{Number.isFinite(score) ? <CountUp value={score} onceKey={revealKey ? `hero:${revealKey}:room:${score}` : undefined} /> : '–'}</span>
+                <ScoreScale score={score} />
+              </button>
+            </Reveal>
+          ) : (
+          /* The people lead: one sleep score each at display size, with recovery and HRV underneath. */
           <Reveal className={s.duo} delay={60}>
             {people.map((p, i) => {
               const dHrv = p.hrv !== undefined && p.hrvTypical != null && Number.isFinite(p.hrv) ? Math.round(p.hrv - p.hrvTypical) : null;
@@ -166,6 +183,7 @@ export function Verdict({
               );
             })}
           </Reveal>
+          )}
           {verdict ? (
             <Reveal as="p" className={s.verdict} delay={140}>
               {a} {b && <span>{b}</span>}
@@ -176,8 +194,18 @@ export function Verdict({
               <Skeleton h={28} w="64%" r="text" />
             </div>
           )}
+          {note && (
+            <Reveal as="p" className={`sec ${s.quality}`} delay={180}>
+              {note}
+            </Reveal>
+          )}
         </div>
-        {/* The room is secondary: its own score, against a typical night. */}
+        {/* The room is secondary: its own score, against a typical night. Room-only nights put the next step here. */}
+        {roomOnly ? (
+          <Reveal className={s.sideCard} delay={200}>
+            {side}
+          </Reveal>
+        ) : (
         <Reveal className={s.roomSide} delay={200}>
           <button type="button" className={s.roomBtn} onClick={() => onFocus('room')} aria-label={`Room score ${fmt(score)} out of 100, typical ${TYPICAL}. See what drove it`}>
             <span className={s.roomHead}>
@@ -190,6 +218,7 @@ export function Verdict({
             <ScoreScale score={score} />
           </button>
         </Reveal>
+        )}
       </div>
       <Reveal className={s.glance} delay={260}>
         <Readouts n={glance.length}>
@@ -199,7 +228,7 @@ export function Verdict({
         </Readouts>
       </Reveal>
       <Reveal className={s.stripWrap} delay={300}>
-        <NightStripMini model={model} />
+        {!roomOnly && <NightStripMini model={model} />}
         <div className={s.cue}>
           <span className="cap num">{hm(model.lo)}</span>
           <span className={s.cueText}>

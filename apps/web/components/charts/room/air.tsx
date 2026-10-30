@@ -190,8 +190,10 @@ export function NightBars({ nights, selected, onPick }: { nights: RoomNightMetri
   const top = Math.ceil((Math.max(1200, ...vals.filter(Number.isFinite)) + 50) / 200) * 200;
   // Bars start at 0 so their lengths are honest; one labelled 1,000 threshold plus 500 / 1,500 grid lines.
   const y = scale(0, top, H - pb, pt);
-  const bw = (W - pr) / Math.max(1, nights.length);
-  const idx = (clientX: number, el: Element) => Math.max(0, Math.min(nights.length - 1, Math.floor((clientX - el.getBoundingClientRect().left) / bw)));
+  // At least 30 slots, newest on the right: a first week of real data reads as a few bars, not one wall.
+  const bw = (W - pr) / Math.max(30, nights.length);
+  const off = (Math.max(30, nights.length) - nights.length) * bw;
+  const idx = (clientX: number, el: Element) => Math.max(0, Math.min(nights.length - 1, Math.floor((clientX - el.getBoundingClientRect().left - off) / bw)));
   const h = hi !== null ? nights[hi] : undefined;
   const sel = nights.findIndex((n) => n.date === selected);
   return (
@@ -221,26 +223,28 @@ export function NightBars({ nights, selected, onPick }: { nights: RoomNightMetri
             const isSel = i === sel;
             const fill = v > 1000 ? 'var(--signal)' : isSel ? 'var(--text)' : 'var(--muted)';
             const op = isSel ? 1 : v > 1000 ? 0.9 : hi === i ? 0.8 : 0.42;
-            return <rect key={r.date} className={s.col} style={{ animationDelay: `${i * 14}ms` }} x={i * bw + bw * 0.25} y={y(v)} width={Math.max(1.5, bw * 0.5)} height={Math.max(1, y(0) - y(v))} rx={Math.min(2, bw * 0.2)} fill={fill} fillOpacity={op} />;
+            return <rect key={r.date} className={s.col} style={{ animationDelay: `${i * 14}ms` }} x={off + i * bw + bw * 0.25} y={y(v)} width={Math.max(1.5, bw * 0.5)} height={Math.max(1, y(0) - y(v))} rx={Math.min(2, bw * 0.2)} fill={fill} fillOpacity={op} />;
           })}
           <line x1={0} x2={W - pr} y1={y(1000)} y2={y(1000)} stroke="var(--signal)" strokeDasharray="2 3" />
           <text x={W - pr + 12} y={y(1000) + 5} className={s.tickSig}>
             1,000
           </text>
           <line x1={0} x2={W - pr} y1={H - pb} y2={H - pb} stroke="var(--axis)" />
-          <text x={0} y={H - 8} className={s.tick}>
-            {nights[0] ? shortDate(nights[0].date) : ''}
-          </text>
+          {nights.length > 3 && (
+            <text x={off} y={H - 8} className={s.tick}>
+              {nights[0] ? shortDate(nights[0].date) : ''}
+            </text>
+          )}
           {sel >= 0 && (
-            <text x={Math.min(W - pr, Math.max(60, sel * bw + bw / 2))} y={H - 8} textAnchor={sel > nights.length - 4 ? 'end' : 'middle'} className={s.tickInk}>
+            <text x={Math.min(W - pr, Math.max(60, off + sel * bw + bw / 2))} y={H - 8} textAnchor={sel > nights.length - 4 ? 'end' : 'middle'} className={s.tickInk}>
               {shortDate(nights[sel]!.date)}
             </text>
           )}
-          {hi !== null && <rect x={hi * bw} y={pt - 8} width={bw} height={H - pb - pt + 8} fill="var(--text)" fillOpacity={0.05} pointerEvents="none" />}
+          {hi !== null && <rect x={off + hi * bw} y={pt - 8} width={bw} height={H - pb - pt + 8} fill="var(--text)" fillOpacity={0.05} pointerEvents="none" />}
         </svg>
       )}
       {h && (
-        <FloatTip x={hi! * bw + bw / 2} y={-8} width={W - pr}>
+        <FloatTip x={off + hi! * bw + bw / 2} y={-8} width={W - pr}>
           <div className="tip-title">
             {shortDay(h.date)} {shortDate(h.date)}
           </div>

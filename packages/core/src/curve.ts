@@ -117,6 +117,28 @@ export const CURVE_V1: TemperatureCurve = {
   ],
 };
 
+/**
+ * The yardstick for a night run by hand (Night.manual): no plan ran, so the room is scored against the household's
+ * steady comfort target instead of the stored curve. Flat at DEFAULT_CURVE's target (18.5 °C), so "in target" means
+ * within ±0.75 °C of it (17.75–19.25 °C) all night, and steadiness is the spread around the night's own mean error.
+ */
+export const MANUAL_COMFORT_TARGET_C = 18.5;
+
+export function manualComfortCurve(targetC = MANUAL_COMFORT_TARGET_C): TemperatureCurve {
+  return {
+    id: 'manual-comfort',
+    name: `Comfort ${targetC} °C (aircon by hand)`,
+    minC: 16,
+    maxC: 24,
+    phases: [{ name: 'onset', startMin: 0, targetC }],
+  };
+}
+
+/** The curve a night's room is scored against: the stored plan, or the comfort target when it ran by hand. */
+export function scoringCurve(night: { manual?: boolean }, curve: TemperatureCurve): TemperatureCurve {
+  return night.manual === true ? manualComfortCurve() : curve;
+}
+
 /** Built-in curves by id (a stored night's curve_id), for readers without the curves table. */
 export const BUILTIN_CURVES: readonly TemperatureCurve[] = [DEFAULT_CURVE, ONE_BEEP_V2, ONE_BEEP_V1, CURVE_V1];
 

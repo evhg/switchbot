@@ -3,7 +3,8 @@
 // in the scrubbed chapters O(1) — the frame loop never searches the raw series.
 import { targetAt, type Night, type Person, type PersonNight, type SleepStage, type TemperatureCurve } from '@sleep-lab/core';
 import { ACH_FOR_1000, pulldownWindow } from '@/lib/analysis.ts';
-import type { NightDetail } from '@/lib/data/types.ts';
+import type { NightDetail, NightGap, RealNightInfo } from '@/lib/data/types.ts';
+import { coolestAt, gapWords, nightPlateau, settledAt, type NightPlateau } from './real.ts';
 import { MIN, dur, fmt, hm } from '@/lib/format.ts';
 
 export const STAGE_CODE: Record<SleepStage, number> = { awake: 0, rem: 1, light: 2, deep: 3 };
@@ -73,7 +74,7 @@ export function stageMinutes(p: PersonNight, t0: number, n: number): Int8Array {
   return out;
 }
 
-export type MomentKind = 'start' | 'sleep' | 'deep' | 'awake' | 'hr' | 'co2' | 'rh' | 'ac' | 'alarm' | 'up';
+export type MomentKind = 'start' | 'sleep' | 'deep' | 'awake' | 'hr' | 'co2' | 'rh' | 'ac' | 'alarm' | 'up' | 'gap' | 'room' | 'plateau';
 export interface Moment {
   t: number;
   kind: MomentKind;
@@ -118,7 +119,13 @@ export interface StoryModel {
   people: StoryPerson[];
   series: MinuteSeries;
   stages: Int8Array[];
-  precool: { start: number; end: number; startTemp: number; endTemp: number; target: number | null; facts: PrecoolFact[] };
+  precool: { start: number; end: number; startTemp: number; endTemp: number; target: number | null; facts: PrecoolFact[]; /** A controller command started it. */ cmd: boolean };
+  /** Real data: stretches without trustworthy readings (drawn as bands). Empty for the simulator. */
+  gaps: NightGap[];
+  /** Real data: who ran the aircon ('manual' = no controller commands that night). Null for the simulator. */
+  control: RealNightInfo['control'] | null;
+  /** No watch data for this night: the story is told from the room alone. */
+  roomOnly: boolean;
   moments: Moment[];
   /** Aircon commands in the chart window. */
   acs: AcTick[];
@@ -130,6 +137,8 @@ export interface StoryModel {
     nightMin: number;
     ach: number | null;
     achNeeded: number;
+    /** Where CO₂ levelled off overnight and the fresh air that implies (null when it kept rising). */
+    plateau: NightPlateau | null;
   };
 }
 
@@ -177,7 +186,7 @@ export function acReason(reason: string): string {
     .replace(/^(curve|correction|schedule|manual|resend):\s*/, (_, k: string) => `${k[0]!.toUpperCase()}${k.slice(1)} · `);
 }
 
-export function buildStory(night: Night, people: readonly Person[], colorOf: (id: string) => string, detail: NightDetail | null, curve: TemperatureCurve): StoryModel {
+export function buildStory(night: Night, people: readonly Person[], colorOf: (id: string) => string, detail: NightDetail | null, curve: TemperatureCurve, info?: RealNightInfo | null): StoryModel {
   const lo = night.lightsOut;
   const wake = night.wake;
   const end = Math.max(wake, ...night.people.map((p) => p.sleep.end));
@@ -320,8 +329,9 @@ export function buildStory(night: Night, people: readonly Person[], colorOf: (id
     if (c.ts <= lo + MIN || c.ts > end) continue;
     ms.push({ t: c.ts, kind: 'ac', text: acCaption(c.reason, c.state.setpointC, c.state.power, c.landed), pri: c.landed === false ? 7 : 6.5 });
   }
-  // Room warmed past the curve target (sustained 15 min, after the first hour).
-  for (let t = lo + 60 * MIN; t <= scanEnd; t += MIN) {
+  // Room warmed past the curve target (sustained 15 min, after the first hour). Not on a night run by hand: its
+  // stored plan never ran, so "above the target" would judge the room against nothing that happened.
+  for (let t = lo + 60 * MIN; info?.control !== 'manual' && t <= scanEnd; t += MIN) {
     let ok = true;
     for (let k = 0; k < 15 && ok; k += 3) {
       const tg = targetAt(curve, lo, t + k * MIN);
@@ -333,7 +343,23 @@ export function buildStory(night: Night, people: readonly Person[], colorOf: (id
       break;
     }
   }
-  ms.push({ t: wake, kind: 'alarm', text: sp.length > 1 ? `Alarm at ${hm(wake)}` : `Alarm at ${hm(wake)}. Morning.`, pri: 8 });
+  ms.push({ t: wake, kind: 'alarm', text: !sp.length ? `Wake time, ${hm(wake)}` : sp.length > 1 ? `Alarm at ${hm(wake)}` : `Alarm at ${hm(wake)}. Morning.`, pri: 8 });
+  // Room moments (they carry a room-only night; with watch data they rarely make the cut).
+  const gaps = (info?.quality.gaps ?? []).filter((g) => g.start < end && g.end > lo);
+  for (const g of gaps) {
+    const at = Math.max(lo, g.start);
+    const text = g.start <= lo + 2 * MIN ? `No usable readings until ${hm(g.end)}` : g.kind === 'frozen' ? `Stale readings ${hm(g.start)}–${hm(g.end)}` : `No data ${hm(g.start)}–${hm(g.end)}`;
+    ms.push({ t: g.start <= lo + 2 * MIN ? lo + 3 * MIN : at, kind: 'gap', text, pri: 7.5 });
+  }
+  const plateau = nightPlateau(night);
+  if (plateau) {
+    const text = plateau.kind === 'plateau' ? `CO₂ levelled off around ${fmt(plateau.ppm)} ppm` : `CO₂ still creeping up, ${fmt(plateau.ppm)} ppm by wake`;
+    ms.push({ t: plateau.from, kind: 'plateau', text, pri: sp.length ? 4 : 7 });
+  }
+  const settled = settledAt(series, lo, wake);
+  if (settled && settled.t > lo + 10 * MIN) ms.push({ t: settled.t, kind: 'room', text: `The room settled at ${deg(settled.v)}`, pri: sp.length ? 3 : 6.8 });
+  const coolest = coolestAt(series, lo, wake);
+  if (coolest && (!settled || Math.abs(coolest.v - settled.v) >= 0.2)) ms.push({ t: coolest.t, kind: 'room', text: `Coolest: ${deg(coolest.v)}`, pri: sp.length ? 3 : 5 });
 
   // Cap at 12, dropping the lowest-priority ones; keep moments ≥ 6 min apart (higher priority wins).
   ms.sort((a, b) => b.pri - a.pri || a.t - b.t);
@@ -384,7 +410,10 @@ export function buildStory(night: Night, people: readonly Person[], colorOf: (id
     people: sp,
     series,
     stages,
-    precool: { start: pcStart, end: bedtime, startTemp, endTemp, target, facts },
+    precool: { start: pcStart, end: bedtime, startTemp, endTemp, target, facts, cmd: !!firstCmd },
+    gaps: info?.quality.gaps ?? [],
+    control: info ? info.control : null,
+    roomOnly: sp.length === 0,
     moments,
     acs: night.ac.filter((c) => c.ts >= lo && c.ts <= end).map((c) => ({ ts: c.ts, set: c.state.setpointC, power: c.state.power, missed: c.landed === false, reason: c.reason })),
     air: {
@@ -395,6 +424,7 @@ export function buildStory(night: Night, people: readonly Person[], colorOf: (id
       nightMin: Math.max(1, mins(wake - lo)),
       ach: null,
       achNeeded: ACH_FOR_1000,
+      plateau,
     },
   };
 }
@@ -446,6 +476,9 @@ export function nightSteps(model: StoryModel, co2Peak: number, peakAt: number, m
   const last = ends.at(-1) ?? ms.at(-1)!;
   const rank = (m: Moment): number => {
     if (m.kind === 'co2' && /crossed 1,000/.test(m.text)) return 10;
+    if (m.kind === 'gap') return 9.5;
+    if (m.kind === 'plateau') return 8.5;
+    if (m.kind === 'room') return /settled/.test(m.text) ? 6.5 : 4.5;
     if (m.kind === 'deep') return 9;
     if (m.kind === 'ac' && /nudged|ran (warm|cold)/i.test(m.text)) return 8;
     if (m.kind === 'ac' && /warmed/.test(m.text)) return 7.5;
@@ -478,7 +511,19 @@ export function nightSteps(model: StoryModel, co2Peak: number, peakAt: number, m
         : `${room}.`;
     } else if (i === 0) {
       const h = rh(t);
-      detail = `${room}${Number.isFinite(h) ? `, humidity ${fmt(h)}%` : ''}.`;
+      const g = model.gaps.find((x) => x.start <= t + 2 * MIN && x.end > t);
+      detail = !Number.isFinite(tc) && g ? sentence(gapWords(g)[0]!.toUpperCase() + gapWords(g).slice(1)) : `${room}${Number.isFinite(h) ? `, humidity ${fmt(h)}%` : ''}.`;
+      if (model.control === 'manual') detail += ' Aircon run by hand: Sleep Lab sent no commands.';
+    } else if (m.kind === 'gap') {
+      const g = model.gaps.find((x) => Math.abs(Math.max(model.lo, x.start) - t) <= 5 * MIN) ?? model.gaps.find((x) => x.start <= t && x.end > t);
+      detail = g ? sentence(gapWords(g)[0]!.toUpperCase() + gapWords(g).slice(1)) : 'No readings here.';
+    } else if (m.kind === 'plateau') {
+      const p = model.air.plateau;
+      detail = !p
+        ? `${room}.`
+        : p.kind === 'plateau'
+          ? `Fresh air leaking in balanced what two sleepers breathe out: about ${fmt(p.ach, 2)} air changes an hour.`
+          : `It never quite levelled off, so fresh air was at most ${fmt(p.ach, 2)} air changes an hour.`;
     } else if (m.kind === 'co2') {
       detail = 'Two sleepers, a closed room, no fresh air coming in.';
     } else if (m.kind === 'ac' || m.kind === 'deep') {

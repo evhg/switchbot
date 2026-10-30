@@ -262,3 +262,62 @@ export function forecastCo2Occupied(
   }
   return out;
 }
+
+export interface PlateauAch {
+  /** Air changes per hour that would hold CO₂ at `ppm` with two sleepers (FALLBACK_GEN_LPS) in the room. */
+  ach: number;
+  /** End-of-night CO₂ level: median of the last 15 min before wake. */
+  ppm: number;
+  /** CO₂ trend over the window, ppm/h (positive = still rising). */
+  risePpmH: number;
+  /**
+   * 'plateau': CO₂ had levelled off (|rise| < PLATEAU_MAX_RISE), so `ach` is the estimate.
+   * 'upper_bound': CO₂ was still rising, so the room never reached equilibrium and the true ACH is lower than `ach`.
+   */
+  kind: 'plateau' | 'upper_bound';
+  /** Window used: the last `windowMin` minutes before wake. */
+  from: Ms;
+  to: Ms;
+}
+
+/** A CO₂ trend under this (ppm/h) counts as levelled off (the real 2026-10-30 night still rose 9.6 ppm/h: upper bound). */
+export const PLATEAU_MAX_RISE = 5;
+
+/**
+ * Overnight ventilation from where CO₂ ends the night (the fallback when there is no clean morning decay). In a closed
+ * room with steady occupancy CO₂ approaches C = Cout + G / (V·ACH), so ACH = G·3600 / V / (C − Cout). Uses the last
+ * 90 min before wake (by then the room is closest to equilibrium); C = median of the last 15 min. When CO₂ is still
+ * rising there the room never reached equilibrium and the figure is only an upper bound (kind 'upper_bound'). Returns
+ * null with too little data in the window, when CO₂ is falling (someone left or a door opened: the formula doesn't
+ * apply) or when it's within 150 ppm of outdoor air (a ventilated room: the formula is ill-conditioned).
+ */
+export function plateauAch(
+  readings: readonly RoomReading[],
+  wake: Ms,
+  opts: { windowMin?: number; genLps?: number; volumeM3?: number; outdoorCo2?: number } = {},
+): PlateauAch | null {
+  const windowMin = opts.windowMin ?? 90;
+  const outdoor = opts.outdoorCo2 ?? DEFAULT_OUTDOOR_CO2;
+  const from = wake - windowMin * MIN;
+  const rs = sortByTs(readings).filter((r) => r.ts >= from && r.ts < wake && plausibleCo2(r.co2));
+  if (rs.length < 30 || rs[rs.length - 1]!.ts - rs[0]!.ts < (2 / 3) * windowMin * MIN) return null;
+  // Least-squares trend, ppm/h.
+  const t = rs.map((r) => (r.ts - from) / HOUR);
+  const y = rs.map((r) => r.co2);
+  const mt = t.reduce((a, b) => a + b, 0) / t.length;
+  const my = y.reduce((a, b) => a + b, 0) / y.length;
+  let sxy = 0, sxx = 0;
+  for (let i = 0; i < t.length; i++) { sxy += (t[i]! - mt) * (y[i]! - my); sxx += (t[i]! - mt) ** 2; }
+  const rise = sxx > 0 ? sxy / sxx : 0;
+  const ppm = median(rs.filter((r) => r.ts >= wake - 15 * MIN).map((r) => r.co2));
+  if (!Number.isFinite(ppm) || ppm < outdoor + 150 || rise <= -PLATEAU_MAX_RISE) return null;
+  const ach = lpsToPpmPerHour(opts.genLps ?? FALLBACK_GEN_LPS, opts.volumeM3 ?? DEFAULT_VOLUME_M3) / (ppm - outdoor);
+  return {
+    ach: Math.round(ach * 100) / 100,
+    ppm: Math.round(ppm),
+    risePpmH: Math.round(rise * 10) / 10,
+    kind: rise < PLATEAU_MAX_RISE ? 'plateau' : 'upper_bound',
+    from,
+    to: wake,
+  };
+}

@@ -50,7 +50,13 @@ export function Drivers({
   insights,
   loading,
   onWaterfall,
+  report = null,
+  note = null,
 }: {
+  /** A caveat under the drivers (e.g. a manual night is scored against a plan the aircon never ran). */
+  note?: string | null;
+  /** The backend's morning report, when it has written one: its headline leads the sentences. */
+  report?: { headline: string; when: string } | null;
   rows: DriverRow[];
   sleepAir: number;
   meanRecovery: number | null;
@@ -128,7 +134,9 @@ export function Drivers({
                 </section>
               ))}
             <div className={s.drFoot}>
-              <p className="cap">Room points add up to the room score; body points add up against each person’s own last 30 nights.</p>
+              <p className="cap">
+                Room points add up to the room score; body points add up against each person’s own last 30 nights.{note ? ` ${note}` : ''}
+              </p>
               <Button variant="text" onClick={onWaterfall}>
                 As waterfalls
               </Button>
@@ -136,6 +144,14 @@ export function Drivers({
           </Reveal>
         ) : (
           <p className="sec">No drivers for this night. They need room coverage and 7 or more nights of history.</p>
+        )}
+        {!loading && report && (
+          <Reveal delay={100}>
+            <div className={s.morning}>
+              <p className="label">Morning report · {report.when}</p>
+              <p className="head">{report.headline}</p>
+            </div>
+          </Reveal>
         )}
         {!loading && insights.length > 0 && (
           <Reveal delay={100}>

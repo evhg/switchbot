@@ -16,7 +16,7 @@ import { usePlannedCurve } from '@/lib/curve-store.ts';
 import { startGoogleConnect, useBandSync, useOAuthResult, useSyncNow } from '@/lib/bands.ts';
 import { onsetAfterLightsOut } from '@/lib/tonight.ts';
 import { dayLabel, fmt, hm, ictDate, MIN, shortDate } from '@/lib/format.ts';
-import { enablePush, pushSupported } from '@/lib/push.ts';
+import { disablePush, enablePush, pushSubscribed, pushSupported, resolveVapidKey } from '@/lib/push.ts';
 import { isNightHour, useTheme, type ResolvedTheme, type ThemeMode } from '@/lib/theme.tsx';
 import { NotMember, OnboardingSteps } from '../account/Onboarding.tsx';
 import { CurveEditor } from '../CurveEditor.tsx';
@@ -359,18 +359,47 @@ function usePermission(): string {
 export function MorningPage() {
   const [on, setOn] = useMorningReport();
   const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const perm = usePermission();
   const auth = useAuth();
-  const ready = supabaseConfigured() && auth.status === 'signed-in' && Boolean(auth.probe?.member);
+  const member = supabaseConfigured() && auth.status === 'signed-in' && Boolean(auth.probe?.member);
+  // null = still asking the backend; '' = no key published yet.
+  const [key, setKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (!member) return;
+    let alive = true;
+    resolveVapidKey().then((k) => alive && setKey(k ?? ''));
+    // The device's real state wins over the stored preference (a cleared browser has no subscription).
+    pushSubscribed().then((sub) => alive && sub !== null && setOn(sub));
+    return () => {
+      alive = false;
+    };
+  }, [member, setOn]);
+  const ready = member && Boolean(key) && pushSupported();
   const toggle = (v: boolean) => {
-    setOn(v);
-    if (v) enablePush().then(setMsg, (e: unknown) => setMsg(e instanceof Error ? e.message : String(e)));
-    else setMsg(null);
+    setBusy(true);
+    const p = v ? enablePush().then((r) => (setOn(r.ok), r.text)) : disablePush().then((t) => (setOn(false), t));
+    p.then(setMsg, (e: unknown) => setMsg(e instanceof Error ? e.message : String(e))).finally(() => setBusy(false));
   };
+  const why = !supabaseConfigured()
+    ? 'Delivery needs Supabase. See Diagnostics for the two settings.'
+    : !member
+      ? 'Sign in as a household member to get the report on this device.'
+      : !pushSupported()
+        ? 'This browser can’t receive push. On iPhone, add Sleep Lab to the Home Screen and open it from there.'
+        : key === null
+          ? 'Checking whether notifications are ready…'
+          : !key
+            ? 'Notifications aren’t ready yet: the backend hasn’t published its push key. The switch becomes available as soon as it has.'
+            : 'iPhone allows notifications only in the Home Screen app.';
   return (
-    <SubPage title="Morning report" lede="A notification on this device when last night’s report is ready.">
-      <Group footer={msg ?? (ready ? 'iPhone allows notifications only in the Home Screen app.' : supabaseConfigured() ? 'Sign in as a household member to get the report on this device.' : 'Delivery needs Supabase. See Diagnostics for the two settings.')}>
-        <Row title="Send the morning report" sub={ready ? undefined : supabaseConfigured() ? 'Needs sign-in' : 'Needs Supabase'} trailing={<Switch checked={on && ready} disabled={!ready} onChange={toggle} label={<span className="sr-only">Send the morning report</span>} />} />
+    <SubPage title="Morning report" lede="A notification on this device when last night’s report is ready, about an hour after you wake.">
+      <Group footer={msg ?? why}>
+        <Row
+          title="Morning report notifications"
+          sub={ready ? (on ? 'On for this device' : 'Off for this device') : member && key === '' ? 'Not ready yet' : member ? undefined : supabaseConfigured() ? 'Needs sign-in' : 'Needs Supabase'}
+          trailing={<Switch checked={on && ready} disabled={!ready || busy} onChange={toggle} label={<span className="sr-only">Morning report notifications</span>} />}
+        />
         <Row title="Notifications on this device" value={perm} />
       </Group>
     </SubPage>

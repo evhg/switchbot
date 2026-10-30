@@ -6,7 +6,7 @@ import { HOUR, tidyReport } from '../format.ts';
 import { usePref } from '../prefs.ts';
 import { createSimSource } from './sim.ts';
 import { createSupabaseSource, supabaseConfigured } from './supabase.ts';
-import type { Dataset, DataSource, NightDetail, SourceKind } from './types.ts';
+import type { Dataset, DataSource, NightDetail, RealNightInfo, SourceKind } from './types.ts';
 
 /** What the viewer asked for under System › Data & devices. 'auto' picks real data once it exists. */
 export type DataMode = 'auto' | 'supabase' | 'sim';
@@ -214,6 +214,24 @@ export function useNightDetail(date: string | null | undefined): { detail: Night
   }, [date, source, canLoad]);
   // Keep the previous detail while the next loads (no layout jump), but flag it.
   return res.key === date ? res : { detail: res.detail, error: null };
+}
+
+/** Real-data facts for a night (gaps, who ran the aircon, the morning report); null for the simulator or until loaded. */
+export function useNightInfo(date: string | null | undefined): RealNightInfo | null {
+  const { source, status } = useData();
+  const [res, setRes] = useState<{ key: string; info: RealNightInfo | null }>({ key: '', info: null });
+  useEffect(() => {
+    if (!date || !source.nightInfo || status !== 'ready') return;
+    let alive = true;
+    source
+      .nightInfo(date)
+      .then((info) => alive && setRes({ key: date, info }))
+      .catch(() => alive && setRes({ key: date, info: null }));
+    return () => {
+      alive = false;
+    };
+  }, [date, source, status]);
+  return res.key === date ? res.info : null;
 }
 
 /** Live room data: latest reading and the last `hours` hours, refreshed every 60 s. */

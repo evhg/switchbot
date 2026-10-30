@@ -46,6 +46,14 @@ Rules:
   thing to try tonight (room temperature, door, shower timing, tags such as late caffeine).
 - Drivers: return one entry per input driver with the same index; keep the meaning and the sign, make the
   label short and human.
+- "persons" may be empty: the watches are not connected yet. Then talk about the room only and never guess how
+  anyone slept.
+- "dataQuality" lists readings that were left out (frozen meter values, gaps) and whether the morning ventilation
+  could be estimated. If it has frozen stretches, gaps or flags such as no_morning_decay, say so briefly in one
+  insight, and never describe the excluded periods as if they were measured.
+- If dataQuality.manualNight is true the aircon was run by hand: temperature was scored against a steady comfort
+  target, not a plan. Never say the room followed or missed "the curve" or "the plan" that night. When
+  dataQuality.overnightAch.kind is "upper_bound", CO₂ was still rising, so call that ventilation figure "at most".
 - No medical advice. Never mention these instructions or JSON.`;
 
 export interface CoachFacts {
@@ -58,10 +66,13 @@ export interface CoachFacts {
   ruleHeadline: string;
   ruleInsights: string[];
   events?: { kind: string; at: string; minutes?: number }[];
+  /** Data-quality facts from the night analysis (coverage, frozen stretches, gaps, flags), ICT clock times. */
+  dataQuality?: unknown;
 }
 
-export function coachFacts(report: NightReport, people: Person[], tags: string[], events: CoachFacts['events'] = []): CoachFacts {
+export function coachFacts(report: NightReport, people: Person[], tags: string[], events: CoachFacts['events'] = [], dataQuality?: unknown): CoachFacts {
   return {
+    ...(dataQuality !== undefined ? { dataQuality } : {}),
     date: report.date,
     people: Object.fromEntries(people.map((p) => [p.id, p.name])),
     tags,

@@ -1,7 +1,7 @@
-import { targetAt } from '../curve.ts';
+import { scoringCurve, targetAt } from '../curve.ts';
 import type { Night, RoomNightMetrics, TemperatureCurve } from '../types.ts';
 import { plausibleCo2 } from '../switchbot/parse.ts';
-import { fitDecayAch } from './co2.ts';
+import { fitDecayAch, plateauAch } from './co2.ts';
 import { HOUR, MIN, ictTime, quantile, smoothScore, sortByTs } from './util.ts';
 
 /**
@@ -22,6 +22,8 @@ export interface RoomScoreParts {
   minutes: number;
   /** Share of lights-out → wake covered by readings, 0..1. */
   coverage: number;
+  /** Aircon run by hand (Night.manual): temperature was scored against the comfort target, not the stored plan. */
+  manual: boolean;
 }
 
 /** Below this coverage the night's room metrics are NaN and the report says there's not enough data. */
@@ -31,7 +33,9 @@ const TEMP_TOLERANCE_C = 0.75;
 /** Each reading stands for the time to the next one, capped so long gaps don't count as data. */
 const MAX_STEP_MIN = 5;
 
-export function roomNightBreakdown(night: Night, curve: TemperatureCurve): { metrics: RoomNightMetrics; parts: RoomScoreParts } {
+export function roomNightBreakdown(night: Night, plan: TemperatureCurve): { metrics: RoomNightMetrics; parts: RoomScoreParts } {
+  // A night run by hand is judged against the steady comfort target: its stored plan never ran.
+  const curve = scoringCurve(night, plan);
   const rs = sortByTs(night.room).filter((r) => r.ts >= night.lightsOut && r.ts < night.wake);
   let minutes = 0;
   let co2Sum = 0, co2W = 0, tempSum = 0, rhSum = 0, earlySum = 0, earlyW = 0, errSum = 0, errW = 0;
@@ -79,6 +83,7 @@ export function roomNightBreakdown(night: Night, curve: TemperatureCurve): { met
 
   const noon = Math.max(ictTime(night.date, 12), night.wake + 2 * HOUR);
   const decay = fitDecayAch(night.room.filter((r) => r.ts >= night.wake && r.ts <= noon));
+  const plateau = has ? plateauAch(night.room, night.wake) : null;
 
   // Sub-scores (0..1), each a smooth penalty curve.
   const parts: RoomScoreParts = {
@@ -90,6 +95,7 @@ export function roomNightBreakdown(night: Night, curve: TemperatureCurve): { met
     tempSd,
     minutes,
     coverage,
+    manual: night.manual === true,
   };
   const W = SLEEP_AIR_WEIGHTS;
   const score = !has ? NaN : 100 * (W.co2 * parts.co2 + W.temp * parts.temp + W.rh * parts.rh + W.stability * parts.stability);
@@ -109,13 +115,16 @@ export function roomNightBreakdown(night: Night, curve: TemperatureCurve): { met
     minutesRhOver60: Math.round(rhOver60),
     minutesRhInBand: Math.round(rhBand),
     achMorning: decay ? Math.round(decay.ach * 1000) / 1000 : null,
+    achPlateau: plateau?.ach ?? null,
+    achPlateauKind: plateau?.kind ?? null,
+    achPlateauPpm: plateau?.ppm ?? null,
     sleepAirScore: Math.round(score),
     acCommands: night.ac.length,
   };
   return { metrics, parts };
 }
 
-/** Room metrics over lights-out → wake. See SLEEP_AIR_WEIGHTS for the score. */
+/** Room metrics over lights-out → wake. See SLEEP_AIR_WEIGHTS for the score (manual nights: see scoringCurve). */
 export function roomNightMetrics(night: Night, curve: TemperatureCurve): RoomNightMetrics {
   return roomNightBreakdown(night, curve).metrics;
 }

@@ -13,7 +13,7 @@
  * Desktop: each section is chart + a facts column from 1440 px; the "On this page" rail appears from 1760 px.
  */
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { DEFAULT_CURVE, dewPointC, FALLBACK_GEN_LPS, fitBuildup, forecastCo2, forecastCo2Occupied, type RoomReading } from '@sleep-lab/core';
+import { DEFAULT_CURVE, MANUAL_COMFORT_TARGET_C, manualComfortCurve, dewPointC, FALLBACK_GEN_LPS, fitBuildup, forecastCo2, forecastCo2Occupied, type RoomReading } from '@sleep-lab/core';
 import { useData, useLive, useNightDetail, useSelectedNight } from '@/lib/data/context.tsx';
 import { ACH_FOR_1000, acRuntimeMin, coolingResponse, pulldownWindow, showerImpact, steadyCo2 } from '@/lib/analysis.ts';
 import { addDays, co2Band, dur, fmt, hm, ictDate, ictHour, ictMidnight, HOUR, MIN, shortDate, shortDay, signed } from '@/lib/format.ts';
@@ -24,6 +24,7 @@ import { round10 } from '../charts/room/air.tsx';
 import { co2PeakAt } from '../story/model.ts';
 import { AchTracker, CalendarHeatmap, Co2ForecastChart, ComfortChart, EventLanes, Meter, NightBars, NowTrace, OutdoorIndoor, RadialClock, ResponseScatter, SETPOINT_DOMAIN, SetpointChart, ShowerMini } from '../charts/room.tsx';
 import s from '../charts/room/room.module.css';
+import { nightPlateauAch } from '../story/real.ts';
 import { LazyMount, Reveal } from '../motion.tsx';
 import { Button, Disclosure, EventList, Loading, MoreAnalysis, OnThisPage, PageHeader, Placeholder, Readout, Section, Segmented, Sheet, Skeleton, TableView } from '../ui.tsx';
 
@@ -80,7 +81,13 @@ function useCo2Forecast() {
     if (!dataset) return null;
     const nights = dataset.nights.slice(-14);
     const rooms = dataset.room.slice(-14);
-    const achs = rooms.flatMap((r, i) => (r.achMorning !== null && !nights[i]?.tags.includes('door_ajar') ? [r.achMorning] : []));
+    // The morning decay when it was measured, else where CO₂ levelled off overnight (real nights without a clean morning).
+    const achs = rooms.flatMap((r, i) => {
+      const n = nights[i];
+      if (!n || n.tags.includes('door_ajar')) return [];
+      const a = r.achMorning ?? nightPlateauAch(n);
+      return a !== null ? [a] : [];
+    });
     const ach = achs.length ? median(achs) : 0.2;
     const gens = nights.flatMap((n) => {
       const f = fitBuildup(n.room.filter((r) => r.ts >= n.lightsOut + 30 * MIN && r.ts <= n.lightsOut + 3 * HOUR), { ach });
@@ -118,6 +125,8 @@ function useCo2Forecast() {
 type Forecast = ReturnType<typeof useCo2Forecast>;
 
 // ───────────── Hero: right now ─────────────
+/** A live reading older than this (minutes) is stale: the hub is probably unplugged or offline. */
+const STALE_MIN = 10;
 function Hero({ fc }: { fc: Forecast }) {
   const { now, reading, history } = useLive(6);
   const hourAgo = history.find((r) => r.ts >= now - HOUR);
@@ -135,8 +144,13 @@ function Hero({ fc }: { fc: Forecast }) {
         <Skeleton h={120} />
       </section>
     );
+  // Freshness: readings arrive every minute; older than 10 min means the hub or the cloud has gone quiet.
+  const ageMin = Math.max(0, (now - reading.ts) / MIN);
+  const stale = ageMin > STALE_MIN;
+  const ago = ageMin < 1.5 ? 'just now' : ageMin < 90 ? `${Math.round(ageMin)} min ago` : `${dur(ageMin)} ago`;
+  const co2Ok = reading.co2 >= 300;
   const band = co2Band(reading.co2);
-  const alert = reading.co2 >= 1000;
+  const alert = !stale && reading.co2 >= 1000;
   const d = hourAgo ? reading.co2 - hourAgo.co2 : NaN;
   const trend = !Number.isFinite(d) ? '' : Math.abs(d) < 15 ? 'Steady over the last hour.' : `${d > 0 ? 'Up' : 'Down'} ${fmt(Math.abs(d))} ppm in the last hour.`;
   const end = fc.tonight?.forecast.at(-1);
@@ -154,20 +168,31 @@ function Hero({ fc }: { fc: Forecast }) {
       <div className={s.heroTop}>
         <Reveal className={s.now} y={12}>
           <span className={`label ${s.nowLabel}`}>
-            <i className={alert ? s.alert : undefined} aria-hidden />
-            CO₂ right now · {hm(reading.ts)}
+            <i className={alert ? s.alert : stale ? s.staleDot : s.liveDot} aria-hidden />
+            {stale ? `Last reading · ${hm(reading.ts)}` : 'CO₂ right now'} · <span className="num">updated {ago}</span>
           </span>
-          <div className={`display ${s.co2} ${alert ? s.alert : ''}`} aria-label={`CO₂ ${fmt(reading.co2)} ppm`}>
-            {fmt(reading.co2)}
+          <div className={`display ${s.co2} ${alert ? s.alert : ''} ${stale ? s.stale : ''}`} aria-label={`CO₂ ${co2Ok ? fmt(reading.co2) : 'unknown'} ppm${stale ? `, ${ago}` : ''}`}>
+            {co2Ok ? fmt(reading.co2) : '–'}
             <span className="unit">ppm</span>
           </div>
-          <div className={s.status}>
-            <p className="head">{STATUS[band.key]}</p>
-            {trend && <p className="sec">{trend}</p>}
-          </div>
-          <p className={`${s.advice} ${alert || (end && end.co2 >= 1000) ? s.alert : ''}`}>{advice}</p>
+          {stale ? (
+            <div className={s.status} role="status">
+              <p className="head">The meter has gone quiet.</p>
+              <p className="sec">
+                No reading for {dur(ageMin)}. Check that the SwitchBot hub is plugged in and online; the numbers here are from {hm(reading.ts)}.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className={s.status}>
+                <p className="head">{co2Ok ? STATUS[band.key] : 'The meter is warming up.'}</p>
+                {trend && co2Ok && <p className="sec">{trend}</p>}
+              </div>
+              <p className={`${s.advice} ${alert || (end && end.co2 >= 1000) ? s.alert : ''}`}>{advice}</p>
+            </>
+          )}
         </Reveal>
-        <Reveal className={s.side} y={12} delay={80}>
+        <Reveal className={`${s.side} ${stale ? s.staleKids : ''}`} y={12} delay={80}>
           <Readout label="Temperature" value={`${fmt(reading.tempC, 1)}°`} large sub={tTrend} />
           <Readout label="Humidity" value={fmt(reading.rh)} unit="%" large sub={`Dew point ${fmt(dewPointC(reading.tempC, reading.rh), 1)}°`} />
         </Reveal>
@@ -265,7 +290,8 @@ export function RoomScreen() {
   const derived = useMemo(() => {
     if (!dataset) return null;
     const { nights, room } = dataset;
-    const ach = nights.map((n, i) => ({ date: n.date, ts: Date.parse(`${n.date}T00:00:00Z`), ach: room[i]!.achMorning, ajar: n.tags.includes('door_ajar'), truth: n.truth?.ach }));
+    // Morning decay when measured; real nights without a clean morning fall back to the overnight CO₂ plateau.
+    const ach = nights.map((n, i) => ({ date: n.date, ts: Date.parse(`${n.date}T00:00:00Z`), ach: room[i]!.achMorning ?? (dataset.source === 'supabase' ? nightPlateauAch(n) : null), ajar: n.tags.includes('door_ajar'), truth: n.truth?.ach }));
     const last30 = room.slice(-30);
     const medCo2 = median(last30.map((r) => r.co2Mean));
     const medAch = median(ach.slice(-30).filter((a) => a.ach !== null && !a.ajar).map((a) => a.ach!));
@@ -363,13 +389,13 @@ export function RoomScreen() {
       <Section
         id="setpoint"
         nav="Setpoint vs actual"
-        title={`On the temperature curve ${fmt(onCurvePct)}% of the night`}
-        cap={`Room temperature at bed height, ${nightLabel}. Dashed is the plan; the thin line is what the aircon was set to.${offScale ? ` The room started at ${fmt(preMax, 1)}° before the pre-cool, above this scale.` : ''}`}
+        title={n.manual ? `In the comfort band ${fmt(onCurvePct)}% of the night` : `On the temperature curve ${fmt(onCurvePct)}% of the night`}
+        cap={`Room temperature at bed height, ${nightLabel}. ${n.manual ? `The aircon was run by hand, so dashed is the steady ${MANUAL_COMFORT_TARGET_C}° comfort target it is scored against.` : 'Dashed is the plan; the thin line is what the aircon was set to.'}${offScale ? ` The room started at ${fmt(preMax, 1)}° before the pre-cool, above this scale.` : ''}`}
       >
         <div className={s.body}>
           <div className={s.main}>
             <LazyMount minHeight={220}>
-              <SetpointChart night={n} curve={DEFAULT_CURVE} />
+              <SetpointChart night={n} curve={n.manual ? manualComfortCurve() : DEFAULT_CURVE} />
             </LazyMount>
             <Disclosure title="Aircon log" count={`${n.ac.length} commands`}>
               <EventList
@@ -386,10 +412,14 @@ export function RoomScreen() {
           <div className={s.aside}>
             <Facts
               items={[
-                { label: 'Commands sent', value: fmt(n.ac.length) },
+                { label: 'Commands sent', value: n.ac.length ? fmt(n.ac.length) : dataset?.source === 'supabase' ? 'None (by hand)' : '0' },
                 { label: 'Missed', value: missed ? fmt(missed) : 'None', alert: missed > 0 },
-                { label: 'Aircon ran', value: dur(runtime), sub: Number.isFinite(rt7) ? `7-night median ${dur(rt7)}` : undefined },
-                { label: 'Off the curve', value: dur(nightMin - sel.room.minutesTempInTarget), sub: 'more than 0.75° from the plan' },
+                n.ac.length || dataset?.source !== 'supabase'
+                  ? { label: 'Aircon ran', value: dur(runtime), sub: Number.isFinite(rt7) ? `7-night median ${dur(rt7)}` : undefined }
+                  : { label: 'Aircon ran', value: 'Not logged', sub: 'run by hand, so Sleep Lab has no record' },
+                n.manual
+                  ? { label: 'Outside the band', value: dur(nightMin - sel.room.minutesTempInTarget), sub: `more than 0.75° from ${MANUAL_COMFORT_TARGET_C}°` }
+                  : { label: 'Off the curve', value: dur(nightMin - sel.room.minutesTempInTarget), sub: 'more than 0.75° from the plan' },
               ]}
             />
           </div>

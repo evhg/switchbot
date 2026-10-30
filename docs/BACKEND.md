@@ -27,7 +27,8 @@ supabase/
     google-health-sync/       Google Health API v4 pull → raw_health + derived tables
     google-health-webhook/    Google Health notifications → sync jobs (replies 204)
     google-oauth/             /start and /callback; refresh tokens go to Vault
-    nightly-report/           events + rule report + Claude rewrite + Web Push (06:30 ICT)
+    nightly-report/           night analysis (cleaned readings → events, night_metrics) + rule report + Claude rewrite + Web Push
+    push-admin/               VAPID keys (created in the backend, kept in Vault) + public-key GET + test push
     tests/                    `deno test` (Web Push RFC vector, coach grounding, health helpers)
 scripts/seed-supabase.ts      simulated nights → Supabase (Node)
 ```
@@ -57,6 +58,7 @@ All timestamps are `timestamptz` (UTC). A night is keyed by the **ICT wake-up da
 | `health_hr` (1-min means), `health_hrv`, `health_spo2`, `sleep_sessions`, `health_daily`, `health_vitals_daily` | Derived layers, rebuildable from `raw_health` | google-health-sync, seed |
 | `health_sync_jobs` | Queue fed by the Google webhook | webhook, OAuth |
 | `reports` | `report` (NightReport, possibly Claude-worded), `rule_report`, `generated_by`, `model` | nightly-report, seed |
+| `night_metrics` | One row per night (0016): room metrics from **cleaned** readings, morning ACH fit, data-quality columns (`coverage_pct`, `frozen_*`, `gap_*`, `invalid_co2_count`, `flags[]`, full `quality` jsonb) and counts. Members read it. See [Night analysis](#night-analysis-migration-0016) | nightly-report |
 | `push_subscriptions` | Web Push endpoints per user | `register_push_subscription()` RPC |
 | `oauth_tokens` | Per person: **Vault secret id** of the refresh token, scopes, `needs_reconsent` | google-oauth |
 | `oauth_states` | Single-use OAuth `state` values (15 min) | google-oauth |
@@ -130,14 +132,9 @@ Until a function's required secrets are set it answers `503 {"error":"not config
 | `APP_URL` | nightly-report, google-oauth, ac-curve | The PWA origin (push tap target; google-oauth redirects back to `<APP_URL>/settings/health`). google-oauth falls back to `https://sleep-lab-git-claude-determined-ride-59txro-evhg.vercel.app` when unset |
 | `ANTHROPIC_API_KEY` | nightly-report | Optional. Without it, reports are rule-only |
 | `ANTHROPIC_MODEL` | nightly-report | Default `claude-opus-5-5` |
-| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | nightly-report | Base64url raw keys. The PWA uses the same public key as `applicationServerKey` |
+| `VAPID_SUBJECT` | nightly-report, ac-curve, push-admin | Optional `mailto:` / `https:` contact; default = the `APP_URL` origin, else `https://sleep-lab-lac.vercel.app` |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | — | **Not needed** since 0016: the key pair is generated in the backend and kept in Vault. If set while Vault is empty, they are adopted into Vault once |
 | `PUBLIC_FUNCTIONS_URL` | optional | Overrides `<SUPABASE_URL>/functions/v1`, e.g. behind a custom domain |
-
-Generate the VAPID keys once:
-
-```sh
-npx deno eval "import('./supabase/functions/_shared/webpush.ts').then(async (m) => console.log(await m.generateVapidKeys()))"
-```
 
 ## Setup, step by step
 
@@ -320,7 +317,7 @@ Decided 2026-10-29: in bed at 22:00 every day, asleep around 23:00, up around 08
 | `sleeplab-poll-meter` | `* * * * *` | every minute | Meter status poll (backstop for the change-based webhook) |
 | `sleeplab-ac-curve` | `*/5 * * * *` | every 5 min | Controller from precool (lights-out − 30 min with the default curve) to wake + 90 min. Outside that window, or when the night has `ac_enabled = false`, it only sends OFF if the assumed live state is still ON ("ensure off"). Failed live sends back off (20, 40, 60 min) |
 | `sleeplab-health-sync-morning` | `20 0-2 * * *` | 07:20, 08:20, 09:20 | Google Health pulls after typical wake times |
-| `sleeplab-nightly-report` | `*/15 0-7,23 * * *` | every 15 min, 06:00–14:45 | `{"auto":true}`: first report + push once wake + 60 min has passed and every connected person's sleep has synced (or at wake + 4 h), silent regenerate when late sleep data arrives, final silent regenerate after max(12:00, wake + 2 h) for the morning ACH. Tracked in `reports.pushed_at / people_count / final` |
+| `sleeplab-nightly-report` | `*/15 0-7,23 * * *` | every 15 min, 06:00–14:45 | `{"auto":true}`: night analysis, then first report + push once wake + 45 min (09:15 with an 08:30 wake, after the aircon's OFF at 09:00) has passed and every connected person's sleep has synced (or at wake + 4 h), silent regenerate when late sleep data arrives, final silent regenerate after max(12:00, wake + 2 h) for the morning ACH. Tracked in `reports.pushed_at / people_count / final` |
 | `sleeplab-health-sync-1030` | `30 3 * * *` | 10:30 | Late syncs and reprocessed stages |
 | `sleeplab-health-sync-1400` | `0 7 * * *` | 14:00 | Afternoon backstop |
 | `sleeplab-health-sync-queue` | `*/10 * * * *` | every 10 min | Drains webhook- and OAuth-queued jobs (no-op when empty); a fresh connection backfills 14 days here |
@@ -434,6 +431,32 @@ Follow [SETUP.md](SETUP.md) for the hardware order (Hub Mini → Meter Pro CO2 �
 - **Webhook wins.** `poll-meter` inserts with `ON CONFLICT DO NOTHING`, so a webhook row for the same minute keeps its values and `source = 'webhook'`; a webhook arriving after the poll still replaces the poll row.
 - **Split nights.** `typicalSleepOnset` first merges a person's sessions less than 2 h apart (Fitbit sometimes splits one night around a long awakening), except a short doze (< 90 min) an hour or more before bed, then takes the first non-awake start.
 
+## Night analysis (migration 0016)
+
+Every `nightly-report` run first analyses the night (`_shared/analysis.ts`, `analyzeNight`); `{"analyzeOnly": true, "date"?: …}`
+runs only that step (default: the night that ended most recently; cron/service callers may pass `"dates": [...]`, ≤ 31).
+
+1. **Load** the meter's 1-minute readings from lights-out − 2 h to max(12:00, wake + 2 h). The meter id is `METER_DEVICE_ID`
+   or, when unset, the meter `poll-meter` discovered (`devices` table).
+2. **Clean** (core `cleanRoomReadings`): a run of identical temperature + RH longer than 30 min is dropped when CO₂ moved
+   ≥ 25 ppm meanwhile (`temp_rh`: the cloud froze T/RH while CO₂ moved, e.g. 2026-10-29 21:02–22:22) or when CO₂ is
+   identical too (`all`: a cached snapshot, e.g. the hub offline on 2026-10-30 from 09:08). Identical T/RH with only CO₂
+   noise (an empty stable room) is kept. Missing stretches > 5 min are gaps. CO₂ < 300 ppm rows stay (temp/RH count) and are
+   counted; every metric ignores that CO₂.
+3. **Detect** events (core `detectEvents`) on the cleaned readings and replace the night's `source = 'detector'` events.
+4. **Metrics**: core `roomNightMetrics` (lights-out → wake) and the morning decay "after both left" (core `fitDecayAch`
+   from the start of a detected `room_empty` that begins after wake − 60 min, else from wake, to the window end).
+5. **Store** one `night_metrics` row (upsert on `date`; idempotent): the metric columns, `ach_morning` / `ach_r2` /
+   `ach_baseline_ppm` / `decay_start` / `decay_end` / `decay_from` (`room_empty` | `wake`), the data-quality columns and
+   `flags` = the cleaning flags (`frozen_temp_rh`, `frozen_all`, `gap_evening`, `gap_overnight`, `gap_morning`,
+   `low_coverage` < 80 %, `no_room_data`, `invalid_co2`) plus `no_morning_decay`, `manual_night` (no live aircon command
+   reached the AC) and `no_health_data` (no sleep session yet; everything is room-only until Google Health syncs, then the
+   same run includes the people automatically).
+
+The report is built from the cleaned night; a one-sentence **data note** ("temperature and humidity were frozen 21:02–22:22
+and were left out; no morning ventilation estimate …; clean readings cover 96.3 % …") becomes the last insight, and the
+Claude facts carry the same `dataQuality` object so the rewrite mentions it and never treats excluded periods as measured.
+
 ## Nightly report and Claude
 
 `nightly-report` loads:
@@ -450,8 +473,17 @@ It then runs `detectEvents`, which replaces this night's `detector` events, and 
 - Cost: roughly 4k input + 2k output tokens per day at $4/$20 per M tokens, about $0.05 per day.
 
 **Push.**
+- **Keys (zero-touch, 0016).** The first push (or `GET /functions/v1/push-admin`) generates a P-256 key pair with WebCrypto
+  and stores it in Vault (`vapid_public_key`, `vapid_private_key`) through `store_vapid_keys()` (service_role only; never
+  overwrites; concurrent creators serialised by an advisory lock). `vapid_keys()` (service_role only) reads them back, so
+  the private key never leaves the database / functions. The public key is copied to `household_settings.vapid_public_key`.
+- **Public key for the PWA.** Either `GET https://<ref>.supabase.co/functions/v1/push-admin` (no auth, CORS open,
+  `{"publicKey":"<base64url>"}`, cached 5 min) or `select vapid_public_key from household_settings` (members). Use it as
+  `applicationServerKey`; `NEXT_PUBLIC_VAPID_PUBLIC_KEY` is no longer needed.
+- **push-admin** (`x-cron-secret` / service key): `{"action":"status"}` (public key, subject, subscription count),
+  `{"action":"ensure-keys"}`, `{"action":"test","title"?,"body"?}` (a test notification to every subscription).
 - **Payload format.** Every subscription gets a Declarative Web Push message: `{"web_push": 8030, "notification": {"title", "body", "navigate": "<APP_URL>/?date=<date>", "tag"}}`; the PWA opens that night from `?date=`. iOS 18.4+ Home Screen apps show it without the service worker; `public/sw.js` handles the same JSON in its `push` event for older clients.
-- **Subscribing.** System tab → "Morning report notifications" (Supabase source, signed in) asks for permission and calls `register_push_subscription`. It needs `NEXT_PUBLIC_VAPID_PUBLIC_KEY` = the `VAPID_PUBLIC_KEY` secret in the web app's env.
+- **Subscribing.** System tab → "Morning report notifications" (Supabase source, signed in) asks for permission and calls `register_push_subscription` with the public key above.
 - **Encryption.** Payloads are encrypted per RFC 8291 (aes128gcm) and signed with VAPID (RFC 8292) using `crypto.subtle` only. The encryption is tested against the RFC 8291 Appendix A vector.
 - **Dead subscriptions.** A subscription is deleted when the push service answers 404 or 410.
 
@@ -527,4 +559,29 @@ Until 0002 is applied, cron isn't scheduled and `x-cron-secret` requests are rej
 | SwitchBot webhook (registered by `switchbot-admin`) | `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/switchbot-webhook/<vault switchbot_webhook_secret>` |
 | Google Health subscriber endpoint | `https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/google-health-webhook` |
 
+**Night analysis + Web Push keys (2026-10-30 evening).** Migration `0016_night_metrics_vapid` applied (`night_metrics`,
+`household_settings.vapid_public_key`, `store_vapid_keys()` / `vapid_keys()`). `push-admin` deployed (new, `verify_jwt =
+false`); `nightly-report` v5 deployed as one esbuild bundle. VAPID keys generated in Vault; public key
+`BMDsv8jPKC18m5qiWBhXpUCwX8NKWXYBpf8ElPSM1zssGbxOCRMdBcJrgwp35hMvivs_cUrRVT1J6bUZIQ1f-EM`. Night 2026-10-30 analysed and
+reported (rules; no `ANTHROPIC_API_KEY`): Sleep Air 73, CO₂ mean 863 / max 940 ppm, 18.88 °C, RH 54.3 %, coverage 96.3 %,
+no morning ACH (meter frozen from 09:08). A push end-to-end test against a 410 endpoint encrypted, signed and removed the
+subscription. `ac-curve` still runs the previous bundle (its pre-cool push reads `VAPID_*` secrets, which are unset → skipped)
+until it is redeployed.
+
 **Google Health (2026-10-30).** `google-oauth` accepts the signed-in member's token (`POST /start`, see [How connecting works](#how-connecting-works)); the old `?access_token=` mismatch is gone. Migration `0015_band_sync` is applied (table + hourly sync job). Waiting on the user: the Google Cloud project and the `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` secrets ([Google Cloud setup](#google-cloud-setup-once-about-15-minutes-on-a-laptop)).
+
+### 2026-10-30 evening fixes (nightly-report v6, migration 0017)
+
+- **Manual nights** (no live `ac_commands`): `Night.manual` is set by `loadNight` / the analysis and by the web app; core
+  `scoringCurve()` then scores temperature against the steady 18.5 °C comfort target (`manualComfortCurve()`, in-band =
+  ±0.75 °C), not the stored plan. Driver labels say "comfort band", and the report adds a "run by hand" insight. The
+  first-4-h insight no longer says "tracked the curve".
+- **Late sleep data**: `shouldRun()` regenerates (silently) whenever more people have synced sleep than the stored
+  report has, even if the report is already final. The report cron now runs every 15 min from 06:00 to 18:45 ICT.
+- **Overnight ACH**: core `plateauAch()` (last 90 min before wake; `plateau` if the trend is under 5 ppm/h, otherwise
+  `upper_bound`) is stored as `night_metrics.ach_plateau{,_kind,_ppm}`. The occupancy detector's mass balance uses the
+  same value, and so does the app.
+- **Shower detail**: peak RH and temperature bump are measured within 15 min of onset, and measurement stops once the
+  temperature has climbed for more than 3 min.
+- **frozen_all**: a stretch where all three values repeat is now dropped only when it lasts more than 60 min and has no
+  webhook row after its first row.

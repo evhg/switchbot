@@ -3,10 +3,10 @@
 // mapping is isolated in the to* functions below so a migration rename is a one-line fix here. Sign-in state lives in
 // lib/auth.tsx; this file only exposes the client and the auth calls.
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import type { AcCommand, AcMode, FanSpeed, Night, Person, PersonNight, RoomEvent, RoomEventKind, RoomReading, SleepSession, StageSegment, TagKey } from '@sleep-lab/core';
-import { addDays, DAY, HOUR, ictDate, ictMidnight } from '../format.ts';
+import { BUILTIN_CURVES, DEFAULT_CURVE, cleanRoomReadings, plausibleCo2, type AcCommand, type AcMode, type CurvePhase, type FanSpeed, type Ms, type Night, type Person, type PersonNight, type RoomEvent, type RoomEventKind, type RoomReading, type SleepSession, type StageSegment, type TagKey, type TemperatureCurve } from '@sleep-lab/core';
+import { addDays, DAY, HOUR, ictDate, ictMidnight, MIN } from '../format.ts';
 import { runEngine } from './engine-client.ts';
-import type { Dataset, DataSource, NightDetail } from './types.ts';
+import type { Dataset, DataSource, NightDetail, NightGap, NightQuality, RealNightInfo } from './types.ts';
 
 type Row = Record<string, unknown>;
 
@@ -62,6 +62,67 @@ async function pageAll(q: () => { range(a: number, b: number): PromiseLike<{ dat
     if (data.length < size) break;
   }
   return out;
+}
+
+// ───────────────────────── real-data hygiene (pure, unit-testable) ─────────────────────────
+
+/** Gaps and frozen stretches shorter than this are not drawn (a missed poll or two). */
+const SHOW_GAP_MIN = 10;
+
+/**
+ * One night's room data, cleaned with core's cleanRoomReadings (the backend uses the same rules, so numbers agree):
+ * stale repeated cloud values are dropped, CO₂ below 300 ppm (the meter's warm-up 0) becomes NaN so no chart draws it.
+ * Gaps before the first reading ever stored are 'before-meter'. Everything is clipped to `now`.
+ */
+export function cleanNight(raw: readonly RoomReading[], o: { from: Ms; to: Ms; lightsOut: Ms; wake: Ms; now: Ms; firstEver: Ms | null }): { readings: RoomReading[]; quality: NightQuality } {
+  const to = Math.max(o.from + MIN, Math.min(o.to, o.now));
+  const { readings, quality: q } = cleanRoomReadings(raw, { from: o.from, to, lightsOut: o.lightsOut, wake: o.wake });
+  const gaps: NightGap[] = [
+    ...q.gaps.map((g): NightGap => ({ start: g.start, end: g.end, kind: o.firstEver === null || g.end <= o.firstEver + MIN ? 'before-meter' : 'missing' })),
+    ...q.frozen.map((f): NightGap => ({ start: f.start, end: f.end, kind: 'frozen', value: `${f.tempC.toFixed(1)}°, ${Math.round(f.rh)}%` })),
+  ]
+    .filter((g) => g.end - g.start >= SHOW_GAP_MIN * MIN)
+    .sort((a, b) => a.start - b.start);
+  return {
+    readings: readings.map((r) => (plausibleCo2(r.co2) ? r : { ...r, co2: NaN })),
+    quality: { gaps, coverage: q.coverage, frozenDropped: q.rawCount - q.keptCount, co2Glitches: q.invalidCo2Count, flags: q.flags },
+  };
+}
+
+/** Default schedule of a night without a nights row: lights out 22:00, wake 08:30 (ICT), as the backend creates it. */
+export const defaultLightsOut = (date: string) => ictMidnight(date) - 2 * HOUR;
+export const defaultWake = (date: string) => ictMidnight(date) + 8.5 * HOUR;
+/** The room-data window of the night ending on `date`: 18:00 the evening before → 12:00 on the wake date. */
+export const nightWindow = (date: string) => ({ from: ictMidnight(date) - 6 * HOUR, to: ictMidnight(date) + 12 * HOUR });
+
+/**
+ * Wake dates to show: every night whose wake time has passed and that has room readings in its sleep window (lights
+ * out → wake) or a sleep session. Planned future nights (rows created for away periods etc.) are not nights yet.
+ */
+export function realNightDates(o: { now: Ms; fromDate: string; readings: readonly RoomReading[]; rows: ReadonlyMap<string, { lightsOut: Ms; wake: Ms }>; sleepEnds: readonly Ms[] }): string[] {
+  const out: string[] = [];
+  const last = ictDate(o.now);
+  for (let d = o.fromDate; d <= last; d = addDays(d, 1)) {
+    const row = o.rows.get(d);
+    const lo = row?.lightsOut ?? defaultLightsOut(d);
+    const wake = row?.wake ?? defaultWake(d);
+    if (wake > o.now) continue;
+    const win = nightWindow(d);
+    const room = o.readings.some((r) => r.ts >= lo - HOUR && r.ts < wake);
+    const sleep = o.sleepEnds.some((t) => t >= win.from && t < win.to);
+    if (room || sleep) out.push(d);
+  }
+  return out;
+}
+
+export const rowToCurve = (r: Row): TemperatureCurve | null =>
+  Array.isArray(r.phases) && typeof r.id === 'string'
+    ? { id: r.id, name: str(r.name, r.id), phases: r.phases as CurvePhase[], minC: num(r.min_c, 16), maxC: num(r.max_c, 24) }
+    : null;
+
+/** A night's curve: the stored row, else the built-in with that id, else the default. */
+export function curveById(id: string | null | undefined, curves: readonly TemperatureCurve[] = []): TemperatureCurve {
+  return curves.find((c) => c.id === id) ?? BUILTIN_CURVES.find((c) => c.id === id) ?? DEFAULT_CURVE;
 }
 
 let client: SupabaseClient | null = null;
@@ -305,27 +366,33 @@ export function createSupabaseSource(days = 90): DataSource {
     return meter ? q.eq('device_id', meter) : q;
   };
   const details = new Map<string, Promise<NightDetail>>();
+  /** Per night: facts the Night type doesn't carry (filled by load, the report is fetched on demand). */
+  const infos = new Map<string, Omit<RealNightInfo, 'report'>>();
+  const reports = new Map<string, Promise<RealNightInfo['report']>>();
 
   async function load(onProgress?: (m: string) => void): Promise<Dataset> {
     const now = Date.now();
     const fromDate = addDays(ictDate(now), -days);
-    onProgress?.('Loading nights…');
-    const nightsRes = await db().from('nights').select('*').gte('date', fromDate).order('date');
-    if (nightsRes.error) throw new Error(nightsRes.error.message);
-    const nightRows = (nightsRes.data ?? []) as Row[];
-    // Signed in, but nothing has arrived yet: an empty dataset (the shell shows the onboarding state instead of charts).
-    if (!nightRows.length) {
-      const { data: ppl } = await db().from('people').select('id,name,color_key').order('id');
-      const people: Person[] = ((ppl ?? []) as Row[]).map((r) => ({ id: str(r.id), name: str(r.name, str(r.id)), colorKey: str(r.color_key, 'personA') }));
-      return { source: 'supabase', people, nights: [], room: [], person: {}, generatedAt: now, computeMs: 0, clipTs: now + DAY };
-    }
     const from = ictMidnight(fromDate) - 6 * HOUR;
-    onProgress?.('Loading room readings…');
-    meter ??= await meterDeviceId();
-    const readings = (await pageAll(() => readingsQ().gte('ts', new Date(from).toISOString()).order('ts'))).map(toReading);
-    onProgress?.('Loading aircon log…');
-    const acRows = await pageAll(() => db().from('ac_commands').select('*').gte('ts', new Date(from).toISOString()).order('ts'));
     const iso = new Date(from).toISOString();
+    onProgress?.('Loading nights…');
+    meter ??= await meterDeviceId();
+    const [nightsRes, curveRows, firstRes] = await Promise.all([
+      db().from('nights').select('*').gte('date', fromDate).order('date'),
+      pageAll(() => db().from('curves').select('id,name,phases,min_c,max_c')).catch(() => [] as Row[]),
+      readingsQ().order('ts').limit(1),
+    ]);
+    if (nightsRes.error) throw new Error(nightsRes.error.message);
+    const nightRows = new Map(((nightsRes.data ?? []) as Row[]).map((r) => [str(r.date), r]));
+    const curves = curveRows.flatMap((r) => rowToCurve(r) ?? []);
+    const firstEver = firstRes.data?.[0] ? ms((firstRes.data[0] as Row).ts) : null;
+    onProgress?.('Loading room readings…');
+    const raw = (await pageAll(() => readingsQ().gte('ts', iso).order('ts'))).map(toReading);
+    onProgress?.('Loading aircon log…');
+    const [acRows, eventRows] = await Promise.all([
+      pageAll(() => db().from('ac_commands').select('*').gte('ts', iso).order('ts')),
+      pageAll(() => db().from('events').select('night_date,kind,start_ts,end_ts,confidence,detail,source').gte('start_ts', iso).order('start_ts')).catch(() => [] as Row[]),
+    ]);
     onProgress?.('Loading body data…');
     const [peopleRows, sessions, hr, hrv, spo2, daily, vitals] = await Promise.all([
       pageAll(() => db().from('people').select('id,name,color_key').order('id')),
@@ -342,13 +409,18 @@ export function createSupabaseSource(days = 90): DataSource {
       ...dailyExtras(daily.filter((d) => d.person_id === pid && d.date === date)),
       ...vitalsFor(vitals.filter((v) => v.person_id === pid), date),
     });
+    const schedule = new Map(
+      [...nightRows].map(([d, r]) => [d, { lightsOut: ms(r.lights_out) || defaultLightsOut(d), wake: ms(r.wake) || defaultWake(d) }]),
+    );
+    const dates = realNightDates({ now, fromDate, readings: raw, rows: schedule, sleepEnds: sessions.map((x) => ms(x.end_ts)) });
+    infos.clear();
 
-    const nights: Night[] = nightRows.map((r) => {
-      const date = str(r.date);
-      const lightsOut = ms(r.lights_out) || ictMidnight(date) - 1.5 * HOUR;
-      const wake = ms(r.wake) || ictMidnight(date) + 6.5 * HOUR;
-      const winFrom = ictMidnight(date) - 6 * HOUR;
-      const winTo = ictMidnight(date) + 12 * HOUR;
+    const nights: Night[] = dates.map((date) => {
+      const r = nightRows.get(date) ?? ({} as Row);
+      const lightsOut = schedule.get(date)?.lightsOut ?? defaultLightsOut(date);
+      const wake = schedule.get(date)?.wake ?? defaultWake(date);
+      const sleepOnset = r.sleep_onset ? ms(r.sleep_onset) : undefined;
+      const { from: winFrom, to: winTo } = nightWindow(date);
       const tags = (Array.isArray(r.tags) ? r.tags : []) as TagKey[];
       // The sleep session that ends closest to this night's wake time, per person.
       const nightPeople: PersonNight[] = people.flatMap((p) => {
@@ -367,21 +439,58 @@ export function createSupabaseSource(days = 90): DataSource {
           ...dailyFor(p.id, date),
         }];
       });
+      const mine = acRows.filter((x) => str(x.night_date) === date || (!x.night_date && ms(x.ts) >= winFrom && ms(x.ts) < winTo));
+      const ac = effectiveCommandRows(mine);
+      const { readings: room, quality } = cleanNight(raw, { from: winFrom, to: winTo, lightsOut, wake, now, firstEver });
+      infos.set(date, {
+        date,
+        quality,
+        control: !ac.length ? 'manual' : ac.some((x) => x.dry_run !== true) ? 'live' : 'dry-run',
+        acCount: ac.length,
+        precool: { status: typeof r.precool_status === 'string' ? r.precool_status : null, reason: typeof r.precool_reason === 'string' ? r.precool_reason : null, at: r.precool_at ? ms(r.precool_at) : null },
+        sleepOnset: sleepOnset ?? null,
+        storedEvents: eventRows.filter((e) => str(e.night_date) === date).length,
+      });
       return {
         date,
         lightsOut,
         wake,
-        room: readings.filter((x) => x.ts >= winFrom && x.ts < winTo),
+        ...(sleepOnset ? { sleepOnset } : {}),
+        room,
         outdoor: [],
-        ac: effectiveCommandRows(acRows.filter((x) => str(x.night_date) === date || (!x.night_date && ms(x.ts) >= winFrom && ms(x.ts) < winTo))).map(toAcCommand),
-        curveId: str(r.curve_id, 'default-v1'),
-        events: [],
+        ac: ac.map(toAcCommand),
+        curveId: str(r.curve_id, DEFAULT_CURVE.id),
+        // Same rule as the backend (night_metrics flag manual_night): no live command = run by hand, so core scores the
+        // room against the steady comfort target instead of the stored plan.
+        manual: !ac.some((x) => x.dry_run !== true),
+        // The backend's detector rows when it wrote any; otherwise the engine detects events in the browser.
+        events: eventRows.filter((e) => str(e.night_date) === date || (!e.night_date && ms(e.start_ts) >= lightsOut && ms(e.start_ts) < wake)).map(toEvent),
         people: nightPeople,
         tags,
       };
     });
+    if (!nights.length) {
+      return { source: 'supabase', people, nights: [], room: [], person: {}, generatedAt: now, computeMs: 0, clipTs: now + DAY, curves };
+    }
     onProgress?.('Computing metrics…');
-    return runEngine<Dataset>({ type: 'compute', nights, source: 'supabase', clipTs: now + DAY });
+    const ds = await runEngine<Dataset>({ type: 'compute', nights, source: 'supabase', clipTs: now + DAY, curves });
+    return { ...ds, curves };
+  }
+
+  async function loadReport(date: string): Promise<RealNightInfo['report']> {
+    const { data, error } = await db().from('reports').select('report,generated_by,created_at,final').eq('date', date).maybeSingle();
+    if (error || !data) return null;
+    const row = data as Row;
+    const rep = (row.report ?? {}) as Row;
+    const headline = str(rep.headline);
+    if (!headline) return null;
+    return {
+      headline,
+      insights: Array.isArray(rep.insights) ? (rep.insights as unknown[]).filter((x): x is string => typeof x === 'string') : [],
+      generatedBy: str(row.generated_by, str(rep.generatedBy, 'rules')),
+      createdAt: row.created_at ? ms(row.created_at) : null,
+      final: row.final === true,
+    };
   }
 
   return {
@@ -403,6 +512,17 @@ export function createSupabaseSource(days = 90): DataSource {
       }
       return d;
     },
+    async nightInfo(date) {
+      if (dataset) await dataset.catch(() => null);
+      const base = infos.get(date);
+      if (!base) return null;
+      let r = reports.get(date);
+      if (!r) {
+        r = loadReport(date).catch(() => null);
+        reports.set(date, r);
+      }
+      return { ...base, report: await r };
+    },
     async liveReading() {
       meter ??= await meterDeviceId();
       const { data, error } = await readingsQ().order('ts', { ascending: false }).limit(1);
@@ -412,7 +532,15 @@ export function createSupabaseSource(days = 90): DataSource {
     async liveWindow(from, to) {
       meter ??= await meterDeviceId();
       const rows = await pageAll(() => readingsQ().gte('ts', new Date(from).toISOString()).lte('ts', new Date(to).toISOString()).order('ts'), 5000);
-      return rows.map(toReading);
+      return cleanNight(rows.map(toReading), { from, to: to + MIN, lightsOut: from, wake: to, now: to + MIN, firstEver: null }).readings;
     },
   };
+}
+
+/** Tonight's curve id from its nights row (null = no row yet: the backend will create it with the default curve). */
+export async function fetchNightCurveId(date: string): Promise<string | null> {
+  if (!supabaseConfigured()) return null;
+  const { data } = await db().from('nights').select('curve_id').eq('date', date).maybeSingle();
+  const id = (data as Row | null)?.curve_id;
+  return typeof id === 'string' ? id : null;
 }

@@ -9,8 +9,8 @@ import { usePref } from '@/lib/prefs.ts';
 import { PlanChart } from '../charts/PlanChart.tsx';
 import { Reveal } from '../motion.tsx';
 import { systemHref } from '../nav.tsx';
-import { AdviceCard, Button, Chip, Chips, Disclosure } from '../ui.tsx';
-import { TAGS, clock, planTimes, usePlanClock } from '../system/model.ts';
+import { AdviceCard, Button, Chip, Chips, Disclosure, Group, Row, Status } from '../ui.tsx';
+import { TAGS, aircon, clock, planTimes, usePlanClock, type PlanClock } from '../system/model.ts';
 import { acReason } from './model.ts';
 import { Scene, SceneCols, SceneText, VisHead } from './parts.tsx';
 import s from './story.module.css';
@@ -45,8 +45,55 @@ function useWide() {
   return wide;
 }
 
-export function Tonight({ plan, night, room, onLatest }: { plan: TemperatureCurve; night: Night; room: RoomNightMetrics; onLatest: (() => void) | null }) {
-  const copy = tonightCopy(plan, night, room);
+/** "Pre-cool at 21:30 to 18.5° (set 17°), nothing while you sleep, off at 09:00." from the plan the controller runs. */
+export function planSentence(plan: TemperatureCurve, pc: PlanClock): string {
+  const ac = aircon(plan, pc.lightsOut, true, pc.tonight.biasC, pc.wake, pc.sleepOnset);
+  const on = ac.steps[0];
+  const off = ac.steps.find((x) => x.setC === null);
+  const asleep = ac.steps.filter((x) => x.asleep);
+  const first = on && on.targetC !== null ? `Pre-cool at ${on.at} to ${fmt(on.targetC, 1)}°${on.setC !== null && Math.abs(on.setC - on.targetC) > 0.05 ? ` (aircon set ${on.setC}°)` : ''}` : 'No pre-cool';
+  const night = asleep.length ? `${asleep.length} change${asleep.length === 1 ? '' : 's'} while you sleep` : 'nothing while you sleep';
+  return `${first}, ${night}, off at ${off?.at ?? clock(pc.wake + 30)}.`;
+}
+
+/** Tonight as the backend sees it: pre-cool decision, presence, live vs dry-run, schedule. */
+function LiveTonight({ pc }: { pc: PlanClock }) {
+  const t = pc.tonight;
+  return (
+    <Group className={s.liveTonight}>
+      <Row title="Pre-cool" sub={t.precool.text.replace(/^Pre-cool /, '').replace(/^./, (c) => c.toUpperCase())} value={<Status tone={t.precool.tone === 'alert' ? 'alert' : t.precool.tone === 'on' ? 'on' : 'off'}>{t.precool.tone === 'on' ? 'On' : t.precool.tone === 'alert' ? 'Waiting' : 'Off'}</Status>} />
+      <Row title="Who’s home" sub={t.status.text} value={t.status.state === 'home' ? 'Home' : t.status.state === 'away' ? 'Away' : 'Unknown'} href={systemHref('presence')} />
+      <Row title="Aircon control" value={t.acLive === null ? '–' : <Status tone={t.acLive ? 'on' : 'off'}>{t.acLive ? 'Live' : 'Dry-run'}</Status>} sub={t.acLive ? 'Real commands to the aircon' : t.acLive === false ? 'Logged only, nothing sent' : undefined} />
+      <Row title="Schedule" value={<span className="num">{clock(pc.lightsOut)} · asleep {clock(pc.sleepOnset)} · up {clock(pc.wake)}</span>} />
+    </Group>
+  );
+}
+
+export function Tonight({
+  plan,
+  night,
+  room,
+  onLatest,
+  live = false,
+  manualLast = false,
+}: {
+  plan: TemperatureCurve;
+  night: Night;
+  room: RoomNightMetrics;
+  onLatest: (() => void) | null;
+  /** Real household (signed in): tonight's plan and status come from the backend. */
+  live?: boolean;
+  /** The night told above ran without the controller (aircon by hand). */
+  manualLast?: boolean;
+}) {
+  const base = tonightCopy(plan, night, room);
+  const pcLive = usePlanClock();
+  const copy =
+    live && manualLast
+      ? { ...base, head: 'Tonight, Sleep Lab runs the aircon.', tip: `The night above ran by hand. ${planSentence(plan, pcLive)}` }
+      : live
+        ? { ...base, tip: `${base.tip} ${planSentence(plan, pcLive)}` }
+        : base;
   const allAc = [...night.ac].sort((a, b) => a.ts - b.ts);
   const wide = useWide();
   const [armedFor, setArmedFor] = usePref<string>('armedFor', '');
@@ -62,7 +109,7 @@ export function Tonight({ plan, night, room, onLatest }: { plan: TemperatureCurv
       return { ...st, [tonight]: cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k] };
     });
   // Tonight's times come from the same selector and lights-out anchor as System › Tonight's plan.
-  const pc = usePlanClock();
+  const pc = pcLive;
   const times = planTimes(plan, pc.lightsOut, pc.wake);
   return (
     <>
@@ -71,6 +118,20 @@ export function Tonight({ plan, night, room, onLatest }: { plan: TemperatureCurv
           text={
             <SceneText label="Tonight" title={copy.head} lede={copy.tip}>
               <Reveal delay={180} className={s.advice}>
+                {live ? (
+                  <>
+                    <LiveTonight pc={pcLive} />
+                    <div className={s.liveActions}>
+                      <Button variant="primary" href={systemHref('plan')}>
+                        Edit tonight’s plan
+                      </Button>
+                      <Button variant="text" href={systemHref('presence')}>
+                        Home or away
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                <>
                 <AdviceCard
                   title={copy.tipBold}
                   reason={reason(copy.tipBold)}
@@ -80,12 +141,14 @@ export function Tonight({ plan, night, room, onLatest }: { plan: TemperatureCurv
                 <p className="cap">
                   Tonight starts {clock(times.starts)} · asleep by {clock(pc.sleepOnset)} · coolest {fmt(times.coolest, 1)}° · wake {clock(times.wake)}{armed ? ' · saved on this device, the controller picks it up then' : ''}
                 </p>
+                </>
+                )}
               </Reveal>
             </SceneText>
           }
         >
           <Reveal>
-            <VisHead title="Tonight’s plan, with last night’s room" cap="Plan in colour, last night in grey" />
+            <VisHead title={live ? `Tonight’s plan: ${plan.name}` : 'Tonight’s plan, with last night’s room'} cap="Plan in colour, last night’s room in grey" />
             <PlanChart plan={plan} last={night} />
           </Reveal>
           <Reveal delay={80} className={s.tags}>
@@ -100,7 +163,8 @@ export function Tonight({ plan, night, room, onLatest }: { plan: TemperatureCurv
             <p className="cap">Tags become filters and experiment arms in the Lab.</p>
           </Reveal>
           <Reveal delay={120}>
-            <Disclosure key={wide ? 'open' : 'closed'} title="Last night’s aircon log" count={`${allAc.length} command${allAc.length === 1 ? '' : 's'}`} defaultOpen={wide} className={s.log}>
+            <Disclosure key={wide ? 'open' : 'closed'} title="Last night’s aircon log" count={manualLast ? 'By hand' : `${allAc.length} command${allAc.length === 1 ? '' : 's'}`} defaultOpen={wide} className={s.log}>
+              {manualLast && <p className="sec">No commands: the aircon was run by hand this night, so there is nothing to log.</p>}
               <ol className={s.acList}>
                 {allAc.map((a, i) => (
                   <li key={i}>

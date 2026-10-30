@@ -65,3 +65,6 @@ verify_jwt = false
 
 [functions.auth-admin]
 verify_jwt = false
+
+[functions.push-admin]
+verify_jwt = false

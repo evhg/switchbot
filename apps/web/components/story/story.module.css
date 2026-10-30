@@ -77,6 +77,15 @@
 .verdict span { font-weight: 400; color: var(--text-2); }
 .verdictSk { display: grid; gap: 12px; max-width: 560px; margin-top: var(--sp-10); }
 
+/* Room-only night: the room score is the hero reading (same type as a person's score), its scale under it. */
+.roomHero { display: flex; flex-direction: column; align-items: stretch; gap: var(--sp-2); width: 100%; max-width: 560px; padding: 0; border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; }
+.roomHero .personScore { font-size: calc(var(--t-display) * 1.25); }
+@media (hover: hover) { .roomHero:hover .who { text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; } }
+.quality { margin-top: var(--sp-5); max-width: 38rem; color: var(--text-2); }
+.quality::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); margin-right: 10px; vertical-align: 2px; }
+.sideCard { align-self: end; }
+@media (min-width: 1024px) { .sideCard { grid-column: 9 / span 4; } }
+
 /* Room score: secondary, a reading plus its 0–100 scale. */
 .roomSide { padding-top: var(--sp-6); border-top: 1px solid var(--hairline); }
 @media (min-width: 1024px) { .roomSide { padding-top: var(--sp-6); } }
@@ -308,3 +317,12 @@
 .wfNum { text-align: right; font-size: var(--t-sec); font-weight: 560; color: var(--text); }
 .wfTotal .wfLabel { color: var(--text); font-weight: 560; }
 .wfHover .wfLabel { color: var(--text); }
+
+/* Data gaps (real data): quiet bands, a caption-size label in --muted. */
+.gapLabel { font-size: var(--t-cap); fill: var(--muted); }
+.shortHist { list-style: none; margin: var(--sp-4) 0 0; padding: 0; border-top: 1px solid var(--hairline); }
+.shortHist li { display: grid; grid-template-columns: 1fr auto auto; align-items: baseline; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--hairline); font-size: var(--t-body); }
+.shortHist li b { font-weight: 400; }
+.liveTonight { margin-top: var(--sp-2); }
+.liveActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-4); margin-top: var(--sp-5); }
+.morning { margin-top: var(--sp-8); padding-top: var(--sp-5); border-top: 1px solid var(--hairline); display: grid; gap: var(--sp-2); max-width: 38rem; }

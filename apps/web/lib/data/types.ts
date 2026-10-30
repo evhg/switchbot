@@ -9,6 +9,7 @@ import type {
   RoomNightMetrics,
   RoomReading,
   RoomScoreParts,
+  TemperatureCurve,
 } from '@sleep-lab/core';
 
 export type SourceKind = 'sim' | 'supabase';
@@ -31,6 +32,8 @@ export interface Dataset {
   clipTs: Ms;
   /** Progressive first paint: only the newest night is in this dataset (history still computing). */
   partial?: boolean;
+  /** Curves stored in the backend (Supabase source); a night's curveId resolves against these, then the built-ins. */
+  curves?: TemperatureCurve[];
 }
 
 /** Heavier per-night analysis, computed on demand for the night being viewed. */
@@ -44,9 +47,58 @@ export interface NightDetail {
   people: PersonNightMetrics[];
 }
 
+/**
+ * A stretch of the night without trustworthy room data:
+ *   'before-meter' the meter wasn't connected yet (before the first reading ever stored)
+ *   'missing'      no readings (hub unplugged, Wi-Fi or cloud outage)
+ *   'frozen'       the cloud kept repeating the same temperature and humidity (stale values, left out)
+ */
+export interface NightGap {
+  start: Ms;
+  end: Ms;
+  kind: 'before-meter' | 'missing' | 'frozen';
+  /** Frozen only: the repeated value, e.g. "25.1°, 64%". */
+  value?: string;
+}
+
+export interface NightQuality {
+  /** Gaps inside the night's window (lights-out − 2 h → wake + 1 h, clipped to now), oldest first. */
+  gaps: NightGap[];
+  /** Share of lights-out → wake with trustworthy readings, 0..1. */
+  coverage: number;
+  /** Readings left out because they repeated stale cloud values. */
+  frozenDropped: number;
+  /** CO₂ readings below 300 ppm (the meter's warm-up artifact), shown as no CO₂. */
+  co2Glitches: number;
+  /** Core's flags (cleanRoomReadings): frozen_temp_rh, frozen_all, gap_overnight, low_coverage, … */
+  flags: string[];
+}
+
+/** Real-data facts about one night that the core Night type doesn't carry (Supabase source only). */
+export interface RealNightInfo {
+  date: string;
+  quality: NightQuality;
+  /**
+   * Who ran the aircon: 'live' (commands sent by the controller), 'dry-run' (logged only), 'manual' (no controller
+   * commands that night: run by hand or not at all).
+   */
+  control: 'live' | 'dry-run' | 'manual';
+  /** Commands the controller logged for this night (after dropping failed sends). */
+  acCount: number;
+  precool: { status: string | null; reason: string | null; at: Ms | null };
+  /** Expected sleep onset stored on the nights row (null = lights-out + 60 min). */
+  sleepOnset: Ms | null;
+  /** The morning report (reports table), when the backend has written one. */
+  report: { headline: string; insights: string[]; generatedBy: string; createdAt: Ms | null; final: boolean } | null;
+  /** Rows from the events table (the backend's detectors), when present. Empty = detected in the browser. */
+  storedEvents: number;
+}
+
 export interface DataSource {
   kind: SourceKind;
   label: string;
+  /** Real-data facts for a night (gaps, who ran the aircon, the morning report). Undefined for the simulator. */
+  nightInfo?(date: string): Promise<RealNightInfo | null>;
   /** `onPartial` (optional) receives a newest-night-only dataset (partial: true) before the full one resolves. */
   loadDataset(onProgress?: (msg: string) => void, onPartial?: (ds: Dataset) => void): Promise<Dataset>;
   loadNightDetail(date: string): Promise<NightDetail>;
@@ -66,7 +118,7 @@ export interface SimParams {
 
 export type EngineRequest =
   | { type: 'simulate'; params: SimParams }
-  | { type: 'compute'; nights: Night[]; source: SourceKind; clipTs: Ms }
+  | { type: 'compute'; nights: Night[]; source: SourceKind; clipTs: Ms; curves?: TemperatureCurve[] }
   | { type: 'detail'; date: string };
 
 export type EngineResponse =

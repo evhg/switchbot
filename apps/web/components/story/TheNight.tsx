@@ -11,7 +11,7 @@ import { linePath, scale } from '../charts/common.tsx';
 import { Chapter, useReducedMotion } from '../motion.tsx';
 import { useScrub } from './useScrub.ts';
 import { Icon } from '../icons.tsx';
-import { HypnoBlocks, personScope, STAGE_NAME, useBox } from './parts.tsx';
+import { GapBands, HypnoBlocks, personScope, STAGE_NAME, useBox } from './parts.tsx';
 import { STAGE_BY_CODE, valueAt, type NightStep, type StoryModel } from './model.ts';
 import s from './story.module.css';
 
@@ -186,6 +186,7 @@ function Frame({ model, g, people }: { model: StoryModel; g: Geo; people: string
             )}
         </g>
       ))}
+      <GapBands gaps={model.gaps} x={X} from={model.lo} to={model.end} y0={g.temp.y} y1={g.co2.y + g.co2.h} labelY={g.temp.y + g.temp.h - 8} />
       {label(g.temp.y, 'Room °C')}
       {g.temp.ticks.map((v) => (
         <g key={v}>
@@ -198,7 +199,7 @@ function Frame({ model, g, people }: { model: StoryModel; g: Geo; people: string
       <path d={planD} fill="none" stroke="var(--muted)" strokeWidth={1.5} strokeDasharray="4 4" />
       {g.desk && (
         <text x={g.pl + 6} y={g.temp.y + 16} className={s.tickSm}>
-          Dashed: the plan
+          {model.control === 'manual' ? 'Dashed: the stored plan (not run, aircon by hand)' : 'Dashed: the plan'}
         </text>
       )}
       {label(g.co2.y, 'CO₂ ppm')}
