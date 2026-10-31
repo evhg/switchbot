@@ -29,6 +29,8 @@ supabase/
     google-oauth/             /start and /callback; refresh tokens go to Vault
     nightly-report/           night analysis (cleaned readings → events, night_metrics) + rule report + Claude rewrite + Web Push
     push-admin/               VAPID keys (created in the backend, kept in Vault) + public-key GET + test push
+    calendar-sync/            both Google Calendars → household trips → away_periods (source 'calendar', 0018)
+    weather-poll/             Phuket outdoor temp/RH every 15 min (Google Weather or Open-Meteo) → outdoor_readings
     tests/                    `deno test` (Web Push RFC vector, coach grounding, health helpers)
 scripts/seed-supabase.ts      simulated nights → Supabase (Node)
 ```
@@ -46,7 +48,7 @@ All timestamps are `timestamptz` (UTC). A night is keyed by the **ICT wake-up da
 | `devices` | SwitchBot device ids (meter, AC, sim) | functions / seed |
 | `readings` | Room temp/RH/CO₂ per device per **minute**, PK `(device_id, ts)`, BRIN on `ts` | webhook, poll, seed |
 | `raw_switchbot` | Every webhook body unchanged, for measuring cadence and lag | webhook |
-| `outdoor_readings` | Outdoor temp/RH | seed / later a weather source |
+| `outdoor_readings` | Outdoor temp/RH, PK `ts`; `source` = `open_meteo` / `google_weather` / `manual` / `sim` | weather-poll (every 15 min, 0018), seed |
 | `calibrations` | CO₂ outdoor calibrations, offsets | manual |
 | `curves` | Temperature curves (`phases` jsonb = `CurvePhase[]`); `default-v1` is inserted by 0001, `one-beep-v1` (the default since 0009) by 0009 | SQL |
 | `presence_events`, `presence_latest` (view) | Arrive/leave-home events from the iPhones (0009); household read, service-role write | presence |
@@ -125,7 +127,7 @@ Until a function's required secrets are set it answers `503 {"error":"not config
 | `SWITCHBOT_AC_RESERVE` | poll-meter | Default 300. Polling stops when fewer calls are left, keeping room for aircon commands |
 | `POLL_SKIP_IF_FRESH_S` | poll-meter | Default 0 (off). For example, 50 skips the poll when a webhook reading is that fresh |
 | `DEFAULT_LIGHTS_OUT`, `DEFAULT_WAKE` | ac-curve, nightly-report | ICT `HH:MM` used when a night has no row yet. Defaults are 22:00 (every day) and 08:30 |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | google-oauth, google-health-sync | OAuth client of type "Web application" |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | google-oauth, google-health-sync, calendar-sync | OAuth client of type "Web application" |
 | `GOOGLE_HEALTH_WEBHOOK_SECRET` | google-health-webhook | The subscriber's `endpointAuthorization.secret` |
 | `GOOGLE_HEALTH_SIGNATURE` | google-health-webhook | `off` / `log` (default) / `enforce`. The ECDSA verifier is best effort |
 | `OAUTH_START_SECRET` | google-oauth | **Optional, legacy.** Enables the `GET /start?person=&key=` setup link. Not needed: the PWA starts consent with the member's own sign-in |
@@ -134,6 +136,8 @@ Until a function's required secrets are set it answers `503 {"error":"not config
 | `ANTHROPIC_MODEL` | nightly-report | Default `claude-opus-5-5` |
 | `VAPID_SUBJECT` | nightly-report, ac-curve, push-admin | Optional `mailto:` / `https:` contact; default = the `APP_URL` origin, else `https://sleep-lab-lac.vercel.app` |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | — | **Not needed** since 0016: the key pair is generated in the backend and kept in Vault. If set while Vault is empty, they are adopted into Vault once |
+| `GOOGLE_WEATHER_API_KEY` | weather-poll | Optional. Google Maps Platform key with the Weather API enabled (needs billing). Unset, or a failing call → Open-Meteo (free, no key) |
+| `WEATHER_LAT`, `WEATHER_LON` | weather-poll | Optional; default Phuket 7.88 / 98.39 |
 | `PUBLIC_FUNCTIONS_URL` | optional | Overrides `<SUPABASE_URL>/functions/v1`, e.g. behind a custom domain |
 
 ## Setup, step by step
@@ -303,6 +307,39 @@ Decided 2026-10-30, after the first real night (aircon at 17 °C by hand: bed 18
 - **App**: Tonight's plan shows "Home by default" and "Aircon control: Live / Dry-run" switches and the Away dates list
   (add / remove); the plan uses the backend's bias for its set points.
 
+## Calendar trips and outdoor weather (migration 0018)
+
+Decided 2026-10-31: trips in the calendars switch the aircon off by themselves, and the night analysis gets real
+outdoor weather.
+
+- **`calendar-sync`** (pg_cron hourly at :23, or a household owner/member's JWT; `{"dryRun":true}` computes without
+  writing). Per person: the Google access token from the same Vault refresh token as google-health-sync
+  (`_shared/google.ts`; scope `calendar.events.readonly` is part of the one consent), then the primary calendar's events
+  from 14 days back, or from the first evening of a stored calendar trip still under way (so its outbound leg is still
+  seen), to 45 days ahead (`singleEvents=true`, `orderBy=startTime`, only the needed fields).
+- **Trips** (core `calendar/trips.ts`): flights (Gmail `fromGmail` events, "Flight to Bangkok", "HKT → BKK"; an
+  outbound from HKT pairs with the next flight to HKT), multi-day all-day events (their last day is the day home;
+  "visiting", "guests", "WFH" excluded), overnight hotel / Gmail stays, events at a place outside Phuket (city, airport
+  code or a non-83xxx Thai postcode in the location). Keywords like "trip" or "check-in" alone never make a night. An
+  evening E of a trip is away when the trip started by E 20:00 and lasts to E+1 03:00 (day trips and late departures
+  stay home); a short event located in Phuket that evening vetoes it.
+- **Household rule**: an evening is away only when EVERY person is away (core `householdAwayRanges`). Nothing is written
+  unless every person's calendar was read (no connection, `needs_reconsent`, calendar scope missing or an API error →
+  `409` / `ok:false`, rows untouched).
+- **`away_periods`** gains `source` (`manual` | `calendar`), `external_id` (`cal:<first evening>`), `in_calendar`,
+  `synced_at`. `sync_calendar_away_periods(ranges, cutoff)` (service role only) upserts the household's trips and sets
+  `active = false, in_calendar = false` on calendar rows that are gone; rows that ended before tonight's evening and
+  every manual row (the Bangkok seed) are never touched. A trip inside an active manual period is not added again. A
+  calendar row removed in the app stays off (also if the trip vanishes and reappears, or reappears with another first
+  evening); one the sync retired comes back if the trip reappears. Once tonight's evening has begun (18:00), a sync that
+  would newly mark tonight away writes nothing until noon: a trip appearing mid-night must not switch off a running
+  aircon. One-way flights alone, and flights they meet or see off ("pick up", "drop off"), make no night.
+- **`weather-poll`** (pg_cron every 15 min at :07/:22/:37/:52): Google Weather `currentConditions:lookup` when
+  `GOOGLE_WEATHER_API_KEY` is set, otherwise (or when Google fails) Open-Meteo `current=temperature_2m,
+  relative_humidity_2m`; parsed by core `weather/parse.ts`, upserted on `ts`. `loadNight()` (nightly report) and the
+  app's Room › Outdoor vs bedroom chart read them (`source <> 'sim'` in the app). One `api_quota_log` row per API call.
+- **App**: System › Tonight's plan › Away dates labels calendar trips "from calendar"; Remove works as for manual ones.
+
 ## Sleep onset (migration 0011)
 
 Decided 2026-10-29: in bed at 22:00 every day, asleep around 23:00, up around 08:30.
@@ -334,6 +371,8 @@ Decided 2026-10-29: in bed at 22:00 every day, asleep around 23:00, up around 08
 | `sleeplab-health-sync-1400` | `0 7 * * *` | 14:00 | Afternoon backstop |
 | `sleeplab-health-sync-queue` | `*/10 * * * *` | every 10 min | Drains webhook- and OAuth-queued jobs (no-op when empty); a fresh connection backfills 14 days here |
 | `sleeplab-health-sync-hourly` | `45 * * * *` | every hour at :45 | Light pull (`hours: 6`, `sleepDays: 2`) that keeps `band_sync` fresh for the Presence page (migration 0015) |
+| `sleeplab-calendar-sync` | `23 * * * *` | every hour at :23 | Both Google Calendars → household away nights (0018) |
+| `sleeplab-weather-poll` | `7-59/15 * * * *` | :07, :22, :37, :52 | Outdoor temp/RH → `outdoor_readings` (0018) |
 | `sleeplab-housekeeping` | `17 20 * * *` | 03:17 | Prunes `cron.job_run_details` (7 d), `api_quota_log` (60 d), old jobs and OAuth states |
 
 - **The report regenerates after late data** automatically (see `sleeplab-nightly-report`). To regenerate by hand, call `nightly-report` with `{"date": "YYYY-MM-DD"}` (no push unless `"push": true`). Owners and members can do it with their JWT for the last 7 days; `viewer` members are read-only everywhere (also in `set_night`). Scheduled callers use `x-cron-secret`.
@@ -590,6 +629,11 @@ subscription. `ac-curve` still runs the previous bundle (its pre-cool push reads
 until it is redeployed.
 
 **Google Health (2026-10-30).** `google-oauth` accepts the signed-in member's token (`POST /start`, see [How connecting works](#how-connecting-works)); the old `?access_token=` mismatch is gone. Migration `0015_band_sync` is applied (table + hourly sync job). Waiting on the user: the Google Cloud project and the `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` secrets ([Google Cloud setup](#google-cloud-setup-once-about-15-minutes-on-a-laptop)).
+
+**Calendar trips + weather (2026-10-31, not deployed).** Migration `0018_calendar_trips_weather` and the new functions
+`calendar-sync` and `weather-poll` (`verify_jwt = false`) are written but not applied / deployed. `google-health-sync`
+now gets its token through `_shared/google.ts` (same behaviour); redeploy it with the others. `GOOGLE_WEATHER_API_KEY`
+is not set (Open-Meteo until then).
 
 ### 2026-10-30 evening fixes (nightly-report v6, migration 0017)
 

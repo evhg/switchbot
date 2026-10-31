@@ -1,0 +1,21 @@
+export {
+  awayEvenings,
+  calendarEventsOf,
+  classifyEvent,
+  eventSpan,
+  eveningsToRanges,
+  flightRoute,
+  householdAwayRanges,
+  inPhuket,
+  isFromGmail,
+  placeOutsidePhuket,
+  tripRanges,
+  MAX_GAP_H,
+  type AwayRange,
+  type CalendarEvent,
+  type CalendarEventTime,
+  type TripOptions,
+  type TripSignal,
+  type TripSignalKind,
+} from './trips.ts';
+export { calendarEventsUrl, listCalendarEvents, GoogleCalendarError, GOOGLE_CALENDAR_EVENTS_URL } from './client.ts';

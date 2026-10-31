@@ -608,7 +608,11 @@ export function RoomScreen() {
 
           {open === 'outdoor' && (
             <>
-              <p className={s.sheetLede}>{nightLabel}, with simulated Phuket weather. Real weather from Open-Meteo comes later.</p>
+              <p className={s.sheetLede}>
+                {dataset?.source === 'supabase'
+                  ? `${nightLabel}, with Phuket weather every 15 minutes (Open-Meteo, or Google Weather when its key is set).`
+                  : `${nightLabel}, with simulated Phuket weather.`}
+              </p>
               <OutdoorIndoor night={n} />
             </>
           )}

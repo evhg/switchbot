@@ -8,10 +8,9 @@
 // After each person it writes public.band_sync (migration 0015): last run, pairedDevices lastSyncTime and the newest
 // wearable data point, which the Presence page shows and a presence gate may later read as a hint.
 import { GoogleHealthClient, GoogleHealthError, type ListDataPointsOptions, intervalFilter, sampleTimeFilter } from '../../../packages/core/src/health/client.ts';
-import { GoogleOAuthError, refreshAccessToken } from '../../../packages/core/src/health/oauth.ts';
 import { parseHeartRate, parseHrv, parseSleep, parseSpo2 } from '../../../packages/core/src/health/parse.ts';
 import { requireCronOrMember } from '../_shared/auth.ts';
-import { env } from '../_shared/env.ts';
+import { GoogleTokenError, googleAccessToken } from '../_shared/google.ts';
 import { DAILY_TYPES, dailyRows, dailyVitalsRows, newestDeviceSync, newestPointTime, rawRows, SAMPLE_TYPES, sessionEndTime, stepsVitalsRows } from '../_shared/health.ts';
 import { HttpError, json, readJson, serve } from '../_shared/http.ts';
 import { hrMinuteRows, hrvToRows, sleepToRow, spo2ToRows } from '../_shared/rows.ts';
@@ -102,24 +101,13 @@ async function connectedPeople(db: Db): Promise<string[]> {
 
 async function syncPerson(db: Db, personId: string, hours: number, sleepDays: number): Promise<PersonResult> {
   const res: PersonResult = { personId, ok: true, calls: 0, counts: {}, errors: [] };
-  const refresh = must(await db.rpc('get_google_refresh_token', { p_person_id: personId }), 'get token') as string | null;
-  if (!refresh) {
-    const out = { ...res, ok: false, errors: ['no refresh token; connect Google Health in the app'] };
-    await writeBandSync(db, out);
-    return out;
-  }
-
   let accessToken: string;
   try {
-    const t = await refreshAccessToken({ clientId: env('GOOGLE_CLIENT_ID'), clientSecret: env('GOOGLE_CLIENT_SECRET'), refreshToken: refresh });
-    accessToken = t.accessToken;
-    if (t.refreshToken && t.refreshToken !== refresh) {
-      await db.rpc('store_google_refresh_token', { p_person_id: personId, p_refresh_token: t.refreshToken, ...(t.scope.length ? { p_scopes: t.scope } : {}) });
-    }
+    accessToken = (await googleAccessToken(db, personId)).accessToken;
   } catch (e) {
-    const reconsent = e instanceof GoogleOAuthError && e.error === 'invalid_grant';
-    await db.from('oauth_tokens').update({ needs_reconsent: reconsent, last_error: String(e instanceof Error ? e.message : e) }).eq('person_id', personId);
-    const out = { ...res, ok: false, errors: [`token refresh: ${e instanceof Error ? e.message : e}`] };
+    // A database error reading the token still fails the whole request, as before.
+    if (!(e instanceof GoogleTokenError)) throw e;
+    const out = { ...res, ok: false, errors: [e.message] };
     await writeBandSync(db, out);
     return out;
   }

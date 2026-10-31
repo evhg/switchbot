@@ -48,6 +48,8 @@ export interface AwayPeriod {
   from: string;
   to: string;
   note: string | null;
+  /** 'calendar': written by calendar-sync from both Google Calendars (migration 0018). */
+  source?: 'manual' | 'calendar';
 }
 
 export type PresenceState = 'home' | 'away';
@@ -282,7 +284,8 @@ export function useTonight(people: readonly { id: string; name: string }[]): Ton
       db.from('presence_latest').select('person_id,state,at'),
       db.from('readings').select('ts,co2').neq('source', 'sim').gte('ts', new Date(Date.now() - 70 * MIN).toISOString()).order('ts').limit(200),
       db.from('household_settings').select('ac_live,default_presence').eq('id', 1).maybeSingle(),
-      db.from('away_periods').select('id,from_date,to_date,note').eq('active', true).gte('to_date', addDays(date, -1)).order('from_date'),
+      // '*': `source` only exists from migration 0018 on; naming it would fail the whole list before that.
+      db.from('away_periods').select('*').eq('active', true).gte('to_date', addDays(date, -1)).order('from_date'),
       db.from('ac_state').select('bias_c').limit(1).maybeSingle(),
     ])
       .then(([n, p, r, hs, ap, st]) => {
@@ -309,7 +312,7 @@ export function useTonight(people: readonly { id: string; name: string }[]): Ton
         setCo2(r.error ? [] : ((r.data ?? []) as Row[]).map((x) => ({ ts: ms(x.ts), co2: Number(x.co2) })));
         const h = hs.error ? null : (hs.data as Row | null);
         setSettings(h ? { acLive: h.ac_live === true, defaultPresence: h.default_presence === 'home' ? 'home' : 'unknown' } : null);
-        setAwayPeriods(ap.error ? [] : ((ap.data ?? []) as Row[]).map((x) => ({ id: Number(x.id), from: String(x.from_date), to: String(x.to_date), note: typeof x.note === 'string' ? x.note : null })));
+        setAwayPeriods(ap.error ? [] : ((ap.data ?? []) as Row[]).map((x) => ({ id: Number(x.id), from: String(x.from_date), to: String(x.to_date), note: typeof x.note === 'string' ? x.note : null, source: x.source === 'calendar' ? 'calendar' : 'manual' })));
         const b = st.error ? null : (st.data as Row | null)?.bias_c;
         setBiasC(typeof b === 'number' && Number.isFinite(b) ? b : undefined);
         setError(p.error ? p.error.message : null);

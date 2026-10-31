@@ -259,3 +259,24 @@ export function cleanRoomReadings(readings: readonly RoomReading[], opts: CleanO
 - `RoomNightMetrics.achPlateau / achPlateauKind / achPlateauPpm` come from `plateauAch(readings, wake)`.
   `detectEvents(readings, {lightsOut, wake, ach?})` uses this value in its occupancy mass balance when there is no
   measured decay.
+
+## calendar/ and weather/ (2026-10-31)
+
+```ts
+// calendar/trips.ts: Google Calendar API v3 events → away EVENINGS (local dates; night D is away when D − 1 is one).
+export function tripRanges(events: CalendarEvent[], opts?: TripOptions): AwayRange[]          // one person; {from, to, label}
+export function awayEvenings(events, opts?): { date: string; label: string | null }[]
+export function householdAwayRanges(perPerson: AwayRange[][]): AwayRange[]                   // evenings on which EVERYONE is away
+export function classifyEvent(e, opts?): TripSignal | null   // 'out' | 'in' (flights from / to Phuket) | 'stay' | 'away' | 'home'
+export function eveningsToRanges(evenings), calendarEventsOf(json), eventSpan(e), flightRoute(e), isFromGmail(e)
+export function inPhuket(text): boolean; export function placeOutsidePhuket(text): string | null   // "Bangkok", or null
+// TripOptions: utcOffsetMin 420, leaveByH 20, backAfterH 3, maxGapH 30. An evening E is away when a trip started by
+// E 20:00 and lasts to E+1 03:00; weak keywords (trip, check-in …) never create a night; a Phuket event that evening vetoes it.
+// calendar/client.ts
+export async function listCalendarEvents(accessToken, timeMin: Ms, timeMax: Ms, opts?: { fetch?; maxPages? }): Promise<CalendarEvent[]>
+export class GoogleCalendarError extends Error { status: number }
+// weather/parse.ts → OutdoorReading (ts floored to the minute; implausible values → null)
+export function parseGoogleCurrentConditions(json): OutdoorReading | null     // {currentTime, temperature{degrees,unit}, relativeHumidity}
+export function parseOpenMeteoCurrent(json): OutdoorReading | null            // {utc_offset_seconds, current{time (local), temperature_2m, relative_humidity_2m}}
+export function googleWeatherUrl(key, lat?, lon?), openMeteoUrl(lat?, lon?, tz?)   // default Phuket 7.88, 98.39
+```

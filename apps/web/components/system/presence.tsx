@@ -197,7 +197,7 @@ export function AwayDates({ t, onMsg }: { t: Tonight; onMsg?: (m: string | null)
       label="Away dates"
       footer={
         <>
-          Evenings nobody sleeps at home: no pre-cool and the aircon stays off those nights. Home again the next evening.{' '}
+          Evenings nobody sleeps at home: no pre-cool and the aircon stays off those nights. Home again the next evening. Trips you are both on in Google Calendar appear here by themselves.{' '}
           {!onMsg && msg && <span className="sig">{msg}</span>}
         </>
       }
@@ -211,7 +211,7 @@ export function AwayDates({ t, onMsg }: { t: Tonight; onMsg?: (m: string | null)
           <Row
             key={p.id}
             title={p.note || 'Away'}
-            sub={awayLabel({ ...p, note: null })}
+            sub={`${awayLabel({ ...p, note: null })}${p.source === 'calendar' ? ' · from calendar' : ''}`}
             value={t.awayTonight?.id === p.id ? <Status tone="off">Tonight</Status> : undefined}
             trailing={
               <Button size="sm" variant="text" disabled={!writable} onClick={() => t.removeAway(p.id).then(say)}>

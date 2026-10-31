@@ -68,3 +68,10 @@ verify_jwt = false
 
 [functions.push-admin]
 verify_jwt = false
+
+# Trips in both Google Calendars → away_periods; cron or a household member's JWT.
+[functions.calendar-sync]
+verify_jwt = false
+
+[functions.weather-poll]
+verify_jwt = false

@@ -392,10 +392,13 @@ export function createSupabaseSource(days = 90): DataSource {
     onProgress?.('Loading room readings…');
     const raw = (await pageAll(() => readingsQ().gte('ts', iso).order('ts'))).map(toReading);
     onProgress?.('Loading aircon log…');
-    const [acRows, eventRows] = await Promise.all([
+    const [acRows, eventRows, outdoorRows] = await Promise.all([
       pageAll(() => db().from('ac_commands').select('*').gte('ts', iso).order('ts')),
       pageAll(() => db().from('events').select('night_date,kind,start_ts,end_ts,confidence,detail,source').gte('start_ts', iso).order('start_ts')).catch(() => [] as Row[]),
+      // Outdoor weather every 15 min (weather-poll, migration 0018); none → the outdoor charts stay empty.
+      pageAll(() => db().from('outdoor_readings').select('ts,temp_c,rh,source').neq('source', 'sim').gte('ts', iso).order('ts')).catch(() => [] as Row[]),
     ]);
+    const outdoorAll = outdoorRows.map((r) => ({ ts: ms(r.ts), tempC: num(r.temp_c), rh: num(r.rh) })).filter((o) => Number.isFinite(o.tempC) && Number.isFinite(o.rh));
     onProgress?.('Loading body data…');
     const [peopleRows, sessions, hr, hrv, spo2, daily, vitals] = await Promise.all([
       pageAll(() => db().from('people').select('id,name,color_key').order('id')),
@@ -460,7 +463,7 @@ export function createSupabaseSource(days = 90): DataSource {
         wake,
         ...(sleepOnset ? { sleepOnset } : {}),
         room,
-        outdoor: [],
+        outdoor: outdoorAll.filter((o) => o.ts >= winFrom && o.ts < winTo),
         ac: ac.map(toAcCommand),
         curveId: str(r.curve_id, DEFAULT_CURVE.id),
         // Same rule as the backend (night_metrics flag manual_night): no live command = run by hand, so core scores the
