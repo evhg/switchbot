@@ -4,8 +4,8 @@
 //                                    enabled webhook (no-op when it already is), then confirms with queryDetails.
 //                                    Add "replace":true to take over a URL owned by another integration.
 //   {"action":"devices"}           → the account's devices and IR remotes (ids, names, types); nothing is stored.
-//   {"action":"ac-test", "param":"18,2,1,on"}  → one setAll to the aircon remote (AC_DEVICE_ID / discovered), for a
-//                                    daytime remote test. 17..30 °C only (the Carrier remote cannot encode 16).
+//   {"action":"ac-test", "param":"18,2,1,on"[, "deviceId":"…"]}  → one setAll to the aircon remote (AC_DEVICE_ID /
+//                                    discovered, or any IR remote of this account), for a daytime remote test. 17..30 °C only (the Carrier remote cannot encode 16).
 //   {"action":"ac-test", "button":"C17", "deviceId":"…"}  → one learned button (customize) on a remote of this account.
 //                                    Test sends are not logged in ac_commands, so they never steer the controller.
 // The path secret is the Vault secret `switchbot_webhook_secret` (migration 0008); it never leaves this function
@@ -145,7 +145,7 @@ async function remoteAction(db: Db, action: 'devices' | 'ac-test', body: Record<
     let cmd: { command: string; parameter: string; commandType: 'command' | 'customize' };
     if (typeof body.param === 'string') {
       if (!SETALL_TEST.test(body.param)) throw new HttpError(400, 'param must be "temp,mode,fan,on|off" with temp 17..30');
-      deviceId = await knownDeviceId(db, 'ac');
+      deviceId = typeof body.deviceId === 'string' ? body.deviceId : await knownDeviceId(db, 'ac');
       cmd = { command: 'setAll', parameter: body.param, commandType: 'command' };
     } else if (typeof body.button === 'string' && BUTTON.test(body.button)) {
       deviceId = typeof body.deviceId === 'string' ? body.deviceId : await knownDeviceId(db, 'ac');
