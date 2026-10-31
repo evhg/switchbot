@@ -219,6 +219,7 @@ describe('OAuth helpers', () => {
       state: 's1',
     });
     expect(new URL(googleAuthUrl({ clientId: 'c', redirectUri: 'r', state: 's' })).searchParams.get('scope')).toContain('activity_and_fitness.readonly');
+    expect(new URL(googleAuthUrl({ clientId: 'c', redirectUri: 'r', state: 's' })).searchParams.get('scope')).toContain('settings.readonly');
   });
 
   it('exchangeCode posts a form and maps tokens', async () => {

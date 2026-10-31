@@ -217,7 +217,8 @@ async function syncPerson(db: Db, personId: string, hours: number, sleepDays: nu
     if (points.length) await step(`${dataType}:vitals`, () => upsertChunks(db, 'health_vitals_daily', dailyVitalsRows(personId, dataType, points), 'person_id,date'));
   }
 
-  // Band → phone sync time. Not fatal: pairedDevices may need a scope this app doesn't request (then 403).
+  // Band → phone sync time. Not fatal: pairedDevices needs googlehealth.settings.readonly, which tokens granted
+  // before 2026-10-31 lack (then 403 until that person reconnects).
   let devices: unknown[] | null = null;
   try {
     devices = (await client.pairedDevices()).pairedDevices ?? [];

@@ -19,6 +19,7 @@ export {
   SCOPE_HEALTH_METRICS,
   SCOPE_SLEEP,
   SCOPE_ACTIVITY,
+  SCOPE_SETTINGS,
   GOOGLE_HEALTH_SCOPES,
   type GoogleAuthUrlParams,
   type GoogleTokens,

@@ -9,7 +9,9 @@ const SCOPE_PREFIX = 'https://www.googleapis.com/auth/googlehealth.';
 export const SCOPE_HEALTH_METRICS = `${SCOPE_PREFIX}health_metrics_and_measurements.readonly`;
 export const SCOPE_SLEEP = `${SCOPE_PREFIX}sleep.readonly`;
 export const SCOPE_ACTIVITY = `${SCOPE_PREFIX}activity_and_fitness.readonly`;
-export const GOOGLE_HEALTH_SCOPES = [SCOPE_HEALTH_METRICS, SCOPE_SLEEP, SCOPE_ACTIVITY] as const;
+/** users.pairedDevices (band → phone lastSyncTime) and users.getSettings accept only this scope. */
+export const SCOPE_SETTINGS = `${SCOPE_PREFIX}settings.readonly`;
+export const GOOGLE_HEALTH_SCOPES = [SCOPE_HEALTH_METRICS, SCOPE_SLEEP, SCOPE_ACTIVITY, SCOPE_SETTINGS] as const;
 
 export interface GoogleAuthUrlParams {
   clientId: string;
