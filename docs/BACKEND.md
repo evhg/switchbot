@@ -397,11 +397,19 @@ Follow [SETUP.md](SETUP.md) for the hardware order (Hub Mini → Meter Pro CO2 �
    - **Get started** / **Branding**: app name `Sleep Lab`, user support email `cath.tunti@gmail.com`, developer contact `cath.tunti@gmail.com`.
    - **Audience**: user type **External**.
    - **Audience › Test users › Add users**: `cath.tunti@gmail.com` and `verspui@gmail.com` (or whichever Google accounts carry the Fitbit/Google Health profiles).
-   - **Data Access › Add or remove scopes**: paste these four and **Update**, **Save**:
+   - **Data Access › Add or remove scopes** › *Manually add scopes*: paste these and **Add to table**, **Update**, **Save**:
      `https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly`
      `https://www.googleapis.com/auth/googlehealth.sleep.readonly`
      `https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly`
      `https://www.googleapis.com/auth/googlehealth.settings.readonly` (paired devices: the band's last sync time)
+     `https://www.googleapis.com/auth/googlehealth.ecg.readonly`
+     `https://www.googleapis.com/auth/googlehealth.irn.readonly`
+     `https://www.googleapis.com/auth/googlehealth.location.readonly` (exercise GPS)
+     `https://www.googleapis.com/auth/googlehealth.profile.readonly`
+     `https://www.googleapis.com/auth/googlehealth.nutrition.writeonly` (food-photo meals → nutrition-log)
+     `https://www.googleapis.com/auth/calendar.events.readonly` (trips → away nights)
+     `https://www.googleapis.com/auth/youtube.force-ssl` (24/7 bedroom live stream; only the channel owner's grant is used)
+     Also enable the **Google Calendar API** and **YouTube Data API v3** in the project.
    - **Audience › Publishing status › Publish app** › Confirm, so the status reads **In production**. Do not submit for verification. In Testing, refresh tokens expire after 7 days; in production (unverified, ≤ 100 users) they last until revoked. Each person sees "Google hasn't verified this app" once: **Advanced › Go to Sleep Lab (unsafe)**.
 4. **OAuth client.** **APIs & Services › Credentials › Create credentials › OAuth client ID** (or **Clients › Create client**):
    - Application type **Web application**, name `sleep-lab-supabase`.
@@ -418,7 +426,7 @@ Follow [SETUP.md](SETUP.md) for the hardware order (Hub Mini → Meter Pro CO2 �
 
 ### How connecting works
 
-1. **Start (`POST /google-oauth/start`).** The PWA sends `Authorization: Bearer <the user's Supabase access token>`. The function verifies it with the service client (`auth.getUser`), reads `household_members` (owner/member only; viewers get 403) and binds a single-use `oauth_states` row to that user's `person_id`. The owner may pass `{"person":"b"}` to connect someone else. It returns `{url}` (Google consent with `access_type=offline`, `prompt=consent`, the four read-only scopes and the user's email as `login_hint`) and the PWA navigates there.
+1. **Start (`POST /google-oauth/start`).** The PWA sends `Authorization: Bearer <the user's Supabase access token>`. The function verifies it with the service client (`auth.getUser`), reads `household_members` (owner/member only; viewers get 403) and binds a single-use `oauth_states` row to that user's `person_id`. The owner may pass `{"person":"b"}` to connect someone else. It returns `{url}` (Google consent with `access_type=offline`, `prompt=consent`, the Health, Calendar and YouTube scopes and the user's email as `login_hint`) and the PWA navigates there.
    - The legacy `GET /start?person=a&key=<OAUTH_START_SECRET>` link works only while `OAUTH_START_SECRET` is set.
 2. **Callback.** Consumes the state (15 min TTL), exchanges the code, stores the refresh token in Vault (`store_google_refresh_token`), records `healthUserId` when `/users/me/identity` answers, queues a 14-day backfill job, and redirects to `<APP_URL>/settings/health?google=connected&person=a` (`&profile=missing` when the account has no Google Health profile yet). Failures redirect with `google=error&reason=denied|expired|exchange|no_refresh_token|store|no_code`; the page shows a sentence for each.
 3. **Sync now.** `POST /google-health-sync` with the member's bearer token runs a full sync of every connected person, at most once per 2 min per person (`band_sync.last_manual_sync_at`, claimed atomically); otherwise `429`. `409` when nobody is connected yet.

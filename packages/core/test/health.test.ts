@@ -220,6 +220,7 @@ describe('OAuth helpers', () => {
     });
     expect(new URL(googleAuthUrl({ clientId: 'c', redirectUri: 'r', state: 's' })).searchParams.get('scope')).toContain('activity_and_fitness.readonly');
     expect(new URL(googleAuthUrl({ clientId: 'c', redirectUri: 'r', state: 's' })).searchParams.get('scope')).toContain('settings.readonly');
+    expect(new URL(googleAuthUrl({ clientId: 'c', redirectUri: 'r', state: 's' })).searchParams.get('scope')).toContain('nutrition.writeonly');
   });
 
   it('exchangeCode posts a form and maps tokens', async () => {

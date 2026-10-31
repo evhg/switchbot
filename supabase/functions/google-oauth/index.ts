@@ -11,7 +11,7 @@
 // ANOTHER household person (Erik finishing Cath's link on a shared phone), nothing is stored and the app shows
 // reason=wrong_account. A Google account that is nobody's app login is accepted (the band may use its own account).
 import { GoogleHealthClient } from '../../../packages/core/src/health/client.ts';
-import { exchangeCode, GOOGLE_HEALTH_SCOPES, googleAuthUrl } from '../../../packages/core/src/health/oauth.ts';
+import { exchangeCode, GOOGLE_APP_SCOPES, GOOGLE_HEALTH_SCOPES, googleAuthUrl } from '../../../packages/core/src/health/oauth.ts';
 import { timingSafeEqual } from '../../../packages/core/src/health/signature.ts';
 import { env, functionsBaseUrl, optEnv } from '../_shared/env.ts';
 import { idTokenEmail, wrongAccount } from '../_shared/health.ts';
@@ -21,8 +21,8 @@ import { type Db, serviceClient } from '../_shared/supabase.ts';
 const STATE_TTL_MS = 15 * 60_000;
 const DEFAULT_APP_URL = 'https://sleep.cathnivore.com';
 
-/** Health scopes plus 'openid email', so the callback learns which Google account consented. */
-const SCOPES = [...GOOGLE_HEALTH_SCOPES, 'openid', 'email'];
+/** Health, Calendar and YouTube scopes plus 'openid email', so the callback learns which Google account consented. */
+const SCOPES = [...GOOGLE_HEALTH_SCOPES, ...GOOGLE_APP_SCOPES, 'openid', 'email'];
 
 const redirectUri = () => `${functionsBaseUrl()}/google-oauth/callback`;
 const appUrl = () => (optEnv('APP_URL') ?? DEFAULT_APP_URL).replace(/\/$/, '');

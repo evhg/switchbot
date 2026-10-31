@@ -11,7 +11,32 @@ export const SCOPE_SLEEP = `${SCOPE_PREFIX}sleep.readonly`;
 export const SCOPE_ACTIVITY = `${SCOPE_PREFIX}activity_and_fitness.readonly`;
 /** users.pairedDevices (band → phone lastSyncTime) and users.getSettings accept only this scope. */
 export const SCOPE_SETTINGS = `${SCOPE_PREFIX}settings.readonly`;
-export const GOOGLE_HEALTH_SCOPES = [SCOPE_HEALTH_METRICS, SCOPE_SLEEP, SCOPE_ACTIVITY, SCOPE_SETTINGS] as const;
+/** electrocardiogram; irregular-rhythm-notification + irnProfile; exercise GPS (with exportExerciseTcx); users.getProfile. */
+export const SCOPE_ECG = `${SCOPE_PREFIX}ecg.readonly`;
+export const SCOPE_IRN = `${SCOPE_PREFIX}irn.readonly`;
+export const SCOPE_LOCATION = `${SCOPE_PREFIX}location.readonly`;
+export const SCOPE_PROFILE = `${SCOPE_PREFIX}profile.readonly`;
+/**
+ * Food-photo meals → nutrition-log. The discovery document (rev 20261030) has no nutrition.readonly; writeonly is also
+ * accepted on the nutrition list/get methods.
+ */
+export const SCOPE_NUTRITION_WRITE = `${SCOPE_PREFIX}nutrition.writeonly`;
+export const GOOGLE_HEALTH_SCOPES = [
+  SCOPE_HEALTH_METRICS,
+  SCOPE_SLEEP,
+  SCOPE_ACTIVITY,
+  SCOPE_SETTINGS,
+  SCOPE_ECG,
+  SCOPE_IRN,
+  SCOPE_LOCATION,
+  SCOPE_PROFILE,
+  SCOPE_NUTRITION_WRITE,
+] as const;
+
+/** Trips from the calendar (away nights) and the 24/7 bedroom live stream, granted in the same consent. */
+export const SCOPE_CALENDAR_EVENTS = 'https://www.googleapis.com/auth/calendar.events.readonly';
+export const SCOPE_YOUTUBE = 'https://www.googleapis.com/auth/youtube.force-ssl';
+export const GOOGLE_APP_SCOPES = [SCOPE_CALENDAR_EVENTS, SCOPE_YOUTUBE] as const;
 
 export interface GoogleAuthUrlParams {
   clientId: string;
