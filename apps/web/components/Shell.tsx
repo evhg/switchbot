@@ -6,7 +6,7 @@
  *     <aside.sidebar/>                         ≥1024 only
  *     <div.app-main>
  *       <header.topbar/>                       <1024 only: date · page, ‹ › nights (or a "‹ System" back link)
- *       <main.shell><div.page>{children}</div></main>
+ *       <main.shell><div.page>{children}</div><footer.site-foot/></main>   footer: Privacy link, every page
  *     </div>
  *     <nav.tabbar/>                            <1024 only
  *   </div>
@@ -67,6 +67,7 @@ function pageName(path: string): string {
   const sub = SYSTEM_PAGES.find((p) => path === `/settings/${p.slug}`);
   if (sub) return sub.label;
   if (path === '/signin') return 'Sign in';
+  if (path === '/privacy') return 'Privacy';
   return TABS[activeTab(path)]?.label ?? 'Sleep Lab';
 }
 
@@ -164,6 +165,9 @@ function Frame({ children }: { children: ReactNode }) {
           <div className="page" key={path}>
             <TabGate>{children}</TabGate>
           </div>
+          <footer className="site-foot">
+            <Link href="/privacy">Privacy</Link>
+          </footer>
         </main>
       </div>
       <TabBar />

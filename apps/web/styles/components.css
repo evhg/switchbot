@@ -17,6 +17,10 @@
 .page { max-width: var(--content-max); margin: 0 auto; }
 :root[data-story] .page, .page:has(> .page-full) { max-width: none; }
 :root[data-story] .shell { padding-top: 0; }
+/* Site footer: the Privacy link (Google OAuth app verification needs it on the home page). */
+.site-foot { max-width: var(--content-max); margin: var(--sp-16) auto 0; font-size: 13px; color: var(--muted); }
+.site-foot a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.site-foot a:hover { color: var(--text-2); }
 
 @media (min-width: 1024px) {
   .app { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); }
@@ -603,3 +607,11 @@ h2.section-label { font-size: var(--t-sec); }
 .skip-link { position: fixed; z-index: 100; left: 12px; top: 12px; padding: 10px 16px; border-radius: var(--r-s); background: var(--text); color: var(--bg); font-size: var(--t-sec); font-weight: 600; transform: translateY(-200%); }
 .skip-link:focus-visible { transform: none; }
 #main:focus { outline: none; }
+
+/* Privacy policy (app/privacy): plain prose. */
+.privacy h2 { font-size: var(--t-head); font-weight: 600; margin: var(--sp-10) 0 var(--sp-3); }
+.privacy p, .privacy li { color: var(--text-2); line-height: 1.6; }
+.privacy p + p { margin-top: var(--sp-3); }
+.privacy ul { margin: 0 0 var(--sp-3); padding-left: 1.2em; }
+.privacy li + li { margin-top: var(--sp-2); }
+.privacy a { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
