@@ -9,7 +9,7 @@ Pure TypeScript with no runtime dependencies. It runs unchanged in Node 22, Deno
 
 **Default curve: "steady 18.5" (`steady-18-5-v1`, since 2026-10-30 evening)**
 ```ts
-export const DEFAULT_CURVE: TemperatureCurve   // id 'steady-18-5-v1', minC 16, maxC 24, every phase fan 'auto', from lights-out:
+export const DEFAULT_CURVE: TemperatureCurve   // id 'steady-18-5-v1', minC 17 (IR floor), maxC 24, every phase fan 'auto', from lights-out:
 //   precool −30 18.5 · onset 0 18.5 · deep +30 18.5 · middle +270 18.5 · late +360 18.5 · wake +630 18.5
 //   No warming: the room must not warm while either sleeper may still be in deep sleep (stages are not live overnight).
 //   Quiet mode plan, 22:00 lights-out, wake 08:30: ON at 21:30 (set 18 with bias −1, set 17 with the live bias −2) ·
@@ -136,10 +136,19 @@ export function decideAcCommand(input: ControllerInput): AcCommand | null
 //    target quiet mode holds (the staircase, not the ramp), the room is not converging, the last command is ≥ 45 min
 //    old and no planned step in the same direction is due within 30 min. setpoint ± round(deviation), max 2.
 //    Only a too-WARM room is corrected (setpoint down) unless quiet.emergencyWarm: a too-cold room is never warmed asleep.
+//    Never while the room is still moving toward the target: least-squares slope over the last TREND_WINDOW_MIN (30)
+//    min ≤ −STILL_MOVING_C_PER_H (0.3 °C/h) for a too-warm room (≥ +0.3 for a too-cold one), or unknown (too little
+//    data) → wait (roomTrendCPerH). Only a setpoint STRICTLY colder than the last command (strictly warmer for an allowed
+//    warming one): at the 17 °C floor nothing is sent (the evening acUnresponsive push is the only alert path).
+//    Incident night 2026-10-31: room 21.7 → 21.3 °C in 30 min under Cool 17 at 23:45 fired "set 16" (unencodable), the
+//    unit stopped cooling and the room rose to 26 °C; both guards now hold it back.
 //  - resend: only of a planned "curve: …" command that is not a fan-only change.
 //  → at most asleepCount + maxExtraPerNight commands (beeps) while asleep: 0 + 1 for the default steady curve (1 + 1 for
 //    one-beep-v1/v2, 3 + 1 for CURVE_V1).
-//  - always: minInterval, the nightly cap (last slot kept for OFF), setpoint within ceil(minC)..floor(maxC) and 16..30.
+//  - always: minInterval, the nightly cap (last slot kept for OFF), setpoint within ceil(minC)..floor(maxC) and
+//    SETALL_MIN_C..SETALL_MAX_C = 17..30 (the Carrier/Toshiba remote cannot encode 16; setpointLimits).
+// Quiet off (closed loop), from lights-out: a correction / "resend: full state" for a measured too-warm room follows the
+// same two guards (strictly colder than the last command, room no longer falling ≥ 0.3 °C/h).
 //  Reasons: "curve: <phase> start (quiet) …", "curve: <phase> ramp (one step) (quiet) …", "emergency: …", "resend: …".
 
 export interface QuietStep { ts: Ms; targetC: number; phase: CurvePhaseName; kind: 'phase' | 'ramp' }
@@ -167,7 +176,9 @@ export function acUnresponsive(input: ControllerInput): { roomC; targetC; since:
 // ≥ 2 power-on commands in a row without landed=true, the last ≥ 20 min old, room > target + 2.5 °C and not cooling.
 // ac-curve sends one push per night, only before the expected sleep onset ("Aircon isn't cooling"), and stores an ac_missed event (detail.notice = 'unresponsive').
 // Incident 2026-10-31 (set 17 ignored, room flat at 27.3): 21:30 ON · 21:50 resend · 22:10 resend + push · then nothing
-// until the one cooling emergency (test/control.test.ts "incident 2026-10-31").
+// (with set 17 already sent there is no colder emergency; test/control.test.ts "incident 2026-10-31").
+// Incident night 2026-10-31 (emergency "set 16" at 23:45 while the room still cooled): test/control.test.ts
+// "incident night 2026-10-31" (no command when still falling or at the 17 floor; one colder command when flat/rising).
 ```
 
 ## metrics/: analysis (owner: metrics agent)

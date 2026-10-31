@@ -73,7 +73,7 @@ PWA (Vercel, home-screen app, red night mode) ◄── Supabase (read, row-leve
 - SwitchBot client:
   - HMAC-SHA256 base64 signature, uppercase.
   - Quota tracking.
-  - `setAll` with integers 16–30.
+  - `setAll` with integers 17–30 (API accepts 16–30; this remote cannot encode 16, `SETALL_MIN_C` = 17).
   - `customize` for learned buttons.
 - Database schema:
   - `readings` (deduplicated on device + time)

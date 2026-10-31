@@ -3,7 +3,8 @@ import type { AcCommand, AcMode, AcState, FanSpeed } from '../types.ts';
 
 export const SETALL_MODE: Record<AcMode, number> = { auto: 1, cool: 2, dry: 3, fan: 4, heat: 5 };
 export const SETALL_FAN: Record<FanSpeed, number> = { auto: 1, low: 2, medium: 3, high: 4 };
-export const SETALL_MIN_C = 16;
+/** 17: Carrier/Toshiba and Midea IR protocols encode 17..30 only; a 16 sent through setAll lands as something else. */
+export const SETALL_MIN_C = 17;
 export const SETALL_MAX_C = 30;
 
 export interface SwitchBotCommandBody {

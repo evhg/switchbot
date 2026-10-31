@@ -32,7 +32,7 @@ export type FanSpeed = 'auto' | 'low' | 'medium' | 'high';
 
 export interface AcState {
   power: boolean;
-  /** Integer °C, 16..30 (SwitchBot setAll accepts integers only). */
+  /** Integer °C, 17..30 (SETALL_MIN_C..SETALL_MAX_C; setAll accepts integers only, this remote cannot encode 16). */
   setpointC: number;
   mode: AcMode;
   fan: FanSpeed;

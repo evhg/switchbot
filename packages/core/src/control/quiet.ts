@@ -1,6 +1,8 @@
 import type { AcState, CurvePhaseName, FanSpeed, Ms, TemperatureCurve } from '../types.ts';
 import { expectedSleepOnset, phaseAt, resolveCurve, targetAt } from '../curve.ts';
 import { remoteCommand, resolveQuiet, type RemoteProfile, type ResolvedQuiet } from './remote.ts';
+// ac.ts imports only types (no cycle): the IR range is defined once, next to the setAll encoder.
+import { SETALL_MAX_C, SETALL_MIN_C } from '../switchbot/ac.ts';
 
 const MIN = 60_000;
 /** Assumed bed-minus-setpoint offset before anything is learned (bias −1). Same default as the controller. */
@@ -81,9 +83,12 @@ export function carriedStepSuperseded(step: { ts: Ms }, next: { ts: Ms } | undef
   return step.ts < from && at >= from && next !== undefined && next.ts - at <= STEP_GRACE_MIN * MIN;
 }
 
-/** Setpoint limits: curve minC/maxC (hard safety limits) within the remote's 16–30. */
+/**
+ * Setpoint limits: curve minC/maxC (hard safety limits) within the IR range SETALL_MIN_C..SETALL_MAX_C (17–30: the
+ * Carrier/Toshiba remote cannot encode 16, so a curve's minC 16 still floors at 17).
+ */
 export function setpointLimits(curve: TemperatureCurve): { lo: number; hi: number } {
-  return { lo: Math.max(16, Math.ceil(curve.minC)), hi: Math.min(30, Math.floor(curve.maxC)) };
+  return { lo: Math.max(SETALL_MIN_C, Math.ceil(curve.minC)), hi: Math.min(SETALL_MAX_C, Math.floor(curve.maxC)) };
 }
 
 /** Fan for a phase: 'auto' for a learned ladder; else the curve phase's own `fan`, else high for precool and low after. */

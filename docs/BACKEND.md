@@ -260,11 +260,16 @@ Decided 2026-10-30, after the first real night (aircon at 17 °C by hand: bed 18
 
 - **Curve** `steady-18-5-v1` (`DEFAULT_CURVE` since 0012): pre-cool at lights-out − 30 min (21:30) to 18.5 °C, fan auto;
   every later phase 18.5 °C → no command at lights-out, at sleep onset or while asleep; OFF at wake + 30 (09:00).
-  `minC` 16, so a cooling emergency still has a degree below set 17. Upcoming real nights on one-beep-v1/v2 whose
+  `minC` 17 since 2026-11-01 (was 16): the Carrier 42TGF0301BP's Toshiba-type remote encodes 17–30 only
+  (`SETALL_MIN_C`), so with set 17 there is no colder emergency (the DB row from 0012 may still say `min_c` 16; the
+  controller floors every setpoint at 17 regardless). Upcoming real nights on one-beep-v1/v2 whose
   pre-cool had not started moved to it; stored nights keep their curve.
 - **Bias** `ac_state.bias_c = −2` (0012, only when unset): set 17 held the bed at 18.5–19.9 °C, so 18.5 °C needs set 17.
 - **Emergency while asleep only cools** (core `QuietConfig.emergencyWarm`, default false): a room ≥ target + 1.5 °C for
-  20 min gets one command (setpoint − round(deviation)); a too-cold room is never warmed while asleep.
+  20 min gets one command (setpoint − round(deviation)); a too-cold room is never warmed while asleep. Since
+  2026-11-01 only when (a) the new setpoint is strictly colder than the last command (none at the 17 floor) and (b) the
+  room has stopped cooling: slope over the last 30 min > −0.3 °C/h (too little data to tell → wait). Night 2026-10-31: "set 16" went out at 23:45 while
+  the room was still falling 21.7 → 21.3 °C under Cool 17; the unit stopped cooling and the room rose to 26 °C.
 - **`public.household_settings`** (one row, id 1; household read; `set_household_settings(p_ac_live, p_default_presence)`
   for owner/member): `ac_live` (default false) and `default_presence` (`home` | `unknown`, default `unknown`). 0014 set
   `ac_live = true`, `default_presence = 'home'`.

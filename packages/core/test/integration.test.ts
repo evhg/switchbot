@@ -236,7 +236,13 @@ describe('integration: simulator truth → detectors and metrics', () => {
     // Within one run the controller holds the room tightly to the curve, so night-to-night temperature
     // spread is ~0.3 °C and the weak correlation (simulated −7 min deep/°C, noise SD ≈ 11 min) is only reported.
     // The effect is asserted the way the Lab measures it: same nights, a warmer curve as the other arm.
-    const warm: TemperatureCurve = { ...DEFAULT_CURVE, id: 'warm', phases: DEFAULT_CURVE.phases.map((p) => ({ ...p, targetC: p.targetC + 2.5 })), maxC: DEFAULT_CURVE.maxC + 3 };
+    // The warm arm is +3 °C (was +2.5 until 2026-11-01). The cool arm cannot follow its 18.5 °C target on the
+    // simulated nights whose bed sits 1.5–3 °C above the return air: its setpoint floors at 17 (SETALL_MIN_C, the
+    // remote cannot encode 16) and the emergency no longer fires while the room is still cooling, so the cool arm runs
+    // warmer than before (early mean 19.68 → 19.91 °C) while the warm arm is unchanged (21.26 → 21.30). With +2.5 the
+    // achieved contrast fell to 1.40 °C; +3 restores ~2.1 °C, so `dTemp > 1.5` still checks what it is for: the two arms
+    // really differ by more than 1.5 °C at bed height, enough for the min/°C slope below to mean something.
+    const warm: TemperatureCurve = { ...DEFAULT_CURVE, id: 'warm', phases: DEFAULT_CURVE.phases.map((p) => ({ ...p, targetC: p.targetC + 3 })), maxC: DEFAULT_CURVE.maxC + 3 };
     const rows = (ns: Night[], curve: TemperatureCurve) =>
       ns.filter((n) => n.people.length).map((n) => {
         const m = roomNightMetrics(n, curve);

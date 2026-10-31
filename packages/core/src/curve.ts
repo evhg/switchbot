@@ -19,13 +19,15 @@ export const MAX_SLEEP_ONSET_MIN = 180;
  *   wake     +630                     18.5 °C   (08:30 for a 22:00 lights-out) same → no command; OFF at wake + 30
  * Every phase counts from lights-out (nothing to anchor to sleep onset: nothing changes during sleep).
  * Setpoint = round(18.5 + bias): 17 with the bias −2 measured on the first real night (set 17 → bed 18.5–19.9 °C), 18
- * with the untuned default −1. minC 16 leaves the emergency correction (cooling only while asleep, see QuietConfig)
- * one degree below a 17 setpoint.
+ * with the untuned default −1. minC 17: the aircon's IR remote (Carrier 42TGF, Toshiba protocol) encodes 17–30 only
+ * (SETALL_MIN_C), so 17 is the coldest setpoint there is. With bias −2 the plan already sits on that floor and the
+ * emergency correction (cooling only while asleep, see QuietConfig) has no colder setpoint left: it sends nothing.
+ * (Until 2026-11-01 minC was 16 so an emergency could go one degree below 17; a 16 never reached the unit.)
  */
 export const DEFAULT_CURVE: TemperatureCurve = {
   id: 'steady-18-5-v1',
   name: 'Steady 18.5 °C (default)',
-  minC: 16,
+  minC: 17,
   maxC: 24,
   phases: [
     { name: 'precool', startMin: -30, targetC: 18.5, fan: 'auto' },

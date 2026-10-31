@@ -49,9 +49,9 @@ describe('setAll mapping', () => {
     expect(acStateToSetAllParam({ ...s, mode: 'fan', fan: 'low' })).toBe('19,4,2,on');
     expect(acStateToSetAllParam({ ...s, mode: 'auto' })).toBe('19,1,1,on');
   });
-  it('rounds to an integer and clamps to 16..30', () => {
+  it('rounds to an integer and clamps to 17..30', () => {
     expect(acStateToSetAllParam({ ...s, setpointC: 19.6 })).toBe('20,2,1,on');
-    expect(acStateToSetAllParam({ ...s, setpointC: 12 })).toBe('16,2,1,on');
+    expect(acStateToSetAllParam({ ...s, setpointC: 12 })).toBe('17,2,1,on');
     expect(acStateToSetAllParam({ ...s, setpointC: 35 })).toBe('30,2,1,on');
     expect(() => acStateToSetAllParam({ ...s, setpointC: NaN })).toThrow();
   });

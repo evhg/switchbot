@@ -29,6 +29,16 @@ const UNRESPONSIVE_AFTER_MIN = 20;
 const BIAS_HYSTERESIS_C = 0.75;
 /** Room this far above target and not cooling (before/around lights-out) = the AC probably isn't on. */
 const STALLED_ABOVE_C = 2.5;
+/**
+ * A too-warm room still falling faster than this (°C/h, least-squares slope over the last TREND_WINDOW_MIN) is still
+ * being cooled: the AC is doing what it can and a colder setpoint would only beep. −0.3 °C/h is 0.15 °C over 30 min,
+ * well above the slope noise of 1-min readings at 0.1 °C resolution, and well below the −0.8 °C/h of the 2026-10-31
+ * incident (21.7 → 21.3 °C in 30 min under Cool 17, when an emergency "set 16" went out and the unit stopped cooling).
+ * Mirrored for a warming emergency (emergencyWarm): a too-cold room already rising faster than +0.3 °C/h is left alone.
+ */
+export const STILL_MOVING_C_PER_H = 0.3;
+/** Window for the room trend behind STILL_MOVING_C_PER_H. */
+export const TREND_WINDOW_MIN = 30;
 
 export interface ControllerInput {
   now: Ms;
@@ -92,6 +102,38 @@ function makeCommand(now: Ms, state: AcState, remote: RemoteProfile, reason: str
 /** OFF in the remote's vocabulary (setAll or the learned OFF button). */
 export function offCommand(now: Ms, remote: RemoteProfile, last: AcState | undefined, reason: string): AcCommand | null {
   return makeCommand(now, { power: false, setpointC: last?.setpointC ?? 24, mode: 'cool', fan: 'auto' }, remote, reason);
+}
+
+/**
+ * Least-squares slope of the room over the last `minutes` (°C per hour); null when the readings cover less than two
+ * thirds of the window (too little data to tell a slow fall from a flat room).
+ */
+export function roomTrendCPerH(recent: RoomReading[], now: Ms, minutes = TREND_WINDOW_MIN): number | null {
+  const win = recent.filter((r) => r.ts > now - minutes * MIN && r.ts <= now);
+  if (win.length < Math.max(5, Math.ceil(minutes / 3))) return null;
+  if (win[win.length - 1]!.ts - win[0]!.ts < (minutes * 2 * MIN) / 3) return null;
+  const xs = win.map((r) => (r.ts - now) / (60 * MIN));
+  const ys = win.map((r) => r.tempC);
+  const mx = mean(xs);
+  const my = mean(ys);
+  let sxy = 0;
+  let sxx = 0;
+  for (let i = 0; i < xs.length; i++) {
+    sxy += (xs[i]! - mx) * (ys[i]! - my);
+    sxx += (xs[i]! - mx) ** 2;
+  }
+  return sxx > 0 ? sxy / sxx : null;
+}
+
+/**
+ * Is the room still moving toward the target on its own (a too-warm room falling, `above` true; a too-cold one
+ * rising) faster than STILL_MOVING_C_PER_H? Unknown trend (too little data) counts as moving: no correction beeps
+ * on a guess.
+ */
+function stillConverging(recent: RoomReading[], now: Ms, above: boolean): boolean {
+  const slope = roomTrendCPerH(recent, now);
+  if (slope === null) return true;
+  return above ? slope <= -STILL_MOVING_C_PER_H : slope >= STILL_MOVING_C_PER_H;
 }
 
 /** Room still far above target and not falling over the last ~15 min (null = too little data). */
@@ -226,6 +268,11 @@ export function decideAcCommand(input: ControllerInput): AcCommand | null {
   const fanOnly = cur.setpointC === sp && cur.fan !== fan;
   if (Math.abs(err) < DEADBAND_C && !fanOnly) return null;
   if (sameState(cur, desired)) return null;
+  // From lights-out a measured too-warm room gets the same guards as the quiet-mode emergency: only a strictly colder
+  // setpoint (at the SETALL_MIN_C floor there is nothing left to send), and only once the room has stopped cooling.
+  if (now >= lightsOut && settledMean !== null && err > 0 && !fanOnly) {
+    if (sp >= cur.setpointC || stillConverging(recent, now, true)) return null;
+  }
   const cmd = fanOnly
     ? makeCommand(now, desired, remote, `curve: ${phase}, fan ${fan}`)
     : settledMean !== null && settledMean - target > STALLED_ABOVE_C
@@ -305,7 +352,9 @@ function sustainedDeviation(input: ControllerInput, quiet: ResolvedQuiet, steps:
  *     - an emergency correction (at most maxEmergencyPerNight), when the bed-height room has been ≥ threshold off
  *       target for ≥ emergencyMinMinutes (and the last command is older than the settle time, and no planned step
  *       that fixes it is due within 30 min). Only a room that is too WARM is corrected (cooling) unless
- *       quiet.emergencyWarm: a too-cold room is never warmed while asleep.
+ *       quiet.emergencyWarm: a too-cold room is never warmed while asleep. Never while the room is still moving
+ *       toward the target (falling ≥ STILL_MOVING_C_PER_H over TREND_WINDOW_MIN), and only to a setpoint strictly
+ *       colder than the last command: at the 17 °C floor (SETALL_MIN_C) no emergency is sent at all.
  *     Extras need `tonight` to count them; without it none are sent while asleep.
  * minInterval, the nightly cap and the curve's minC/maxC still apply.
  *
@@ -387,6 +436,9 @@ function decideQuiet(input: ControllerInput, quiet: ResolvedQuiet): AcCommand | 
   if (dev === null) return null;
   // Never warm the room while asleep (unless the profile allows it): a room that is too cold waits for the morning.
   if (dev < 0 && !quiet.emergencyWarm) return null;
+  // Still cooling (too warm and falling ≥ STILL_MOVING_C_PER_H over the last TREND_WINDOW_MIN): the AC is working; wait.
+  // 2026-10-31: 21.7 → 21.3 °C in 30 min under Cool 17 still fired "set 16", and the unit stopped cooling.
+  if (stillConverging(input.recent, now, dev > 0)) return null;
   // A planned step due within the grace window that moves toward the room (cooler when it is too warm) will fix it:
   // wait for it instead of beeping twice.
   if (nextStep && nextStep.ts - now <= STEP_GRACE_MIN * MIN && Math.sign(nextStep.targetC - heldTarget(input, steps, now)!) === -Math.sign(dev)) return null;
@@ -399,6 +451,10 @@ function decideQuiet(input: ControllerInput, quiet: ResolvedQuiet): AcCommand | 
     `emergency: room ${Math.abs(dev).toFixed(1)}° ${dev > 0 ? 'above' : 'below'} target for ${quiet.emergencyMinMinutes}+ min (set ${sp})`,
   );
   if (!cmd || sameState(cur, cmd.state) || (lastCommand.button !== undefined && cmd.button === lastCommand.button)) return null;
+  // Only strictly colder than the last command for a too-warm room (strictly warmer for an allowed warming one): at the
+  // SETALL_MIN_C floor (17) there is no colder setpoint, so no IR frame and no beep (the evening acUnresponsive push
+  // is the only alert path). Checked on the state actually sent (a ladder button may map elsewhere).
+  if (dev > 0 ? cmd.state.setpointC >= cur.setpointC : cmd.state.setpointC <= cur.setpointC) return null;
   return cmd;
 }
 

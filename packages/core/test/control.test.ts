@@ -16,6 +16,8 @@ import {
   offCommand,
   planAcSchedule,
   resolveQuiet,
+  roomTrendCPerH,
+  STILL_MOVING_C_PER_H,
   withQuiet,
   type AcCommand,
   type ControllerInput,
@@ -608,11 +610,17 @@ describe('steady-18-5-v1 default curve: no command while asleep', () => {
     const pre: AcCommand = { ts: LO22 - 30 * MIN, state: { power: true, setpointC: 17, mode: 'cool', fan: 'auto' }, via: 'setAll', reason: 'curve: precool start, 18.5°C (set 17, bias -2)', landed: true };
     const now = LO22 + 180 * MIN;
     const base = { now, lightsOut: LO22, wake: WAKE830, curve: DEFAULT_CURVE, remote: DEFAULT_REMOTE, biasC: -2, lastCommand: pre, commandsTonight: 1, tonight: [pre] };
-    const hot = decideAcCommand({ ...base, recent: flat(now - 40 * MIN, now - MIN, 20.3) });
+    // Untuned bias −1: the precool went out at 18, so a colder setpoint (17, the IR floor) exists.
+    const pre18: AcCommand = { ...pre, state: { ...pre.state, setpointC: 18 }, reason: 'curve: precool start, 18.5°C (set 18, bias -1)' };
+    const base18 = { ...base, biasC: -1, lastCommand: pre18, tonight: [pre18] };
+    const hot = decideAcCommand({ ...base18, recent: flat(now - 40 * MIN, now - MIN, 20.3) });
     expect(hot?.reason).toMatch(/^emergency: room 1\.8° above/);
-    expect(hot?.state.setpointC).toBe(16);
+    // −2 from 18 would be 16, which the remote cannot encode: clamped to 17, still strictly colder than 18.
+    expect(hot?.state.setpointC).toBe(17);
+    // Already at the 17 floor (bias −2): no colder setpoint exists, so no IR frame and no beep.
+    expect(decideAcCommand({ ...base, recent: flat(now - 40 * MIN, now - MIN, 20.3) })).toBeNull();
     // 1.4 °C above: under the threshold, nothing.
-    expect(decideAcCommand({ ...base, recent: flat(now - 40 * MIN, now - MIN, 19.9) })).toBeNull();
+    expect(decideAcCommand({ ...base18, recent: flat(now - 40 * MIN, now - MIN, 19.9) })).toBeNull();
     // Too cold for 40 min: never warmed while asleep…
     expect(decideAcCommand({ ...base, recent: flat(now - 40 * MIN, now - MIN, 16.5) })).toBeNull();
     // …unless a profile explicitly allows warming emergencies.
@@ -621,8 +629,9 @@ describe('steady-18-5-v1 default curve: no command while asleep', () => {
   });
 
   it('the emergency only looks at readings after lights-out + 15: the evening pull-down never triggers it', () => {
-    const pre: AcCommand = { ts: LO22 - 30 * MIN, state: { power: true, setpointC: 17, mode: 'cool', fan: 'auto' }, via: 'setAll', reason: 'curve: precool start, 18.5°C (set 17, bias -2)', landed: true };
-    const base = { lightsOut: LO22, wake: WAKE830, curve: DEFAULT_CURVE, remote: DEFAULT_REMOTE, biasC: -2, lastCommand: pre, commandsTonight: 1, tonight: [pre] };
+    // Precool at 18 (bias −1) so the emergency has a colder setpoint (17) to go to.
+    const pre: AcCommand = { ts: LO22 - 30 * MIN, state: { power: true, setpointC: 18, mode: 'cool', fan: 'auto' }, via: 'setAll', reason: 'curve: precool start, 18.5°C (set 18, bias -1)', landed: true };
+    const base = { lightsOut: LO22, wake: WAKE830, curve: DEFAULT_CURVE, remote: DEFAULT_REMOTE, biasC: -1, lastCommand: pre, commandsTonight: 1, tonight: [pre] };
     const warm = (now: number) => flat(now - 40 * MIN, now - MIN, 20.4);
     // 22:15 and 22:30: the 20-min window still reaches into the settle window → nothing.
     for (const m of [15, 30, 34]) expect(decideAcCommand({ ...base, now: LO22 + m * MIN, recent: warm(LO22 + m * MIN) })).toBeNull();
@@ -657,10 +666,16 @@ describe('incident 2026-10-31: the aircon ignored setAll 17 (steady-18-5-v1, bia
     const cmd = decideAcCommand({ ...base, now, lastCommand: { ...c2late }, commandsTonight: 2, tonight: [c1, c2late], recent: hot(now) });
     expect(cmd?.reason).toMatch(/^resend: room .*\(quiet\)$/);
     expect(cmd?.state).toEqual(c1.state);
-    // The one cooling emergency of the night is still available once the room has stayed hot.
+    // Once asleep the room is still hot and flat, but the AC was last told 17, the coldest setpoint the remote can
+    // encode: no colder emergency exists, so nothing is sent (the evening acUnresponsive push is the alert path).
     const c3 = { ...cmd!, ts: now };
     const later = LO22 + 60 * MIN;
-    expect(decideAcCommand({ ...base, now: later, lastCommand: { ...c3 }, commandsTonight: 3, tonight: [c1, c2late, c3], recent: hot(later) })?.reason).toMatch(/^emergency/);
+    expect(decideAcCommand({ ...base, now: later, lastCommand: { ...c3 }, commandsTonight: 3, tonight: [c1, c2late, c3], recent: hot(later) })).toBeNull();
+    // Had the evening gone out at 18 (bias −1), the one cooling emergency of the night would still be available.
+    const at18 = (c: AcCommand): AcCommand => ({ ...c, state: { ...c.state, setpointC: 18 } });
+    expect(
+      decideAcCommand({ ...base, biasC: -1, now: later, lastCommand: at18(c3), commandsTonight: 3, tonight: [at18(c1), at18(c2late), at18(c3)], recent: hot(later) })?.state.setpointC,
+    ).toBe(17);
   });
 
   it('acUnresponsive: two unanswered commands, room hot and flat; null once it cools or after one command', () => {
@@ -677,5 +692,64 @@ describe('incident 2026-10-31: the aircon ignored setAll 17 (steady-18-5-v1, bia
     // Asleep (past the expected onset, lights-out + 60 min): no alert that could wake anyone.
     const late = LO22 + 70 * MIN;
     expect(acUnresponsive({ ...base, now: late, lastCommand: c2, commandsTonight: 2, tonight: [c1, c2], recent: hot(late) })).toBeNull();
+  });
+});
+
+describe('incident night 2026-10-31: emergency "set 16" at 23:45 while the room was still cooling under Cool 17', () => {
+  const LO22 = Date.UTC(2026, 9, 31, 15, 0); // 22:00 ICT
+  const WAKE830 = LO22 + 630 * MIN;
+  const now = LO22 + 105 * MIN; // 23:45 ICT
+  const cmd = (setpointC: number): AcCommand => ({
+    ts: LO22 - 30 * MIN,
+    state: { power: true, setpointC, mode: 'cool', fan: 'auto' },
+    via: 'setAll',
+    reason: `curve: precool start, 18.5°C (set ${setpointC})`,
+    landed: true,
+  });
+  const base = (last: AcCommand) => ({ now, lightsOut: LO22, wake: WAKE830, sleepOnset: LO22 + 60 * MIN, curve: DEFAULT_CURVE, remote: DEFAULT_REMOTE, biasC: -2, lastCommand: last, commandsTonight: 1, tonight: [last] });
+  // Slowly falling: 22.1 at 22:45, 21.7 at 23:15, 21.3 at 23:45 (−0.8 °C/h), 2.8 °C above the 18.5 target.
+  const falling = flat(now - 60 * MIN, now - MIN, (ts) => Math.round((21.3 + ((now - ts) / MIN) * (0.4 / 30)) * 10) / 10);
+  const hotFlat = flat(now - 60 * MIN, now - MIN, 21.3);
+  const rising = flat(now - 60 * MIN, now - MIN, (ts) => Math.round((21.3 - ((now - ts) / MIN) * (0.3 / 30)) * 10) / 10);
+
+  it('the exact incident: last command Cool 17, room 21.7 → 21.3 still falling at 23:45 → NO command', () => {
+    expect(roomTrendCPerH(falling, now)).toBeLessThan(-STILL_MOVING_C_PER_H);
+    expect(decideAcCommand({ ...base(cmd(17)), recent: falling })).toBeNull();
+    // The still-cooling guard alone holds it back, even with headroom below the last command (19).
+    expect(decideAcCommand({ ...base(cmd(19)), recent: falling })).toBeNull();
+  });
+
+  it('at the 17 floor with a hot, flat room: no IR command (nothing colder exists)', () => {
+    expect(decideAcCommand({ ...base(cmd(17)), recent: hotFlat })).toBeNull();
+    expect(decideAcCommand({ ...base(cmd(17)), recent: rising })).toBeNull();
+    // A last command stored before the 17 floor ("set 16", as on this very night): clamping 16 − 2 up to 17 would be a
+    // WARMER setpoint labelled as a cooling emergency. The strictly-colder check (not sameState) holds it back.
+    expect(decideAcCommand({ ...base(cmd(16)), recent: hotFlat })).toBeNull();
+  });
+
+  it('room flat or rising with headroom: one colder command, then nothing', () => {
+    for (const recent of [hotFlat, rising]) {
+      const em = decideAcCommand({ ...base(cmd(19)), recent });
+      expect(em?.reason).toMatch(/^emergency: room 2\.\d° above target/);
+      expect(em?.state).toEqual({ power: true, setpointC: 17, mode: 'cool', fan: 'auto' });
+      const after = { ...em!, landed: true };
+      const later = now + 60 * MIN;
+      expect(
+        decideAcCommand({ ...base(cmd(19)), now: later, lastCommand: after, commandsTonight: 2, tonight: [cmd(19), after], recent: flat(later - 60 * MIN, later - MIN, 21.3) }),
+      ).toBeNull();
+    }
+  });
+
+  it('quiet off (closed loop) after lights-out: a too-warm correction only when strictly colder and the room has stopped cooling', () => {
+    const loud = (last: AcCommand, recent: RoomReading[]) => decideAcCommand({ ...base(last), remote: LOUD, biasC: -1, recent });
+    // Slow fall, still within the "settled" band (0.2 °C in 30 min = −0.4 °C/h): still cooling → wait.
+    const slow = flat(now - 60 * MIN, now - MIN, (ts) => Math.round((20.6 + ((now - ts) / MIN) * (0.2 / 30)) * 10) / 10);
+    expect(loud(cmd(19), slow)).toBeNull();
+    // Flat at 20.6 (2.1 above): one colder correction.
+    const c = loud(cmd(19), flat(now - 60 * MIN, now - MIN, 20.6));
+    expect(c?.reason).toMatch(/^correction: -/);
+    expect(c!.state.setpointC).toBeLessThan(19);
+    // At the floor: nothing colder, nothing sent.
+    expect(loud(cmd(17), flat(now - 60 * MIN, now - MIN, 20.6))).toBeNull();
   });
 });
