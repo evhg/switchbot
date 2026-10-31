@@ -7,6 +7,7 @@
 //   {"action":"ac-test", "param":"18,2,1,on"[, "deviceId":"…"]}  → one setAll to the aircon remote (AC_DEVICE_ID /
 //                                    discovered, or any IR remote of this account), for a daytime remote test. 17..30 °C only (the Carrier remote cannot encode 16).
 //   {"action":"ac-test", "button":"C17", "deviceId":"…"}  → one learned button (customize) on a remote of this account.
+//   {"action":"ac-test", "command":"turnOn"|"turnOff", "deviceId":"…"}  → the learned power keys of a DIY aircon remote.
 //                                    Test sends are not logged in ac_commands, so they never steer the controller.
 // The path secret is the Vault secret `switchbot_webhook_secret` (migration 0008); it never leaves this function
 // unmasked. SwitchBot calls go through the quota session, so they are counted in api_quota.
@@ -147,11 +148,15 @@ async function remoteAction(db: Db, action: 'devices' | 'ac-test', body: Record<
       if (!SETALL_TEST.test(body.param)) throw new HttpError(400, 'param must be "temp,mode,fan,on|off" with temp 17..30');
       deviceId = typeof body.deviceId === 'string' ? body.deviceId : await knownDeviceId(db, 'ac');
       cmd = { command: 'setAll', parameter: body.param, commandType: 'command' };
+    } else if (body.command === 'turnOn' || body.command === 'turnOff') {
+      // DIY (learned) aircon remotes: the learned power keys.
+      deviceId = typeof body.deviceId === 'string' ? body.deviceId : await knownDeviceId(db, 'ac');
+      cmd = { command: body.command, parameter: 'default', commandType: 'command' };
     } else if (typeof body.button === 'string' && BUTTON.test(body.button)) {
       deviceId = typeof body.deviceId === 'string' ? body.deviceId : await knownDeviceId(db, 'ac');
       cmd = { command: body.button, parameter: 'default', commandType: 'customize' };
     } else {
-      throw new HttpError(400, 'ac-test needs "param" (setAll) or "button" (learned button)');
+      throw new HttpError(400, 'ac-test needs "param" (setAll), "command" (turnOn/turnOff) or "button" (learned button)');
     }
     if (!deviceId || !infraredRemoteList.some((r) => r.deviceId === deviceId)) {
       throw new HttpError(400, 'no such IR remote on this account');
