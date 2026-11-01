@@ -102,7 +102,15 @@ export const DEFAULT_LADDER_REMOTE: RemoteProfile = {
   quiet: { ...DEFAULT_QUIET },
 };
 
-/** `state` in the remote's vocabulary: setAll as is, or the nearest learned ladder button (null if none fits). */
+/** How well a ladder button matches the requested fan and mode (tie-break between buttons with the same setpoint). */
+const ladderMatch = (step: AcState, want: AcState) => (step.fan === want.fan ? 2 : 0) + (step.mode === want.mode ? 1 : 0);
+
+/**
+ * `state` in the remote's vocabulary: setAll as is, or the nearest learned ladder button (null if none fits). Nearest
+ * setpoint first; among buttons with that same setpoint the one whose fan (then mode) matches the request, so a
+ * fan-only change (e.g. "17 cool auto" → "cool 17 low") finds its own button. Other ties (a colder and a warmer button
+ * equally far away) keep ladder order, as before.
+ */
 export function remoteCommand(now: Ms, state: AcState, remote: RemoteProfile, reason: string): AcCommand | null {
   if (remote.kind === 'setAll') return { ts: now, state, via: 'setAll', reason, landed: null };
   const ladder = remote.ladder ?? [];
@@ -113,9 +121,14 @@ export function remoteCommand(now: Ms, state: AcState, remote: RemoteProfile, re
       best = step;
       break;
     }
-    if (!best || Math.abs(step.state.setpointC - state.setpointC) < Math.abs(best.state.setpointC - state.setpointC)) {
+    if (!best) {
       best = step;
+      continue;
     }
+    const d = Math.abs(step.state.setpointC - state.setpointC);
+    const bestD = Math.abs(best.state.setpointC - state.setpointC);
+    const sameSetpoint = step.state.setpointC === best.state.setpointC;
+    if (d < bestD || (sameSetpoint && ladderMatch(step.state, state) > ladderMatch(best.state, state))) best = step;
   }
   if (!best) return null;
   return { ts: now, state: { ...best.state }, via: 'customize', button: best.button, reason, landed: null };

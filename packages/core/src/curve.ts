@@ -8,7 +8,35 @@ export const DEFAULT_SLEEP_ONSET_MIN = 60;
 export const MAX_SLEEP_ONSET_MIN = 180;
 
 /**
- * "Steady 18.5" (default since 2026-10-30, evening). The household prefers ~18.5 °C (Walker: ~18 °C) and does not want
+ * "Steady 18.5, quiet fan" (default since 2026-11-02). Same targets as steady-18-5-v1, but the fan drops from auto to
+ * low half an hour after lights-out: on 2026-11-01 the household could not fall asleep with the auto fan running
+ * (too loud). The pre-cool keeps fan auto for a fast pull-down before bed.
+ *   precool  −30 min from lights-out  18.5 °C   ON at 21:30, fan auto (fast pull-down)
+ *   onset      0                      18.5 °C   same target and fan → no command at lights-out
+ *   deep     +30                      18.5 °C   fan low: the ONE command after lights-out (22:30), fan only, same setpoint
+ *   middle   +270                     18.5 °C   same target and fan → no command while asleep
+ *   late     +360                     18.5 °C   same → no command
+ *   wake     +630                     18.5 °C   (08:30 for a 22:00 lights-out) same → no command; OFF at wake + 30
+ * With the bias −2 and the learned "Others" ladder: 21:30 "17 cool auto", 22:30 "cool 17 low", 09:00 "off".
+ * Every phase counts from lights-out. minC 17: see STEADY_18_5_V1.
+ */
+export const DEFAULT_CURVE: TemperatureCurve = {
+  id: 'steady-18-5-quiet-v1',
+  name: 'Steady 18.5 °C, quiet fan (default)',
+  minC: 17,
+  maxC: 24,
+  phases: [
+    { name: 'precool', startMin: -30, targetC: 18.5, fan: 'auto' },
+    { name: 'onset', startMin: 0, targetC: 18.5, fan: 'auto' },
+    { name: 'deep', startMin: 30, targetC: 18.5, fan: 'low' },
+    { name: 'middle', startMin: 270, targetC: 18.5, fan: 'low' },
+    { name: 'late', startMin: 360, targetC: 18.5, fan: 'low' },
+    { name: 'wake', startMin: 630, targetC: 18.5, fan: 'low' },
+  ],
+};
+
+/**
+ * "Steady 18.5" (default 2026-10-30 evening → 2026-11-02; nights stored with 'steady-18-5-v1' keep it). The household prefers ~18.5 °C (Walker: ~18 °C) and does not want
  * the room to warm while either of them may still be in deep sleep. The watches' sleep stages are not available live
  * during the night, so the controller cannot know when deep sleep is over: the curve is flat instead of warming.
  *   precool  −30 min from lights-out  18.5 °C   ON at 21:30 (fan auto), the only evening command
@@ -24,9 +52,9 @@ export const MAX_SLEEP_ONSET_MIN = 180;
  * emergency correction (cooling only while asleep, see QuietConfig) has no colder setpoint left: it sends nothing.
  * (Until 2026-11-01 minC was 16 so an emergency could go one degree below 17; a 16 never reached the unit.)
  */
-export const DEFAULT_CURVE: TemperatureCurve = {
+export const STEADY_18_5_V1: TemperatureCurve = {
   id: 'steady-18-5-v1',
-  name: 'Steady 18.5 °C (default)',
+  name: 'Steady 18.5 °C (v1, fan auto)',
   minC: 17,
   maxC: 24,
   phases: [
@@ -142,7 +170,7 @@ export function scoringCurve(night: { manual?: boolean }, curve: TemperatureCurv
 }
 
 /** Built-in curves by id (a stored night's curve_id), for readers without the curves table. */
-export const BUILTIN_CURVES: readonly TemperatureCurve[] = [DEFAULT_CURVE, ONE_BEEP_V2, ONE_BEEP_V1, CURVE_V1];
+export const BUILTIN_CURVES: readonly TemperatureCurve[] = [DEFAULT_CURVE, STEADY_18_5_V1, ONE_BEEP_V2, ONE_BEEP_V1, CURVE_V1];
 
 /** Does any phase count from sleep onset? */
 export function usesSleepOnset(curve: TemperatureCurve): boolean {

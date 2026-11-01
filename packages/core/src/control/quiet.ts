@@ -91,11 +91,15 @@ export function setpointLimits(curve: TemperatureCurve): { lo: number; hi: numbe
   return { lo: Math.max(SETALL_MIN_C, Math.ceil(curve.minC)), hi: Math.min(SETALL_MAX_C, Math.floor(curve.maxC)) };
 }
 
-/** Fan for a phase: 'auto' for a learned ladder; else the curve phase's own `fan`, else high for precool and low after. */
+/**
+ * Fan for a phase: the curve phase's own `fan`; without one 'auto' for a learned ladder, else high for precool and low
+ * after. A ladder without a button for that fan falls back to the nearest setpoint's button (remoteCommand), so a
+ * fan-only phase change on an all-auto ladder sends nothing.
+ */
 export function fanFor(remote: RemoteProfile, phase: CurvePhaseName, curve?: TemperatureCurve): FanSpeed {
-  if (remote.kind === 'customize') return 'auto';
   const own = curve?.phases.find((p) => p.name === phase)?.fan;
   if (own) return own;
+  if (remote.kind === 'customize') return 'auto';
   return phase === 'precool' ? 'high' : 'low';
 }
 

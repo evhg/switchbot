@@ -226,7 +226,11 @@ export function decideAcCommand(input: ControllerInput): AcCommand | null {
   if (quiet.enabled && wantOn && now >= asleepFrom(lightsOut, quiet)) return decideQuiet(input, quiet);
 
   const slotFree = !wantOn || commandsTonight < remote.maxCommandsPerNight - 1;
-  if (lastCommand && lastCommand.landed === false && !lastCommand.reason.startsWith('resend') && lastOn === wantOn && slotFree) {
+  // A fan-only change (same setpoint as the command before it, e.g. the 22:30 "fan low") can't be judged from the
+  // temperature, and a missed fan change is harmless: never resent (quiet mode does the same).
+  const prevOn = lastCommand ? input.tonight?.filter((c) => c.ts < lastCommand.ts).at(-1) : undefined;
+  const lastFanOnly = !!prevOn?.state.power && lastOn && prevOn.state.setpointC === lastCommand!.state.setpointC;
+  if (lastCommand && lastCommand.landed === false && !lastCommand.reason.startsWith('resend') && lastOn === wantOn && slotFree && !lastFanOnly) {
     return { ...lastCommand, ts: now, state: { ...lastCommand.state }, reason: `resend: no response to "${lastCommand.reason}"`, landed: null };
   }
 
@@ -421,6 +425,9 @@ function decideQuiet(input: ControllerInput, quiet: ResolvedQuiet): AcCommand | 
     // Never move the setpoint against the plan (a re-measured bias must not turn a warming step into a cooling one).
     const dir = Math.sign(step.targetC - (heldTarget(input, steps, step.ts - MIN) ?? step.targetC));
     if ((dir > 0 && sp < cur.setpointC) || (dir < 0 && sp > cur.setpointC)) sp = cur.setpointC;
+    // A step that keeps the target (e.g. steady-18-5-quiet-v1's fan-only 22:30 "deep") never warms the room while asleep:
+    // a re-measured bias alone must not turn "cool 17 low" into "cool 18 low" (same rule as emergencyWarm).
+    if (dir === 0 && !quiet.emergencyWarm && sp > cur.setpointC) sp = cur.setpointC;
     const label = step.kind === 'ramp' ? `${step.phase} ramp (one step)` : `${step.phase} start`;
     const cmd = makeCommand(now, { power: true, setpointC: sp, mode: 'cool', fan }, remote, `curve: ${label} (quiet), ${step.targetC.toFixed(1)}°C (set ${sp}, bias ${bias >= 0 ? '+' : ''}${bias})`);
     const unchanged = noChange || !cmd || sameState(cur, cmd.state) || (lastCommand.button !== undefined && cmd.button === lastCommand.button);

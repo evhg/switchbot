@@ -7,6 +7,8 @@ import {
   resolveCurve,
   targetAt,
   DEFAULT_CURVE,
+  BUILTIN_CURVES,
+  STEADY_18_5_V1,
   DEFAULT_LADDER_REMOTE,
   DEFAULT_REMOTE,
   MAX_STALLED_RESENDS,
@@ -15,19 +17,22 @@ import {
   evaluateLanding,
   offCommand,
   planAcSchedule,
+  remoteCommand,
+  DEFAULT_QUIET,
   resolveQuiet,
   roomTrendCPerH,
   STILL_MOVING_C_PER_H,
   withQuiet,
   type AcCommand,
   type ControllerInput,
+  type RemoteProfile,
   type RoomReading,
 } from '../src/index.ts';
 
 /**
  * Most controller mechanics (ramps, carried settle-window steps, bias recovery, fan changes) are exercised with the
- * previous default curve (CURVE_V1: a ramp and several phase steps). The current one-beep DEFAULT_CURVE has its own
- * block at the end, after the one-beep curves of stored nights.
+ * previous default curve (CURVE_V1: a ramp and several phase steps). The steady curves (steady-18-5-v1 and the current
+ * DEFAULT_CURVE, steady-18-5-quiet-v1) have their own blocks at the end, after the one-beep curves of stored nights.
  */
 const V1 = CURVE_V1;
 const MIN = 60_000;
@@ -557,21 +562,22 @@ describe('one-beep-v1 (stored nights, anchored to lights-out)', () => {
   });
 });
 
-describe('steady-18-5-v1 default curve: no command while asleep', () => {
+describe('steady-18-5-v1 curve (default until 2026-11-02, stored nights keep it): no command while asleep', () => {
   const LO22 = Date.UTC(2026, 9, 30, 15, 0); // 22:00 ICT
   const WAKE830 = LO22 + 630 * MIN; // 08:30 ICT
   const at = (ts: number) => (ts - LO22) / MIN;
 
-  it('is the default: flat 18.5 °C, fan auto, every phase from lights-out', () => {
-    expect(DEFAULT_CURVE.id).toBe('steady-18-5-v1');
-    expect(new Set(DEFAULT_CURVE.phases.map((p) => p.targetC))).toEqual(new Set([18.5]));
-    expect(DEFAULT_CURVE.phases.every((p) => p.fan === 'auto' && p.anchor === undefined)).toBe(true);
-    expect(resolveCurve(DEFAULT_CURVE, LO22, LO22 + 120 * MIN)).toBe(DEFAULT_CURVE);
+  it('flat 18.5 °C, fan auto, every phase from lights-out; still resolvable by id', () => {
+    expect(STEADY_18_5_V1.id).toBe('steady-18-5-v1');
+    expect(BUILTIN_CURVES.find((c) => c.id === 'steady-18-5-v1')).toBe(STEADY_18_5_V1);
+    expect(new Set(STEADY_18_5_V1.phases.map((p) => p.targetC))).toEqual(new Set([18.5]));
+    expect(STEADY_18_5_V1.phases.every((p) => p.fan === 'auto' && p.anchor === undefined)).toBe(true);
+    expect(resolveCurve(STEADY_18_5_V1, LO22, LO22 + 120 * MIN)).toBe(STEADY_18_5_V1);
   });
 
   it('plans ON at 21:30 (set 18 with bias −1, 17 with bias −2), nothing while asleep, OFF at 09:00', () => {
     for (const [biasC, sp] of [[-1, 18], [-2, 17]] as const) {
-      const plan = planAcSchedule({ curve: DEFAULT_CURVE, lightsOut: LO22, wake: WAKE830, remote: DEFAULT_REMOTE, biasC });
+      const plan = planAcSchedule({ curve: STEADY_18_5_V1, lightsOut: LO22, wake: WAKE830, remote: DEFAULT_REMOTE, biasC });
       expect(plan.commands.map((c) => [at(c.ts), c.state.power ? c.state.setpointC : 'off', c.state.fan, c.kind])).toEqual([
         [-30, sp, 'auto', 'on'],
         [660, 'off', 'auto', 'off'],
@@ -580,9 +586,9 @@ describe('steady-18-5-v1 default curve: no command while asleep', () => {
     }
     // Whatever the expected sleep onset, and with a ladder remote too.
     for (const onsetMin of [0, 60, 150]) {
-      expect(planAcSchedule({ curve: DEFAULT_CURVE, lightsOut: LO22, wake: WAKE830, remote: DEFAULT_REMOTE, sleepOnset: LO22 + onsetMin * MIN }).asleepCount).toBe(0);
+      expect(planAcSchedule({ curve: STEADY_18_5_V1, lightsOut: LO22, wake: WAKE830, remote: DEFAULT_REMOTE, sleepOnset: LO22 + onsetMin * MIN }).asleepCount).toBe(0);
     }
-    expect(planAcSchedule({ curve: DEFAULT_CURVE, lightsOut: LO22, wake: WAKE830, remote: DEFAULT_LADDER_REMOTE }).commands.map((c) => c.button)).toEqual(['C18', 'OFF']);
+    expect(planAcSchedule({ curve: STEADY_18_5_V1, lightsOut: LO22, wake: WAKE830, remote: DEFAULT_LADDER_REMOTE }).commands.map((c) => c.button)).toEqual(['C18', 'OFF']);
   });
 
   for (const [offset, biasC] of [[1, -1], [2, -2], [1.5, -2]] as const) {
@@ -597,10 +603,10 @@ describe('steady-18-5-v1 default curve: no command while asleep', () => {
       for (let now = LO22 - 60 * MIN; now <= WAKE830 + 120 * MIN; now += 5 * MIN) {
         const recent: RoomReading[] = [];
         for (let ts = now - 60 * MIN; ts < now; ts += MIN) recent.push({ ts, tempC: Math.round(roomAt(ts) * 10) / 10, rh: 55, co2: 800, source: 'sim' });
-        const cmd = decideAcCommand({ now, lightsOut: LO22, wake: WAKE830, curve: DEFAULT_CURVE, remote: DEFAULT_REMOTE, biasC, commandsTonight: log.length, recent, tonight: [...log], ...(log.at(-1) ? { lastCommand: { ...log.at(-1)! } } : {}) });
+        const cmd = decideAcCommand({ now, lightsOut: LO22, wake: WAKE830, curve: STEADY_18_5_V1, remote: DEFAULT_REMOTE, biasC, commandsTonight: log.length, recent, tonight: [...log], ...(log.at(-1) ? { lastCommand: { ...log.at(-1)! } } : {}) });
         if (cmd) log.push({ ...cmd, landed: true });
       }
-      const plan = planAcSchedule({ curve: DEFAULT_CURVE, lightsOut: LO22, wake: WAKE830, remote: DEFAULT_REMOTE, biasC });
+      const plan = planAcSchedule({ curve: STEADY_18_5_V1, lightsOut: LO22, wake: WAKE830, remote: DEFAULT_REMOTE, biasC });
       expect(log.map((c) => [at(c.ts), c.state.power ? c.state.setpointC : 'off'])).toEqual(plan.commands.map((c) => [at(c.ts), c.state.power ? c.state.setpointC : 'off']));
       expect(log.filter((c) => c.ts >= LO22 + 15 * MIN && c.ts < WAKE830)).toEqual([]);
     });
@@ -609,7 +615,7 @@ describe('steady-18-5-v1 default curve: no command while asleep', () => {
   it('while asleep an emergency only cools: a too-warm room gets one command, a too-cold room none', () => {
     const pre: AcCommand = { ts: LO22 - 30 * MIN, state: { power: true, setpointC: 17, mode: 'cool', fan: 'auto' }, via: 'setAll', reason: 'curve: precool start, 18.5°C (set 17, bias -2)', landed: true };
     const now = LO22 + 180 * MIN;
-    const base = { now, lightsOut: LO22, wake: WAKE830, curve: DEFAULT_CURVE, remote: DEFAULT_REMOTE, biasC: -2, lastCommand: pre, commandsTonight: 1, tonight: [pre] };
+    const base = { now, lightsOut: LO22, wake: WAKE830, curve: STEADY_18_5_V1, remote: DEFAULT_REMOTE, biasC: -2, lastCommand: pre, commandsTonight: 1, tonight: [pre] };
     // Untuned bias −1: the precool went out at 18, so a colder setpoint (17, the IR floor) exists.
     const pre18: AcCommand = { ...pre, state: { ...pre.state, setpointC: 18 }, reason: 'curve: precool start, 18.5°C (set 18, bias -1)' };
     const base18 = { ...base, biasC: -1, lastCommand: pre18, tonight: [pre18] };
@@ -631,7 +637,7 @@ describe('steady-18-5-v1 default curve: no command while asleep', () => {
   it('the emergency only looks at readings after lights-out + 15: the evening pull-down never triggers it', () => {
     // Precool at 18 (bias −1) so the emergency has a colder setpoint (17) to go to.
     const pre: AcCommand = { ts: LO22 - 30 * MIN, state: { power: true, setpointC: 18, mode: 'cool', fan: 'auto' }, via: 'setAll', reason: 'curve: precool start, 18.5°C (set 18, bias -1)', landed: true };
-    const base = { lightsOut: LO22, wake: WAKE830, curve: DEFAULT_CURVE, remote: DEFAULT_REMOTE, biasC: -1, lastCommand: pre, commandsTonight: 1, tonight: [pre] };
+    const base = { lightsOut: LO22, wake: WAKE830, curve: STEADY_18_5_V1, remote: DEFAULT_REMOTE, biasC: -1, lastCommand: pre, commandsTonight: 1, tonight: [pre] };
     const warm = (now: number) => flat(now - 40 * MIN, now - MIN, 20.4);
     // 22:15 and 22:30: the 20-min window still reaches into the settle window → nothing.
     for (const m of [15, 30, 34]) expect(decideAcCommand({ ...base, now: LO22 + m * MIN, recent: warm(LO22 + m * MIN) })).toBeNull();
@@ -646,7 +652,7 @@ describe('incident 2026-10-31: the aircon ignored setAll 17 (steady-18-5-v1, bia
   const c1: AcCommand = { ts: LO22 - 30 * MIN, state: { power: true, setpointC: 17, mode: 'cool', fan: 'auto' }, via: 'setAll', reason: 'curve: precool start, 18.5°C (set 17, bias -2)', landed: null };
   const c2: AcCommand = { ...c1, ts: LO22 - 10 * MIN + 1460, reason: 'resend: room 8.7° above target and not cooling' };
   const hot = (now: number) => flat(now - 60 * MIN, now - MIN, 27.3);
-  const base = { lightsOut: LO22, wake: WAKE830, sleepOnset: LO22 + 60 * MIN, curve: DEFAULT_CURVE, remote: DEFAULT_REMOTE, biasC: -2 };
+  const base = { lightsOut: LO22, wake: WAKE830, sleepOnset: LO22 + 60 * MIN, curve: STEADY_18_5_V1, remote: DEFAULT_REMOTE, biasC: -2 };
 
   it('resends once more at 22:10 (minInterval allows the late cron tick), then stops at the cap', () => {
     const now = LO22 + 10 * MIN;
@@ -706,7 +712,7 @@ describe('incident night 2026-10-31: emergency "set 16" at 23:45 while the room 
     reason: `curve: precool start, 18.5°C (set ${setpointC})`,
     landed: true,
   });
-  const base = (last: AcCommand) => ({ now, lightsOut: LO22, wake: WAKE830, sleepOnset: LO22 + 60 * MIN, curve: DEFAULT_CURVE, remote: DEFAULT_REMOTE, biasC: -2, lastCommand: last, commandsTonight: 1, tonight: [last] });
+  const base = (last: AcCommand) => ({ now, lightsOut: LO22, wake: WAKE830, sleepOnset: LO22 + 60 * MIN, curve: STEADY_18_5_V1, remote: DEFAULT_REMOTE, biasC: -2, lastCommand: last, commandsTonight: 1, tonight: [last] });
   // Slowly falling: 22.1 at 22:45, 21.7 at 23:15, 21.3 at 23:45 (−0.8 °C/h), 2.8 °C above the 18.5 target.
   const falling = flat(now - 60 * MIN, now - MIN, (ts) => Math.round((21.3 + ((now - ts) / MIN) * (0.4 / 30)) * 10) / 10);
   const hotFlat = flat(now - 60 * MIN, now - MIN, 21.3);
@@ -751,5 +757,179 @@ describe('incident night 2026-10-31: emergency "set 16" at 23:45 while the room 
     expect(c!.state.setpointC).toBeLessThan(19);
     // At the floor: nothing colder, nothing sent.
     expect(loud(cmd(17), flat(now - 60 * MIN, now - MIN, 20.6))).toBeNull();
+  });
+});
+
+/** The household's learned "Others" remote (public.ac_state.remote since 2026-11-01): ladder buttons, quiet mode on. */
+const HOME_LADDER: RemoteProfile = {
+  kind: 'customize',
+  ladder: [
+    { button: '17 cool auto', state: { power: true, setpointC: 17, mode: 'cool', fan: 'auto' } },
+    { button: 'cool 17 low', state: { power: true, setpointC: 17, mode: 'cool', fan: 'low' } },
+    { button: 'cool 18 low', state: { power: true, setpointC: 18, mode: 'cool', fan: 'low' } },
+    { button: 'off', state: { power: false, setpointC: 17, mode: 'cool', fan: 'auto' } },
+  ],
+  minIntervalMin: 20,
+  maxCommandsPerNight: 12,
+  quiet: { ...DEFAULT_QUIET },
+};
+
+describe('remoteCommand: learned ladder', () => {
+  const press = (setpointC: number, fan: 'auto' | 'low' | 'high', remote: RemoteProfile = HOME_LADDER) =>
+    remoteCommand(0, { power: true, setpointC, mode: 'cool', fan }, remote, 'test')?.button;
+
+  it('nearest setpoint first, then the button whose fan matches', () => {
+    expect(press(17, 'auto')).toBe('17 cool auto');
+    expect(press(17, 'low')).toBe('cool 17 low');
+    expect(press(18, 'low')).toBe('cool 18 low');
+    // Only one button at 18: the setpoint wins over the fan.
+    expect(press(18, 'auto')).toBe('cool 18 low');
+    // Below the floor / above the top: the nearest setpoint, fan-matched among the 17s.
+    expect(press(16, 'low')).toBe('cool 17 low');
+    expect(press(16, 'auto')).toBe('17 cool auto');
+    expect(press(22, 'low')).toBe('cool 18 low');
+    // No button with the requested fan: ladder order among the 17s.
+    expect(press(17, 'high')).toBe('17 cool auto');
+    expect(remoteCommand(0, { power: false, setpointC: 17, mode: 'cool', fan: 'low' }, HOME_LADDER, 'off')?.button).toBe('off');
+  });
+
+  it('order of the learned buttons does not matter for a fan match', () => {
+    const reversed: RemoteProfile = { ...HOME_LADDER, ladder: [...HOME_LADDER.ladder!].reverse() };
+    expect(press(17, 'auto', reversed)).toBe('17 cool auto');
+    expect(press(17, 'low', reversed)).toBe('cool 17 low');
+  });
+
+  it('a colder and a warmer button equally far away: ladder order, as before', () => {
+    const gap: RemoteProfile = {
+      ...HOME_LADDER,
+      ladder: [
+        { button: 'C16', state: { power: true, setpointC: 16, mode: 'cool', fan: 'auto' } },
+        { button: 'L18', state: { power: true, setpointC: 18, mode: 'cool', fan: 'low' } },
+      ],
+    };
+    expect(press(17, 'low', gap)).toBe('C16');
+    expect(press(17, 'auto', gap)).toBe('C16');
+  });
+
+  it('the all-auto default ladder ignores a fan-only change (same button, no command)', () => {
+    expect(press(17, 'low', DEFAULT_LADDER_REMOTE)).toBe('C17');
+  });
+});
+
+describe('steady-18-5-quiet-v1 default curve: one fan-only step at lights-out + 30', () => {
+  // Tonight: night 2026-11-02, lights-out 22:00 ICT, expected sleep onset 23:35, wake 08:30, bias −2.
+  const LO22 = Date.UTC(2026, 10, 2, 15, 0); // 22:00 ICT
+  const WAKE830 = LO22 + 630 * MIN; // 08:30 ICT 2026-11-03
+  const ONSET = LO22 + 95 * MIN; // 23:35 ICT
+  const at = (ts: number) => (ts - LO22) / MIN;
+
+  it('is the default: flat 18.5 °C, fan auto until lights-out, low from +30, every phase from lights-out', () => {
+    expect(DEFAULT_CURVE.id).toBe('steady-18-5-quiet-v1');
+    expect(BUILTIN_CURVES.map((c) => c.id)).toEqual(['steady-18-5-quiet-v1', 'steady-18-5-v1', 'one-beep-v2', 'one-beep-v1', 'default-v1']);
+    expect(new Set(DEFAULT_CURVE.phases.map((p) => p.targetC))).toEqual(new Set([18.5]));
+    expect(DEFAULT_CURVE.phases.map((p) => [p.name, p.startMin, p.fan])).toEqual([
+      ['precool', -30, 'auto'],
+      ['onset', 0, 'auto'],
+      ['deep', 30, 'low'],
+      ['middle', 270, 'low'],
+      ['late', 360, 'low'],
+      ['wake', 630, 'low'],
+    ]);
+    expect(DEFAULT_CURVE.phases.every((p) => p.anchor === undefined)).toBe(true);
+    expect(resolveCurve(DEFAULT_CURVE, LO22, ONSET)).toBe(DEFAULT_CURVE);
+    expect(DEFAULT_CURVE.minC).toBe(STEADY_18_5_V1.minC);
+    expect(DEFAULT_CURVE.maxC).toBe(STEADY_18_5_V1.maxC);
+  });
+
+  it('plans ON at 21:30 (fan auto), fan low at 22:30 (same setpoint), OFF at 09:00', () => {
+    for (const [biasC, sp] of [[-1, 18], [-2, 17]] as const) {
+      const plan = planAcSchedule({ curve: DEFAULT_CURVE, lightsOut: LO22, wake: WAKE830, remote: DEFAULT_REMOTE, biasC, sleepOnset: ONSET });
+      expect(plan.commands.map((c) => [at(c.ts), c.state.power ? c.state.setpointC : 'off', c.state.fan, c.kind])).toEqual([
+        [-30, sp, 'auto', 'on'],
+        [30, sp, 'low', 'phase'],
+        [660, 'off', 'auto', 'off'],
+      ]);
+      expect(plan.asleepCount).toBe(1);
+    }
+    const ladder = planAcSchedule({ curve: DEFAULT_CURVE, lightsOut: LO22, wake: WAKE830, remote: HOME_LADDER, biasC: -2, sleepOnset: ONSET });
+    expect(ladder.commands.map((c) => [at(c.ts), c.button])).toEqual([[-30, '17 cool auto'], [30, 'cool 17 low'], [660, 'off']]);
+    // The all-auto default ladder has no low button: nothing to send at 22:30.
+    expect(planAcSchedule({ curve: DEFAULT_CURVE, lightsOut: LO22, wake: WAKE830, remote: DEFAULT_LADDER_REMOTE }).commands.map((c) => c.button)).toEqual(['C18', 'OFF']);
+  });
+
+  /**
+   * Replays tonight minute by minute (21:20 → 09:10) with the household's ladder and a room that cools normally: off
+   * it sits at 26 °C, under a setpoint it settles exponentially (τ 25 min) to setpoint + `offsetC` (+0.2 °C on low fan),
+   * with a ±0.05 °C wobble, read at 0.1 °C. `everyMin` is the cron period.
+   */
+  function replay(remote: RemoteProfile, offsetC: number, everyMin = 1) {
+    const log: AcCommand[] = [];
+    const readings: RoomReading[] = [];
+    let temp = 26;
+    const start = LO22 - 40 * MIN;
+    const end = WAKE830 + 40 * MIN;
+    for (let now = start; now <= end; now += MIN) {
+      const last = log.at(-1);
+      const eq = !last || !last.state.power ? 26 : last.state.setpointC + offsetC + (last.state.fan === 'low' ? 0.2 : 0);
+      temp += (eq - temp) * (1 - Math.exp(-1 / (last?.state.power ? 25 : 120)));
+      readings.push({ ts: now - MIN, tempC: Math.round((temp + 0.05 * Math.sin((now - start) / (7 * MIN))) * 10) / 10, rh: 55, co2: 800, source: 'sim' });
+      if ((now - start) % (everyMin * MIN) !== 0) continue;
+      const cmd = decideAcCommand({
+        now,
+        lightsOut: LO22,
+        wake: WAKE830,
+        sleepOnset: ONSET,
+        curve: DEFAULT_CURVE,
+        remote,
+        biasC: -2,
+        commandsTonight: log.length,
+        recent: readings.filter((r) => r.ts >= now - 60 * MIN),
+        tonight: [...log],
+        // The stored row itself, so the landing check sticks (ac-curve's markLanded).
+        ...(last ? { lastCommand: last } : {}),
+      });
+      if (cmd) log.push(cmd);
+    }
+    return log;
+  }
+  const hhmm = (ts: number) => new Date(ts + 7 * 60 * MIN).toISOString().slice(11, 16);
+
+  for (const [label, remote] of [['quiet on', HOME_LADDER], ['quiet off (AC_QUIET unset)', withQuiet(HOME_LADDER, false)]] as const) {
+    for (const offsetC of [1.8, 2, 2.6]) {
+      for (const everyMin of [1, 5]) {
+        it(`tonight, ${label}, room settles at setpoint + ${offsetC}, cron every ${everyMin} min: 21:30 auto, 22:30 low, 09:00 off, nothing else`, () => {
+          const log = replay(remote, offsetC, everyMin);
+          expect(log.map((c) => [hhmm(c.ts), c.button])).toEqual([
+            ['21:30', '17 cool auto'],
+            ['22:30', 'cool 17 low'],
+            ['09:00', 'off'],
+          ]);
+          expect(log[1]!.state).toEqual({ power: true, setpointC: 17, mode: 'cool', fan: 'low' });
+          expect(log[1]!.reason).toMatch(/^curve: deep/);
+          expect(log.every((c) => c.via === 'customize')).toBe(true);
+        });
+      }
+    }
+  }
+
+  it('22:30 never warms the room: a room that settled at setpoint + 1 (bias re-measured −1) still gets "cool 17 low"', () => {
+    const pre: AcCommand = { ts: LO22 - 30 * MIN, state: { power: true, setpointC: 17, mode: 'cool', fan: 'auto' }, via: 'customize', button: '17 cool auto', reason: 'curve: precool start, 18.5°C (set 17, bias -2)', landed: true };
+    for (const roomC of [17.6, 18, 18.2]) {
+      const now = LO22 + 30 * MIN;
+      const cmd = decideAcCommand({ now, lightsOut: LO22, wake: WAKE830, sleepOnset: ONSET, curve: DEFAULT_CURVE, remote: HOME_LADDER, biasC: -2, lastCommand: { ...pre }, commandsTonight: 1, tonight: [pre], recent: flat(now - 60 * MIN, now - MIN, roomC) });
+      expect(cmd?.button, `${roomC}`).toBe('cool 17 low');
+    }
+  });
+
+  it('a fan-only command that "did not land" (room flat) is never resent, quiet on or off', () => {
+    const pre: AcCommand = { ts: LO22 - 30 * MIN, state: { power: true, setpointC: 17, mode: 'cool', fan: 'auto' }, via: 'customize', button: '17 cool auto', reason: 'curve: precool start', landed: true };
+    const fan: AcCommand = { ts: LO22 + 30 * MIN, state: { power: true, setpointC: 17, mode: 'cool', fan: 'low' }, via: 'customize', button: 'cool 17 low', reason: 'curve: deep, fan low', landed: false };
+    for (const remote of [HOME_LADDER, withQuiet(HOME_LADDER, false)]) {
+      for (const m of [60, 70, 90, 180]) {
+        const now = LO22 + m * MIN;
+        const cmd = decideAcCommand({ now, lightsOut: LO22, wake: WAKE830, sleepOnset: ONSET, curve: DEFAULT_CURVE, remote, biasC: -2, lastCommand: { ...fan }, commandsTonight: 2, tonight: [pre, fan], recent: flat(now - 60 * MIN, now - MIN, 19.2) });
+        expect(cmd, `${m}`).toBeNull();
+      }
+    }
   });
 });

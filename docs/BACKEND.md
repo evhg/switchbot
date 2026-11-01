@@ -307,6 +307,25 @@ Decided 2026-10-30, after the first real night (aircon at 17 °C by hand: bed 18
 - **App**: Tonight's plan shows "Home by default" and "Aircon control: Live / Dry-run" switches and the Away dates list
   (add / remove); the plan uses the backend's bias for its set points.
 
+## Quiet fan from 22:30 (migration 0019)
+
+Decided 2026-11-01: the steady-18-5-v1 night ran as planned, but the fan on auto was too loud to fall asleep.
+
+- **Curve** `steady-18-5-quiet-v1` (`DEFAULT_CURVE` since 0019): 18.5 °C all night like steady-18-5-v1; pre-cool at
+  21:30 on fan auto (fast pull-down), fan **low** from lights-out + 30 (22:30), OFF at wake + 30 (09:00). With bias −2
+  and the learned "Others" ladder in `ac_state.remote`: 21:30 "17 cool auto" · 22:30 "cool 17 low" (fan only, same
+  setpoint; the one planned beep after lights-out) · 09:00 "off". The 22:30 step is sent until 23:00 (quiet mode's
+  step grace); a fan-only command is never resent and does not use the night's one extra command. A planned step that
+  keeps the target never raises the setpoint while asleep (unless `quiet.emergencyWarm`): a room that settled near
+  setpoint + 1 (re-measured bias −1) still gets "cool 17 low", not "cool 18 low".
+- **Ladder selection** (core `remoteCommand`): nearest setpoint first, then the button with the requested fan (then
+  mode) among buttons with that setpoint. Before, the first learned 17 button always won, so "fan low" mapped to "17
+  cool auto" (the button already pressed) and was silently skipped; `fanFor` also forced 'auto' for every ladder remote.
+- **0019**: inserts the curve, makes it the only default (`steady-18-5-v1` kept, renamed "Steady 18.5 °C (v1, fan
+  auto)"), and moves real nights dated 2026-11-02 or later that are still on `steady-18-5-v1` to it. Nights created
+  afterwards by `ensureNight` take the default. Needs `ac-curve` (and `nightly-report`, which bundles curve.ts for its
+  fallback curve) redeployed: an old ac-curve bundle would map "fan low" back to "17 cool auto" and send nothing at 22:30.
+
 ## Calendar trips and outdoor weather (migration 0018)
 
 Decided 2026-10-31: trips in the calendars switch the aircon off by themselves, and the night analysis gets real

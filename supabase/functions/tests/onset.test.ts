@@ -1,6 +1,6 @@
 import { planAcSchedule } from '../../../packages/core/src/control/quiet.ts';
 import { DEFAULT_REMOTE } from '../../../packages/core/src/control/remote.ts';
-import { DEFAULT_CURVE, expectedSleepOnset } from '../../../packages/core/src/curve.ts';
+import { DEFAULT_CURVE, expectedSleepOnset, STEADY_18_5_V1 } from '../../../packages/core/src/curve.ts';
 import { learnedSleepOnset, onsetOnNight } from '../_shared/load.ts';
 import { rowSleepOnset, type SleepRow } from '../_shared/rows.ts';
 import type { Db } from '../_shared/supabase.ts';
@@ -20,19 +20,33 @@ function fakeDb(rows: SleepRow[]): Db {
   return { from: () => q } as unknown as Db;
 }
 
-Deno.test('tonight (22:00 → 08:30, no stored onset, steady 18.5 curve): ON 21:30, nothing while asleep, OFF 09:00', () => {
+Deno.test('2026-10-31 (22:00 → 08:30, no stored onset, steady-18-5-v1): ON 21:30, nothing while asleep, OFF 09:00', () => {
   const { lightsOut, wake } = defaultSchedule('2026-10-31', '22:00', '08:30');
   const onset = expectedSleepOnset(lightsOut, rowSleepOnset({ sleep_onset: null }));
   eq(hm(onset), '23:00');
   // ac_state.bias_c = −2 (migration 0012: set 17 held the bed at 18.5–19.9 °C on the first night) → set 17.
-  const plan = planAcSchedule({ curve: DEFAULT_CURVE, lightsOut, wake, remote: DEFAULT_REMOTE, sleepOnset: onset, biasC: -2 });
+  const plan = planAcSchedule({ curve: STEADY_18_5_V1, lightsOut, wake, remote: DEFAULT_REMOTE, sleepOnset: onset, biasC: -2 });
   eq(plan.commands.map((c) => [hm(c.ts), c.state.power ? c.state.setpointC : 'off', c.state.fan, c.asleep]), [
     ['21:30', 17, 'auto', false],
     ['09:00', 'off', 'auto', false],
   ]);
   eq(plan.asleepCount, 0);
   // The untuned default bias −1 would set 18.
-  eq(planAcSchedule({ curve: DEFAULT_CURVE, lightsOut, wake, remote: DEFAULT_REMOTE }).commands[0]!.state.setpointC, 18);
+  eq(planAcSchedule({ curve: STEADY_18_5_V1, lightsOut, wake, remote: DEFAULT_REMOTE }).commands[0]!.state.setpointC, 18);
+});
+
+Deno.test('tonight 2026-11-02 (22:00 → 08:30, onset 23:35, steady-18-5-quiet-v1 default): ON 21:30 auto, 22:30 low, OFF 09:00', () => {
+  const { lightsOut, wake } = defaultSchedule('2026-11-02', '22:00', '08:30');
+  const onset = expectedSleepOnset(lightsOut, lightsOut + 95 * MIN);
+  eq(hm(onset), '23:35');
+  eq(DEFAULT_CURVE.id, 'steady-18-5-quiet-v1');
+  const plan = planAcSchedule({ curve: DEFAULT_CURVE, lightsOut, wake, remote: DEFAULT_REMOTE, sleepOnset: onset, biasC: -2 });
+  eq(plan.commands.map((c) => [hm(c.ts), c.state.power ? c.state.setpointC : 'off', c.state.fan, c.asleep]), [
+    ['21:30', 17, 'auto', false],
+    ['22:30', 17, 'low', true],
+    ['09:00', 'off', 'auto', false],
+  ]);
+  eq(plan.asleepCount, 1);
 });
 
 Deno.test('onsetOnNight puts a minute of day on the right side of midnight', () => {

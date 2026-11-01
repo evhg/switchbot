@@ -161,7 +161,7 @@ describe('integration: simulator truth → detectors and metrics', () => {
   }, 60_000);
 
   const remoteGap = DEFAULT_REMOTE.minIntervalMin * MIN;
-  it('quiet controller (steady default curve) logs 2–5 commands per night, nothing planned while asleep, and matches the plan', () => {
+  it('quiet controller (steady quiet-fan default curve) logs 3–6 commands per night, one fan-only step while asleep, and matches the plan', () => {
     const quiet = resolveQuiet(DEFAULT_REMOTE);
     const counts: number[] = [];
     const asleepCounts: number[] = [];
@@ -170,18 +170,20 @@ describe('integration: simulator truth → detectors and metrics', () => {
       const asleep = n.ac.filter((c) => c.ts >= from && c.ts < n.wake);
       counts.push(n.ac.length);
       asleepCounts.push(asleep.length);
-      expect(n.ac.length, n.date).toBeGreaterThanOrEqual(2);
-      expect(n.ac.length, n.date).toBeLessThanOrEqual(5);
-      // Hard bound by design: the steady curve plans NO command while asleep (whatever the expected sleep onset; a
-      // re-measured bias never adds one); only the safety nets remain: one extra command (a resend or an emergency
-      // that cools, shared budget) → at most 1 beep while asleep.
+      expect(n.ac.length, n.date).toBeGreaterThanOrEqual(3);
+      expect(n.ac.length, n.date).toBeLessThanOrEqual(6);
+      // Hard bound by design: the quiet-fan curve plans ONE command while asleep, the fan-only "fan low" at
+      // lights-out + 30 (whatever the expected sleep onset; a re-measured bias never adds one); only the safety nets
+      // remain: one extra command (a resend or an emergency that cools, shared budget) → at most 2 beeps while asleep.
       expect(n.sleepOnset, n.date).toBeDefined();
       const plan = planAcSchedule({ curve: DEFAULT_CURVE, lightsOut: n.lightsOut, wake: n.wake, remote: DEFAULT_REMOTE, sleepOnset: n.sleepOnset! });
-      expect(plan.asleepCount, n.date).toBe(0);
-      expect(plan.commands.map((c) => c.kind), n.date).toEqual(['on', 'off']);
+      expect(plan.asleepCount, n.date).toBe(1);
+      expect(plan.commands.map((c) => c.kind), n.date).toEqual(['on', 'phase', 'off']);
       const planned = asleep.filter((c) => c.reason.startsWith('curve:'));
       const extra = asleep.filter((c) => !c.reason.startsWith('curve:'));
-      expect(planned, `${n.date} planned steps while asleep`).toEqual([]);
+      expect(planned.length, `${n.date} planned steps while asleep`).toBe(1);
+      expect(planned[0]!.state.fan, `${n.date} fan step`).toBe('low');
+      expect(Math.abs(planned[0]!.ts - plan.commands[1]!.ts), `${n.date} fan step time`).toBeLessThanOrEqual(5 * MIN);
       expect(extra.length, `${n.date} extras while asleep`).toBeLessThanOrEqual(quiet.maxExtraPerNight);
       for (const c of extra) expect(c.reason, n.date).toMatch(/^(resend|emergency: room .* above)/);
       // An emergency only ever cools.
@@ -214,9 +216,9 @@ describe('integration: simulator truth → detectors and metrics', () => {
     asleepCounts.sort((a, b) => a - b);
     report.acCommands = `min ${counts[0]}, median ${counts[counts.length >> 1]}, max ${counts[counts.length - 1]}`;
     report.acWhileAsleep = `min ${asleepCounts[0]}, median ${asleepCounts[asleepCounts.length >> 1]}, max ${asleepCounts[asleepCounts.length - 1]} (beeps)`;
-    // No beep on a typical night, never more than the one safety net.
-    expect(asleepCounts[asleepCounts.length >> 1]).toBe(0);
-    expect(asleepCounts[asleepCounts.length - 1]).toBeLessThanOrEqual(1);
+    // One beep (the planned fan-only step) on a typical night, never more than that plus the one safety net.
+    expect(asleepCounts[asleepCounts.length >> 1]).toBe(1);
+    expect(asleepCounts[asleepCounts.length - 1]).toBeLessThanOrEqual(2);
   });
 
   it('closed-loop controller (quiet off) still logs 2–16 commands per night, no duplicates, respecting minInterval', () => {
