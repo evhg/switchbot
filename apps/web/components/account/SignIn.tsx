@@ -1,6 +1,7 @@
 'use client';
 /**
- * Sign in for real data (Supabase Auth), on one calm column:
+ * Sign in (Supabase Auth), on one calm column. The whole app sits behind it (components/AccessGate.tsx):
+ *   google    "Continue with Google" (signInWithOAuth; returns here with #access_token)
  *   password  email + password (primary; the password is set once, signed in, from System › General › Account or here)
  *   email     email → "Send code" (signInWithOtp, shouldCreateUser: false, so only invited addresses get a code)
  *   code      the 6-digit code from the email (verifyOtp; needs {{ .Token }} in the project's Magic Link email template)
@@ -15,7 +16,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/lib/auth.tsx';
 import { useData } from '@/lib/data/context.tsx';
-import { supabaseSignIn, supabaseSignInWithPassword, supabaseVerifyCode, supabaseVerifyLink } from '@/lib/data/supabase.ts';
+import { supabaseSignIn, supabaseSignInWithGoogle, supabaseSignInWithPassword, supabaseVerifyCode, supabaseVerifyLink } from '@/lib/data/supabase.ts';
 import { useChrome } from '../nav.tsx';
 import { NotMember } from './Onboarding.tsx';
 import { SetPassword } from './SetPassword.tsx';
@@ -30,10 +31,14 @@ function safeNext(v: string | null): string {
   return v && v.startsWith('/') && !v.startsWith('//') ? v : '/';
 }
 
+/** Supabase's answer when the database refuses a new account (migration 0021: not on the allow-list). */
+const NOT_ALLOWED = /database error saving new user|not on the sleep lab allow-list/i;
+const NOT_ALLOWED_MSG = 'That account can’t sign in. Sleep Lab is private: use Cath’s or Erik’s Google account.';
+
 export function SignIn() {
-  useChrome({ back: { href: '/settings/data', label: 'System' } });
   const router = useRouter();
   const auth = useAuth();
+  useChrome(auth.status === 'signed-in' ? { back: { href: '/settings/data', label: 'System' } } : {});
   const { setMode } = useData();
   const [step, setStep] = useState<'password' | 'email' | 'code'>('password');
   const [email, setEmail] = useState('');
@@ -62,7 +67,8 @@ export function SignIn() {
       fromLink: h.has('access_token') || q.has('code') || h.has('token_hash') || q.has('token_hash'),
       linkError: linkErr,
     };
-    if (linkErr) setLinkError(/expired|invalid/i.test(linkErr) ? 'That sign-in link has expired or was already used. Sign in with your password, or request a new code.' : linkErr);
+    if (linkErr && NOT_ALLOWED.test(linkErr)) setLinkError(NOT_ALLOWED_MSG);
+    else if (linkErr) setLinkError(/expired|invalid/i.test(linkErr) ? 'That sign-in link has expired or was already used. Sign in with your password, or request a new code.' : linkErr);
     // ?token_hash=…&type=magiclink: verify it here (supabase-js only reads #access_token by itself).
     const th = q.get('token_hash') ?? h.get('token_hash');
     if (th) {
@@ -129,6 +135,19 @@ export function SignIn() {
       window.sessionStorage.setItem('sleeplab.signin', JSON.stringify({ next: params.current.next, real: params.current.real, email: e }));
     } catch {
       /* ignore */
+    }
+  };
+
+  const signInGoogle = async () => {
+    setBusy(true);
+    setErr(null);
+    setLinkError(null);
+    remember(email.trim());
+    const res = await supabaseSignInWithGoogle();
+    // On success the browser is already on its way to Google.
+    if (res) {
+      setBusy(false);
+      setLinkError(res);
     }
   };
 
@@ -246,10 +265,10 @@ export function SignIn() {
     <div className={s.col}>
       <PageHeader
         className={s.header}
-        title={step === 'code' ? 'Check your email' : 'Sign in for real data'}
+        title={step === 'code' ? 'Check your email' : 'Sign in'}
         lede={
           step === 'password' ? (
-            'Your bedroom’s readings and both bands’ sleep are private to the household.'
+            'Sleep Lab is private to Cath and Erik: the bedroom, both bands’ sleep and the live camera.'
           ) : step === 'email' ? (
             'We’ll email you a one-time code. Only invited addresses can sign in.'
           ) : (
@@ -261,6 +280,14 @@ export function SignIn() {
         }
       />
       {linkError && <p className={s.err} role="alert" style={{ marginBottom: 'var(--sp-5)' }}>{linkError}</p>}
+      {step !== 'code' && (
+        <div className={s.actions} style={{ marginBottom: 'var(--sp-8)' }}>
+          <Button variant="primary" block disabled={busy} onClick={() => void signInGoogle()}>
+            Continue with Google
+          </Button>
+          <p className={s.note}>Or with the email address you were invited with:</p>
+        </div>
+      )}
       {step === 'password' ? (
         <form
           className={s.form}
@@ -283,7 +310,7 @@ export function SignIn() {
             />
           </Field>
           <div className={s.actions}>
-            <Button type="submit" variant="primary" disabled={busy}>
+            <Button type="submit" disabled={busy}>
               {busy ? 'Signing in…' : 'Sign in'}
             </Button>
             <Button
@@ -308,7 +335,7 @@ export function SignIn() {
         >
           {emailField(standalone ? 'Only invited addresses can sign in. Type the code from the email here: links open in the browser, not in this app.' : 'Only invited addresses can sign in.')}
           <div className={s.actions}>
-            <Button type="submit" variant="primary" disabled={busy}>
+            <Button type="submit" disabled={busy}>
               {busy ? 'Sending…' : 'Send code'}
             </Button>
             <Button
@@ -383,7 +410,7 @@ export function SignIn() {
         </form>
       )}
       <p className={`cap ${s.after}`}>
-        Signing in changes nothing for anyone else: the simulator stays public. <Link href="/settings/data">Data &amp; devices</Link> switches between real and simulated nights.
+        Only Cath’s and Erik’s accounts can sign in. <Link href="/privacy">Privacy</Link>
       </p>
     </div>
   );
