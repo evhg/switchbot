@@ -8,6 +8,7 @@
 // After each person it writes public.band_sync (migration 0015): last run, pairedDevices lastSyncTime and the newest
 // wearable data point, which the Presence page shows and a presence gate may later read as a hint.
 import { GoogleHealthClient, GoogleHealthError, type ListDataPointsOptions, intervalFilter, sampleTimeFilter } from '../../../packages/core/src/health/client.ts';
+import { SCOPE_ACTIVITY, SCOPE_HEALTH_METRICS, SCOPE_SETTINGS, SCOPE_SLEEP } from '../../../packages/core/src/health/oauth.ts';
 import { parseHeartRate, parseHrv, parseSleep, parseSpo2 } from '../../../packages/core/src/health/parse.ts';
 import { requireCronOrMember } from '../_shared/auth.ts';
 import { GoogleTokenError, googleAccessToken } from '../_shared/google.ts';
@@ -99,11 +100,14 @@ async function connectedPeople(db: Db): Promise<string[]> {
   return rows.map((r) => r.person_id);
 }
 
+/** What this sync reads. The token is narrowed to these: Google Health refuses tokens that also carry Calendar/YouTube. */
+const SYNC_SCOPES = [SCOPE_HEALTH_METRICS, SCOPE_SLEEP, SCOPE_ACTIVITY, SCOPE_SETTINGS];
+
 async function syncPerson(db: Db, personId: string, hours: number, sleepDays: number): Promise<PersonResult> {
   const res: PersonResult = { personId, ok: true, calls: 0, counts: {}, errors: [] };
   let accessToken: string;
   try {
-    accessToken = (await googleAccessToken(db, personId)).accessToken;
+    accessToken = (await googleAccessToken(db, personId, SYNC_SCOPES)).accessToken;
   } catch (e) {
     // A database error reading the token still fails the whole request, as before.
     if (!(e instanceof GoogleTokenError)) throw e;

@@ -242,4 +242,12 @@ describe('OAuth helpers', () => {
     expect(err).toBeInstanceOf(GoogleOAuthError);
     expect(err).toMatchObject({ status: 400, error: 'invalid_grant' });
   });
+
+  it('refreshAccessToken narrows the access token to the given scopes', async () => {
+    const f = fakeFetch([json({ access_token: 'at', expires_in: 100, scope: 'x' }), json({ access_token: 'at', expires_in: 100 })]);
+    await refreshAccessToken({ clientId: 'c', clientSecret: 's', refreshToken: 'rt', scopes: ['x', 'y'], fetch: f.fn });
+    expect(new URLSearchParams(f.calls[0]!.init!.body as string).get('scope')).toBe('x y');
+    await refreshAccessToken({ clientId: 'c', clientSecret: 's', refreshToken: 'rt', fetch: f.fn });
+    expect(new URLSearchParams(f.calls[1]!.init!.body as string).has('scope')).toBe(false);
+  });
 });

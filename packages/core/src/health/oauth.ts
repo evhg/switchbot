@@ -128,7 +128,15 @@ export function exchangeCode(p: TokenRequestBase & { code: string; redirectUri: 
   return tokenRequest(p, { grant_type: 'authorization_code', code: p.code, redirect_uri: p.redirectUri });
 }
 
-/** The returned tokens usually lack refreshToken; keep the existing one. */
-export function refreshAccessToken(p: TokenRequestBase & { refreshToken: string }): Promise<GoogleTokens> {
-  return tokenRequest(p, { grant_type: 'refresh_token', refresh_token: p.refreshToken });
+/**
+ * The returned tokens usually lack refreshToken; keep the existing one. `scopes` narrows the access token to a subset
+ * of the granted scopes: the Google Health API answers 403 "disallowed OAuth scope(s)" when the token also carries
+ * Calendar/YouTube scopes, so each service asks for its own.
+ */
+export function refreshAccessToken(p: TokenRequestBase & { refreshToken: string; scopes?: readonly string[] }): Promise<GoogleTokens> {
+  return tokenRequest(p, {
+    grant_type: 'refresh_token',
+    refresh_token: p.refreshToken,
+    ...(p.scopes?.length ? { scope: p.scopes.join(' ') } : {}),
+  });
 }

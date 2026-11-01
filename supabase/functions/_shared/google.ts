@@ -16,16 +16,23 @@ export class GoogleTokenError extends Error {
 }
 
 /**
- * Access token for `personId`. A rotated refresh token is stored back in Vault; a failed refresh is recorded on
- * oauth_tokens (needs_reconsent, last_error) and thrown as GoogleTokenError.
+ * Access token for `personId`, narrowed to `scopes` (a subset of what the person granted; see refreshAccessToken). A
+ * rotated refresh token is stored back in Vault; a failed refresh is recorded on oauth_tokens (needs_reconsent,
+ * last_error) and thrown as GoogleTokenError.
  */
-export async function googleAccessToken(db: Db, personId: string): Promise<{ accessToken: string; scopes: string[] }> {
+export async function googleAccessToken(
+  db: Db,
+  personId: string,
+  scopes?: readonly string[],
+): Promise<{ accessToken: string; scopes: string[] }> {
   const refresh = must(await db.rpc('get_google_refresh_token', { p_person_id: personId }), 'get token') as string | null;
   if (!refresh) throw new GoogleTokenError('no refresh token; connect Google Health in the app');
   try {
-    const t = await refreshAccessToken({ clientId: env('GOOGLE_CLIENT_ID'), clientSecret: env('GOOGLE_CLIENT_SECRET'), refreshToken: refresh });
+    const t = await refreshAccessToken({ clientId: env('GOOGLE_CLIENT_ID'), clientSecret: env('GOOGLE_CLIENT_SECRET'), refreshToken: refresh, scopes });
     if (t.refreshToken && t.refreshToken !== refresh) {
-      await db.rpc('store_google_refresh_token', { p_person_id: personId, p_refresh_token: t.refreshToken, ...(t.scope.length ? { p_scopes: t.scope } : {}) });
+      // A narrowed token reports only its subset: keep the stored grant list then.
+      const keep = scopes?.length || !t.scope.length;
+      await db.rpc('store_google_refresh_token', { p_person_id: personId, p_refresh_token: t.refreshToken, ...(keep ? {} : { p_scopes: t.scope }) });
     }
     return { accessToken: t.accessToken, scopes: t.scope };
   } catch (e) {

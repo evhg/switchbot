@@ -73,7 +73,7 @@ serve(async (req) => {
       continue;
     }
     try {
-      const { accessToken } = await googleAccessToken(db, personId);
+      const { accessToken } = await googleAccessToken(db, personId, [SCOPE_CALENDAR_EVENTS]);
       const events = await listCalendarEvents(accessToken, timeMin, now + AHEAD_DAYS * DAY, { fetch: countingFetch });
       results.push({ personId, ok: true, events: events.length, ranges: tripRanges(events) });
     } catch (e) {
