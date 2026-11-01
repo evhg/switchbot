@@ -5,7 +5,7 @@ import type { Ms } from '../types.ts';
 export type MealType = 'breakfast' | 'lunch' | 'dinner' | 'snack';
 export const MEAL_TYPES: readonly MealType[] = ['breakfast', 'lunch', 'dinner', 'snack'];
 
-export const FOOD_MODEL = 'gemini-2.5-flash';
+export const FOOD_MODEL = 'gemini-3.8-flash';
 
 /** Nutrition of one item or of the whole meal. Grams of food, kcal, grams of each macro. */
 export interface Nutrition {

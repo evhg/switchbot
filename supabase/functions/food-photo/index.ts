@@ -4,7 +4,7 @@
 //   {mealId, action: 'regenerate' | 'hide' | 'resync'}               ask Gemini again / take out of the app / retry Google
 // Caller: a household owner/member's JWT (or cron / the service key, which must name personId). Members act on their own
 // person's meals; the owner on anyone's.
-// Analysis: the photo (service-role download) goes inline to Gemini generateContent (gemini-2.5-flash, JSON output with
+// Analysis: the photo (service-role download) goes inline to Gemini generateContent (gemini-3.8-flash, JSON output with
 // core FOOD_RESPONSE_SCHEMA); core parseFoodAnalysis validates and clamps it, totals = sums of the items. The row is
 // saved first; the Google Health write (token narrowed to nutrition.writeonly) is best effort and never fails the
 // request: its outcome lands in google_status / google_point / google_error.

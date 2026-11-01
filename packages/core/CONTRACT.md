@@ -294,7 +294,7 @@ export function googleWeatherUrl(key, lat?, lon?), openMeteoUrl(lat?, lon?, tz?)
 
 ```ts
 // food/meal.ts: meal photo → nutrition (food-photo Edge Function, public.meals)
-export type MealType = 'breakfast' | 'lunch' | 'dinner' | 'snack'; export const FOOD_MODEL = 'gemini-2.5-flash'
+export type MealType = 'breakfast' | 'lunch' | 'dinner' | 'snack'; export const FOOD_MODEL = 'gemini-3.8-flash'
 export function mealTypeAt(ts, utcOffsetMin = 420): MealType          // 05–11 breakfast, 11–16 lunch, 17–22 dinner, else snack
 export function foodPrompt(o: { takenAt; mealType?; note?; utcOffsetMin? }): string
 export function foodRequestBody(o & { imageBase64; mimeType }): object  // generateContent body, JSON + FOOD_RESPONSE_SCHEMA

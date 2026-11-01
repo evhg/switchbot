@@ -140,7 +140,7 @@ Until a function's required secrets are set it answers `503 {"error":"not config
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | — | **Not needed** since 0016: the key pair is generated in the backend and kept in Vault. If set while Vault is empty, they are adopted into Vault once |
 | `GOOGLE_WEATHER_API_KEY` | weather-poll | Optional. Google Maps Platform key with the Weather API enabled (needs billing). Unset → the Vault secret `google_weather_api_key` (0020); neither, or a failing call → Open-Meteo (free, no key) |
 | `GEMINI_API_KEY` | food-photo | Optional. Unset → the Vault secret `gemini_api_key` (0020). Neither → `503 not configured` |
-| `GEMINI_FOOD_MODEL` | food-photo | Optional; default `gemini-2.5-flash` |
+| `GEMINI_FOOD_MODEL` | food-photo | Optional; default `gemini-3.8-flash` (gemini-2.5-flash is closed to new projects) |
 | `WEATHER_LAT`, `WEATHER_LON` | weather-poll | Optional; default Phuket 7.88 / 98.39 |
 | `PUBLIC_FUNCTIONS_URL` | optional | Overrides `<SUPABASE_URL>/functions/v1`, e.g. behind a custom domain |
 
