@@ -47,6 +47,7 @@ import {
   useTonightTags,
 } from './model.ts';
 import { ago } from './bands.tsx';
+import { CameraPage } from './camera.tsx';
 import { PresencePage, TonightBlock } from './presence.tsx';
 import s from './system.module.css';
 
@@ -541,8 +542,8 @@ export function DataPage() {
           <Row key={d.name} title={d.name} sub={d.detail} value={<Status tone={d.state === 'Open loop' ? 'on' : 'off'}>{d.state === 'Open loop' ? 'Open loop (commands only)' : d.state}</Status>} />
         ))}
       </Group>
-      <Group label="Coming later: camera" footer="Phase 3. Needs a small home box for RTSP on the LAN.">
-        <Row title="Pan/Tilt Cam Plus 3K" sub="Not set up yet" value="Later" />
+      <Group label="Camera" footer="The live view runs through go2rtc on the Mac at home. The analyses listed here come later (phase 3).">
+        <Row title="Pan/Tilt Cam Plus 3K" sub="Live view through the Mac relay" value="Camera" href={systemHref('camera')} />
         {CAMERA_LATER.map((x) => (
           <Row key={x} title={<span className="ink-2">{x}</span>} />
         ))}
@@ -863,6 +864,7 @@ export const SYSTEM_SCREENS: Record<SystemSlug, () => ReactNode> = {
   morning: () => <MorningPage />,
   data: () => <DataPage />,
   health: () => <HealthPage />,
+  camera: () => <CameraPage />,
   co2: () => <Co2Page />,
   setup: () => <SetupPage />,
   diagnostics: () => <DiagnosticsPage />,

@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
+import { chunkRows } from './chunks.ts';
 import { env, serviceKey } from './env.ts';
 
 // Untyped client: row shapes live in rows.ts.
@@ -41,16 +42,19 @@ export async function selectAll<T>(
   return out;
 }
 
-/** Upserts in chunks (keeps each request well under the body limit). */
+/**
+ * Upserts in chunks: at most `chunk` rows and about `maxBytes` of JSON per statement (see chunks.ts), so large batches
+ * (a 48 h heart-rate backfill) stay well under the request body limit and the statement timeout.
+ */
 export async function upsertChunks(
   db: Db,
   table: string,
   rows: Record<string, unknown>[],
   onConflict: string,
-  { ignoreDuplicates = false, chunk = 500 } = {},
+  { ignoreDuplicates = false, chunk = 500, maxBytes = 1_000_000 } = {},
 ): Promise<number> {
-  for (let i = 0; i < rows.length; i += chunk) {
-    const res = await db.from(table).upsert(rows.slice(i, i + chunk), { onConflict, ignoreDuplicates });
+  for (const part of chunkRows(rows, { maxRows: chunk, maxBytes })) {
+    const res = await db.from(table).upsert(part, { onConflict, ignoreDuplicates });
     if (res.error) throw new Error(`upsert ${table}: ${res.error.message}`);
   }
   return rows.length;

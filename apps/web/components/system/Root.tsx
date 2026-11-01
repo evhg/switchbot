@@ -13,6 +13,7 @@ import { linePath, scale } from '../charts/common.tsx';
 import { SYSTEM_GROUPS, systemHref, type SystemSlug } from '../nav.tsx';
 import { FeaturedCard, Group, PageHeader, Row, Skeleton, useWidth } from '../ui.tsx';
 import { clock, driftAlerts, planTimes, tagLabel, useMorningReport, usePlanClock, useSetupProgress, useTonightTags } from './model.ts';
+import { useCameraSummary } from './camera.tsx';
 import { usePresenceSummary } from './presence.tsx';
 import s from './system.module.css';
 
@@ -55,6 +56,7 @@ export function SystemRoot() {
   const [morning] = useMorningReport();
   const setup = useSetupProgress();
   const presence = usePresenceSummary();
+  const camera = useCameraSummary();
   const drift = useMemo(() => (dataset ? driftAlerts(dataset).length : null), [dataset]);
   const people = (dataset ?? latest)?.people;
   const ph = curve.phases;
@@ -68,6 +70,7 @@ export function SystemRoot() {
     morning: morning ? 'On' : 'Off',
     data: sourceKind === 'sim' ? (dataMode === 'sim' ? 'Simulated' : 'Simulated for now') : 'Real data',
     health: 'Not connected',
+    camera,
     co2: drift === null ? <Skeleton w={52} h={14} r="text" inline /> : drift ? <span className="sig">{drift === 1 ? '1 alert' : `${drift} alerts`}</span> : 'No alerts',
     setup: `${setup.count} of ${setup.total}`,
     diagnostics: undefined,

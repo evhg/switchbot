@@ -289,3 +289,20 @@ export function parseGoogleCurrentConditions(json): OutdoorReading | null     //
 export function parseOpenMeteoCurrent(json): OutdoorReading | null            // {utc_offset_seconds, current{time (local), temperature_2m, relative_humidity_2m}}
 export function googleWeatherUrl(key, lat?, lon?), openMeteoUrl(lat?, lon?, tz?)   // default Phuket 7.88, 98.39
 ```
+
+## food/ (2026-11-01)
+
+```ts
+// food/meal.ts: meal photo → nutrition (food-photo Edge Function, public.meals)
+export type MealType = 'breakfast' | 'lunch' | 'dinner' | 'snack'; export const FOOD_MODEL = 'gemini-2.5-flash'
+export function mealTypeAt(ts, utcOffsetMin = 420): MealType          // 05–11 breakfast, 11–16 lunch, 17–22 dinner, else snack
+export function foodPrompt(o: { takenAt; mealType?; note?; utcOffsetMin? }): string
+export function foodRequestBody(o & { imageBase64; mimeType }): object  // generateContent body, JSON + FOOD_RESPONSE_SCHEMA
+export function geminiResponseText(json): string                         // first candidate, thought parts skipped; throws on block/empty
+export function parseFoodAnalysis(json | string): FoodAnalysis | null    // clamped; totals = item sums; modelTotals when they differ
+// food/nutrition.ts: Google Health v4 nutrition-log (needs a token narrowed to nutrition.writeonly)
+export function nutritionPointId(mealId, previous?): string              // meal-<uuid>, then -2, -3 … per rewrite
+export function nutritionLogDataPoint(meal: MealForLog, pointId, utcOffsetMin = 420): object   // {name, nutritionLog{…, interval +15 min}}
+export async function createNutritionLog(token, point, opts?): Promise<{ status: 'ok' | 'pending'; name; operation }>
+export async function deleteNutritionLogs(token, names, opts?)            // :batchDelete
+```

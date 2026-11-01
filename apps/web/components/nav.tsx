@@ -26,7 +26,7 @@ export const TABS: readonly { href: string; label: string; icon: IconName }[] = 
   { href: '/settings', label: 'System', icon: 'gear' },
 ];
 
-export type SystemSlug = 'plan' | 'tags' | 'presence' | 'general' | 'morning' | 'data' | 'health' | 'co2' | 'setup' | 'diagnostics';
+export type SystemSlug = 'plan' | 'tags' | 'presence' | 'general' | 'morning' | 'data' | 'health' | 'camera' | 'co2' | 'setup' | 'diagnostics';
 export const SYSTEM_GROUPS: readonly { label: string; pages: readonly { slug: SystemSlug; label: string }[] }[] = [
   {
     label: 'Tonight',
@@ -48,6 +48,7 @@ export const SYSTEM_GROUPS: readonly { label: string; pages: readonly { slug: Sy
     pages: [
       { slug: 'data', label: 'Data & devices' },
       { slug: 'health', label: 'Google Health' },
+      { slug: 'camera', label: 'Camera' },
       { slug: 'co2', label: 'CO₂ calibration' },
     ],
   },

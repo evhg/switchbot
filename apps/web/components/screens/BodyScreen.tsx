@@ -9,7 +9,8 @@
  *               opens its drill-in.
  *             3 Recovery trends: one chart, range from one segmented control, metric picked from the list beside it.
  *   More      Sleeping heart rate · HRV through the night · Last 14 nights · Blood oxygen · Breathing · Resting HR ·
- *             Steps · Skin temperature vs room · Our sleep/wake vs Google's — each a sheet / right panel.
+ *             Steps · Skin temperature vs room · Our sleep/wake vs Google's — each a sheet / right panel; then Food,
+ *             a link to the food camera page (/body/food).
  *
  * The page sits in a .p-you / .p-erik scope, so `var(--person)` and the stage tokens follow the selected person.
  * Deep links from Today (/body#sleep, #recovery, #rhr, #hrv, #spo2, #resp, #temp, #steps) scroll to the matching
@@ -40,6 +41,9 @@ const TRENDS: Record<TrendKey, { label: string; noun: string; unit: string; digi
   deepMin: { label: 'Deep sleep', noun: 'deep sleep', unit: 'min', digits: 0, get: (m) => m.deepMin },
   respRate: { label: 'Breathing', noun: 'breathing rate', unit: '/min', digits: 1, get: (m) => m.respRate },
 };
+
+/** Body › Food (/body/food): meals from the food camera. Last row of More analysis (the tab bar has no room for it). */
+const FOOD_ROW = { label: 'Food', value: 'Meal photos and totals', href: '/body/food' };
 
 /** Neutral delta vs a person's own typical: "↓ 4 bpm · typical 53". */
 function vsTypical(v: number, typical: number, digits: number, unit: string): ReactNode {
@@ -171,6 +175,7 @@ export function BodyScreen() {
       <div className={scope}>
         {header}
         <Section title={`No data for ${person.name} this night`} cap="Away or not wearing the band. Pick another night, or switch person." />
+        <MoreAnalysis items={[FOOD_ROW]} label="More" />
       </div>
     );
 
@@ -369,7 +374,7 @@ export function BodyScreen() {
         </Section>
 
         <div className={s.more}>
-          <MoreAnalysis items={drills.map((d) => ({ label: d.label, value: d.value, onClick: () => setOpen(d.key) }))} />
+          <MoreAnalysis items={[...drills.map((d) => ({ label: d.label, value: d.value, onClick: () => setOpen(d.key) })), FOOD_ROW]} />
         </div>
       </div>
       <OnThisPage />

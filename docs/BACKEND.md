@@ -31,6 +31,7 @@ supabase/
     push-admin/               VAPID keys (created in the backend, kept in Vault) + public-key GET + test push
     calendar-sync/            both Google Calendars → household trips → away_periods (source 'calendar', 0018)
     weather-poll/             Phuket outdoor temp/RH every 15 min (Google Weather or Open-Meteo) → outdoor_readings
+    food-photo/               meal photo (Storage 'meals') → Gemini → meals → Google Health nutrition log (0020)
     tests/                    `deno test` (Web Push RFC vector, coach grounding, health helpers)
 scripts/seed-supabase.ts      simulated nights → Supabase (Node)
 ```
@@ -57,6 +58,7 @@ All timestamps are `timestamptz` (UTC). A night is keyed by the **ICT wake-up da
 | `ac_state` | One row per AC: assumed state, last command, `remote` (RemoteProfile jsonb), `bias_c` | ac-curve / SQL |
 | `events` | Shower, door, in-bed, `ac_missed` …; `source` = detector / manual / sim_truth / controller | nightly-report, ac-curve, seed |
 | `raw_health` | **Append-only** Google Health archive (`point_key`, `payload`, `update_time`, `data_source`); a trigger blocks UPDATE/DELETE | google-health-sync |
+| `meals` | Food photos analysed by Gemini: totals, `items` jsonb, `confidence`, `model`, `raw`, `google_status` / `google_point`; `hidden` instead of removal (0020) | food-photo; members edit their own person's (owner: any) |
 | `health_hr` (1-min means), `health_hrv`, `health_spo2`, `sleep_sessions`, `health_daily`, `health_vitals_daily` | Derived layers, rebuildable from `raw_health` | google-health-sync, seed |
 | `health_sync_jobs` | Queue fed by the Google webhook | webhook, OAuth |
 | `reports` | `report` (NightReport, possibly Claude-worded), `rule_report`, `generated_by`, `model` | nightly-report, seed |
@@ -136,7 +138,9 @@ Until a function's required secrets are set it answers `503 {"error":"not config
 | `ANTHROPIC_MODEL` | nightly-report | Default `claude-opus-5-5` |
 | `VAPID_SUBJECT` | nightly-report, ac-curve, push-admin | Optional `mailto:` / `https:` contact; default = the `APP_URL` origin, else `https://sleep-lab-lac.vercel.app` |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | — | **Not needed** since 0016: the key pair is generated in the backend and kept in Vault. If set while Vault is empty, they are adopted into Vault once |
-| `GOOGLE_WEATHER_API_KEY` | weather-poll | Optional. Google Maps Platform key with the Weather API enabled (needs billing). Unset, or a failing call → Open-Meteo (free, no key) |
+| `GOOGLE_WEATHER_API_KEY` | weather-poll | Optional. Google Maps Platform key with the Weather API enabled (needs billing). Unset → the Vault secret `google_weather_api_key` (0020); neither, or a failing call → Open-Meteo (free, no key) |
+| `GEMINI_API_KEY` | food-photo | Optional. Unset → the Vault secret `gemini_api_key` (0020). Neither → `503 not configured` |
+| `GEMINI_FOOD_MODEL` | food-photo | Optional; default `gemini-2.5-flash` |
 | `WEATHER_LAT`, `WEATHER_LON` | weather-poll | Optional; default Phuket 7.88 / 98.39 |
 | `PUBLIC_FUNCTIONS_URL` | optional | Overrides `<SUPABASE_URL>/functions/v1`, e.g. behind a custom domain |
 
@@ -358,6 +362,34 @@ outdoor weather.
   relative_humidity_2m`; parsed by core `weather/parse.ts`, upserted on `ts`. `loadNight()` (nightly report) and the
   app's Room › Outdoor vs bedroom chart read them (`source <> 'sim'` in the app). One `api_quota_log` row per API call.
 - **App**: System › Tonight's plan › Away dates labels calendar trips "from calendar"; Remove works as for manual ones.
+
+## Food camera (migration 0020)
+
+Decided 2026-11-01: a photo of each meal gives calories and macros, logged to the person's Google Health.
+
+- **App secrets in Vault.** `public.app_secret(name)` (definer body in `private`, service role only) reads
+  `google_weather_api_key` or `gemini_api_key` from Vault; any other name is refused. `_shared/secrets.ts` prefers the
+  function secret of the same purpose (`GOOGLE_WEATHER_API_KEY`, `GEMINI_API_KEY`) and caches the Vault value 10 min.
+- **Photos**: private Storage bucket `meals` (15 MB, JPEG/PNG/WebP/HEIC), objects `<person_id>/<file>`. Household
+  members read every photo; owners/members upload under their own person (the owner under anyone). The app uploads
+  with the member's session, then calls food-photo.
+- **`food-photo`** (member JWT; cron/service key must pass `personId`):
+  `{photoPath, takenAt?, mealType?, personId?, note?}` → downloads the photo (service role), Gemini `generateContent`
+  (`_shared/gemini.ts`; inline image, JSON output with core `FOOD_RESPONSE_SCHEMA`), core `parseFoodAnalysis` (clamped,
+  totals = item sums), inserts `meals`, then writes a Google Health `nutrition-log` point (token narrowed to
+  `nutrition.writeonly`). The Google write is best effort: `google_status` = `ok` / `pending` / `error` / `no_token` /
+  `removed`, `google_error` holds the reason. The same `photoPath` twice returns the existing meal; no food → `422`.
+  `{mealId, action}`: `regenerate` (Gemini again, row updated, Google point replaced), `hide` (`hidden = true`, Google
+  point removed), `resync` (retry Google). Anonymous nutrition logs can't be edited, so a rewrite removes the old point
+  first and writes `meal-<uuid>-2`, `-3` …; if the removal fails nothing new is written. Meal type defaults from the ICT
+  clock (05–11 breakfast, 11–16 lunch, 17–22 dinner, else snack). One `api_quota_log` row (`api = 'gemini'`) per call.
+- **`meals` RLS**: household read; insert/update by owners and members for their own person (owner: any), limited to
+  the editable columns (model output and Google state are service-role only). No removal grants.
+- **Camera stream**: `household_settings.camera_stream_url` (https only), set with `set_camera_stream_url(url)`
+  (owner/member; null clears). The go2rtc URL comes from Erik's Mac.
+- **App**: Body › Food (`/body/food`, `apps/web/lib/food.ts`) shrinks the photo to ≤1280 px JPEG, uploads it to
+  `meals/<person>/<uuid>.jpg` and calls food-photo; System › Camera (`/settings/camera`) embeds
+  `<camera_stream_url>/stream.html?src=living&mode=mse,hls` (a `src`/`mode` already in the URL is kept).
 
 ## Sleep onset (migration 0011)
 
@@ -583,6 +615,7 @@ It then runs `detectEvents`, which replaces this night's `detector` events, and 
 
 - **Readings:** about 525k rows per year per meter (≈ 60–100 MB with indexes).
 - **`health_hr`:** stored as 1-minute means, about 1M rows per year for two people.
+- **Bulk writes** (`upsertChunks`): at most 500 rows and about 1 MB of JSON per statement (`_shared/chunks.ts`), so a 48 h heart-rate batch no longer runs into the statement timeout.
 - **`raw_health` heart rate:** archived as **hourly chunks** of the unchanged points, keyed by content hash, so a re-fetch with more points adds a version instead of being lost. At the 1 s storage resolution Google allows, this is the largest table: plan on a few hundred MB per year.
 - **Free tier:** 500 MB is enough for the first months. Before it fills, move to Pro or export old `raw_health` chunks to Storage.
 

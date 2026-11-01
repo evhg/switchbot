@@ -12,6 +12,7 @@ const TITLES: Record<SystemSlug, string> = {
   morning: 'Morning report',
   data: 'Data & devices',
   health: 'Google Health',
+  camera: 'Camera',
   co2: 'CO₂ calibration',
   setup: 'Setup guide',
   diagnostics: 'Diagnostics',

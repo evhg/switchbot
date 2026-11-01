@@ -1,14 +1,16 @@
 // Outdoor temperature and RH for the bedroom's location → public.outdoor_readings (migration 0018 schedules it every
-// 15 min). With the GOOGLE_WEATHER_API_KEY secret: Google Weather API currentConditions:lookup (metric); without it, or
-// when Google fails (e.g. billing not enabled yet), Open-Meteo's free forecast API (current=temperature_2m,
+// 15 min). With a Google key (the GOOGLE_WEATHER_API_KEY secret, else the Vault secret 'google_weather_api_key' through
+// app_secret(), migration 0020): Google Weather API currentConditions:lookup (metric); without one, or when Google
+// fails (e.g. billing not enabled yet), Open-Meteo's free forecast API (current=temperature_2m,
 // relative_humidity_2m). Location: WEATHER_LAT / WEATHER_LON, default Phuket (7.88, 98.39). One row per observation
 // time (upsert on ts), source 'google_weather' or 'open_meteo'; loadNight() reads them into Night.outdoor.
 import { googleWeatherUrl, openMeteoUrl, parseGoogleCurrentConditions, parseOpenMeteoCurrent, PHUKET_LAT, PHUKET_LON } from '../../../packages/core/src/weather/parse.ts';
 import type { OutdoorReading } from '../../../packages/core/src/types.ts';
 import { requireCron } from '../_shared/auth.ts';
-import { envNumber, optEnv } from '../_shared/env.ts';
+import { envNumber } from '../_shared/env.ts';
 import { json, serve } from '../_shared/http.ts';
 import { outdoorToRow } from '../_shared/rows.ts';
+import { appSecret } from '../_shared/secrets.ts';
 import { serviceClient } from '../_shared/supabase.ts';
 import { iso } from '../_shared/time.ts';
 
@@ -34,7 +36,7 @@ serve(async (req) => {
   await requireCron(req, db);
   const lat = envNumber('WEATHER_LAT', PHUKET_LAT);
   const lon = envNumber('WEATHER_LON', PHUKET_LON);
-  const key = optEnv('GOOGLE_WEATHER_API_KEY');
+  const key = await appSecret(db, 'google_weather_api_key', 'GOOGLE_WEATHER_API_KEY');
 
   const errors: string[] = [];
   const calls: Record<Source, number> = { google_weather: 0, open_meteo: 0 };

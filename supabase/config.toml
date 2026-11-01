@@ -75,3 +75,7 @@ verify_jwt = false
 
 [functions.weather-poll]
 verify_jwt = false
+
+# Food photo → Gemini → public.meals → Google Health nutrition log; a household owner/member's JWT (0020).
+[functions.food-photo]
+verify_jwt = false

@@ -436,6 +436,7 @@ Today keeps v1's data wiring (`components/story/model.ts`). The work is presenta
   - Resting HR;
   - Steps (day before);
   - Skin temperature vs room.
+- **Food** (`/body/food`, last row of More analysis; the tab bar has no room for a sixth tab): a drill-in with "‹ Body". One primary "Add meal" button opens the phone camera; the photo is shrunk to ≤1280 px, uploaded and read by the `food-photo` function, with a pending card, then the result card (title, kcal, protein / carbs / fat / fibre, items, confidence, Google Health status). Below: today's totals for both people side by side, and the last 14 days of meals (a row opens a sheet with Analyse again / Retry Google Health / Hide). The simulator shows sample meals.
 - "Our sleep/wake vs Google's" (the algorithm notes) opens in an info **sheet** from an ⓘ button beside the hypnogram title.
 
 ### 9.4 Lab
@@ -464,6 +465,7 @@ Today keeps v1's data wiring (`components/story/model.ts`). The work is presenta
 | Household | **Morning report** — value: On/Off | The morning report notification toggle, with the push permission state. |
 | Data and devices | **Data & devices** — value: "Simulator" | Source segmented control (Simulator / Supabase, with "not set up" when unconfigured). Nights: "90 · 1 Aug – 29 Oct, 80 with complete data". Freshness: last room reading, gaps in the last 24 h, Google Health last sync. Devices: Hub Mini, Meter Pro CO2, Aircon (Toshiba Carrier), the Fitbit bands and the camera, each with a detail line and a status dot. "Coming later: camera" is a row on this page. |
 | Data and devices | **Google Health** — value: "Not connected" | The connect button, both bands, and what data is read. |
+| Data and devices | **Camera** — value: "Live view" / "Not set up" | The live view: go2rtc's player (`stream.html?src=living&mode=mse,hls`) in a 16:9 iframe from `household_settings.camera_stream_url`, "Open full screen", and "Open in SwitchBot app" (App Store link). Empty state explains the Mac relay. Household writers paste or remove the https address (`set_camera_stream_url`). |
 | Data and devices | **CO₂ calibration** — value: "1 alert" | Add an outdoor check, the history, and the drift warning row ("Night minimum below outdoor air: sensor drift"). |
 | Help | **Setup guide** — value: "2 of 7" | A checklist of all 7 groups with every step from `SettingsScreen.tsx` `SETUP`, and progress for each group. |
 | Help | **Diagnostics** | Seed / window (42 / 90), metrics compute time (ms, cached), app version, SwitchBot calls today (– / 5,000), webhook vs poll lag, the Supabase env var names `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` (in `.code`), and Supabase sign-in state. |

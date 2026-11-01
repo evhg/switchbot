@@ -8,3 +8,4 @@ export * from './switchbot/index.ts';
 export * from './health/index.ts';
 export * from './calendar/index.ts';
 export * from './weather/index.ts';
+export * from './food/index.ts';
