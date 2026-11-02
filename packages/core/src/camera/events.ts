@@ -1,4 +1,4 @@
-// Camera sightings from the Mac relay (camera-event Edge Function → public.camera_events, migration 0021): request
+// Camera sightings from the Mac relay (camera-event Edge Function → public.camera_events, migration 0022): request
 // validation and normalisation, the label → person mapping, and the "unknown person while nobody is home" alert rule.
 //
 // Erik's Mac runs face recognition locally, for enrolled and consenting people only, and posts LABELS: a household

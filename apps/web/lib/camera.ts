@@ -1,6 +1,6 @@
 'use client';
 /**
- * Camera activity (System › Camera): today's sightings from public.camera_events (migration 0021), posted by the Mac
+ * Camera activity (System › Camera): today's sightings from public.camera_events (migration 0022), posted by the Mac
  * relay through the camera-event Edge Function. Labels only: a household person ('a', 'b'), a consenting guest's
  * label, 'unknown' (a face that matched nobody) or 'person' (a body, no face).
  *
@@ -99,8 +99,8 @@ export function useCameraActivity(): { real: boolean; events: CameraSighting[] |
       .then(({ data, error: e }) => {
         if (!alive) return;
         if (e) {
-          // Before migration 0021 the table doesn't exist: an empty timeline with the reason.
-          setError(/does not exist|schema cache/i.test(e.message) ? 'Camera activity isn’t on the server yet (migration 0021).' : e.message);
+          // Before migration 0022 the table doesn't exist: an empty timeline with the reason.
+          setError(/does not exist|schema cache/i.test(e.message) ? 'Camera activity isn’t on the server yet (migration 0022).' : e.message);
           setEvents([]);
           return;
         }

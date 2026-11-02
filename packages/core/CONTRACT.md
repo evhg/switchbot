@@ -310,7 +310,7 @@ export async function deleteNutritionLogs(token, names, opts?)            // :ba
 ## camera/ (2026-11-02)
 
 ```ts
-// camera/events.ts: Mac relay sightings → public.camera_events (camera-event Edge Function, migration 0021). Labels only.
+// camera/events.ts: Mac relay sightings → public.camera_events (camera-event Edge Function, migration 0022). Labels only.
 export const CAMERA_MAX_EVENTS = 100, CAMERA_MAX_SKEW_MS = 1 day, CAMERA_LABEL_MAX = 40, CAMERA_DEFAULT = 'living'
 export const UNKNOWN_ALERT_WINDOW_MIN = 30, UNKNOWN_ALERT_MAX_AGE_MIN = 30, UNKNOWN_LABEL = 'unknown', PERSON_LABEL = 'person'
 export function parseCameraTs(v): Ms | null                        // ISO 8601 with Z/offset, or epoch ms

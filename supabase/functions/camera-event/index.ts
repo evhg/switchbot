@@ -7,7 +7,7 @@
 // Labels only: 'a' / 'b' (household people), a consenting guest's label, 'unknown' (a face that matched nobody) or
 // 'person' (a body, no face). No image, embedding or other biometric data is accepted. Core camera/events.ts validates
 // (≤ 100 events, ts within ±1 day, label ≤ 40 chars, confidence 0..1); invalid events are skipped and reported.
-// Rows go to public.camera_events (migration 0021); (camera, ts, label) is unique, so a retry stores nothing twice.
+// Rows go to public.camera_events (migration 0022); (camera, ts, label) is unique, so a retry stores nothing twice.
 // A new 'unknown' sighting (≤ 30 min old) while nobody is home (every person's latest phone signal 'away') pushes
 // "Unknown person seen at home (living room, HH:MM)" to every subscription, at most once per 30 min
 // (public.claim_camera_alert). JWT verification is off: the presence token is the credential.

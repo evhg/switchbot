@@ -32,7 +32,7 @@ supabase/
     calendar-sync/            both Google Calendars → household trips → away_periods (source 'calendar', 0018)
     weather-poll/             Phuket outdoor temp/RH every 15 min (Google Weather or Open-Meteo) → outdoor_readings
     food-photo/               meal photo (Storage 'meals') → Gemini → meals → Google Health nutrition log (0020)
-    camera-event/             Mac relay's camera sightings (labels only) → camera_events; unknown-person push (0021)
+    camera-event/             Mac relay's camera sightings (labels only) → camera_events; unknown-person push (0022)
     tests/                    `deno test` (Web Push RFC vector, coach grounding, health helpers)
 scripts/seed-supabase.ts      simulated nights → Supabase (Node)
 ```
@@ -60,8 +60,8 @@ All timestamps are `timestamptz` (UTC). A night is keyed by the **ICT wake-up da
 | `events` | Shower, door, in-bed, `ac_missed` …; `source` = detector / manual / sim_truth / controller | nightly-report, ac-curve, seed |
 | `raw_health` | **Append-only** Google Health archive (`point_key`, `payload`, `update_time`, `data_source`); a trigger blocks UPDATE/DELETE | google-health-sync |
 | `meals` | Food photos analysed by Gemini: totals, `items` jsonb, `confidence`, `model`, `raw`, `google_status` / `google_point`; `hidden` instead of removal (0020) | food-photo; members edit their own person's (owner: any) |
-| `camera_events` | Camera sightings from the Mac relay: `label` (`a`/`b`, a consenting guest's label, `unknown`, `person`), `person_id`, `confidence`, `activity` (zone), `duration_s`; labels only, never biometric data; `hidden` instead of removal (0021) | camera-event; members may set `hidden` |
-| `camera_alerts` | Last push per alert kind (`unknown`), claimed atomically by `claim_camera_alert()` (0021); service role only | camera-event |
+| `camera_events` | Camera sightings from the Mac relay: `label` (`a`/`b`, a consenting guest's label, `unknown`, `person`), `person_id`, `confidence`, `activity` (zone), `duration_s`; labels only, never biometric data; `hidden` instead of removal (0022) | camera-event; members may set `hidden` |
+| `camera_alerts` | Last push per alert kind (`unknown`), claimed atomically by `claim_camera_alert()` (0022); service role only | camera-event |
 | `health_hr` (1-min means), `health_hrv`, `health_spo2`, `sleep_sessions`, `health_daily`, `health_vitals_daily` | Derived layers, rebuildable from `raw_health` | google-health-sync, seed |
 | `health_sync_jobs` | Queue fed by the Google webhook | webhook, OAuth |
 | `reports` | `report` (NightReport, possibly Claude-worded), `rule_report`, `generated_by`, `model` | nightly-report, seed |
@@ -394,7 +394,7 @@ Decided 2026-11-01: a photo of each meal gives calories and macros, logged to th
   `meals/<person>/<uuid>.jpg` and calls food-photo; System › Camera (`/settings/camera`) embeds
   `<camera_stream_url>/stream.html?src=living&mode=mse,hls` (a `src`/`mode` already in the URL is kept).
 
-## Camera activity (camera-event, migration 0021)
+## Camera activity (camera-event, migration 0022)
 
 Decided 2026-11-02: Erik's always-on Mac runs face recognition locally on the living-room camera (go2rtc stream
 `living`), for **enrolled, consenting people only** (Cath = `a`, Erik = `b`; a guest only after they agree, under a
@@ -732,7 +732,7 @@ until it is redeployed.
 now gets its token through `_shared/google.ts` (same behaviour); redeploy it with the others. `GOOGLE_WEATHER_API_KEY`
 is not set (Open-Meteo until then).
 
-**Camera activity (2026-11-02, not deployed).** Migration `0021_camera_events` and the new function `camera-event`
+**Camera activity (2026-11-02, not deployed).** Migration `0022_camera_events` and the new function `camera-event`
 (`verify_jwt = false`) are written but not applied / deployed.
 
 ### 2026-10-30 evening fixes (nightly-report v6, migration 0017)

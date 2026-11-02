@@ -6,7 +6,7 @@
  * address is household_settings.camera_stream_url (migration 0020, set with set_camera_stream_url). The page embeds
  * go2rtc's own player (stream.html?src=living&mode=mse,hls) in an iframe. No address yet: an empty state explaining the
  * relay. Either way, "Open in SwitchBot app" is the fallback (an App Store link; the app has no documented deep link).
- * Below the live view, "Activity today": the Mac relay's sightings (camera_events, migration 0021; lib/camera.ts).
+ * Below the live view, "Activity today": the Mac relay's sightings (camera_events, migration 0022; lib/camera.ts).
  */
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { useAuth } from '@/lib/auth.tsx';
