@@ -1,0 +1,15 @@
+/* Live (LiveScreen.tsx): player on top, then commands and camera controls in two columns on wide screens. */
+.page { padding-bottom: var(--sp-8); }
+.note { margin-top: var(--sp-4); color: var(--muted); max-width: var(--measure); }
+.cols { display: grid; gap: 0 var(--sp-10); grid-template-columns: minmax(0, 1fr); margin-top: var(--sp-6); }
+@media (min-width: 1200px) { .cols { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); } }
+
+/* One command: title, optional explanation, then the command with a Copy button. */
+.cmdRow { list-style: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); padding: var(--sp-4) var(--sp-5); min-width: 0; }
+.cols > div { min-width: 0; }
+.cmdRow + .cmdRow { border-top: 1px solid var(--hairline); }
+.cmdTitle { font-weight: 500; }
+.cmdSub { color: var(--muted); }
+.cmdSub a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.cmd { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3); border-radius: var(--r-s); background: var(--surface-2); }
+.cmdText { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }

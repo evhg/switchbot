@@ -20,6 +20,7 @@ import { useEffect, type ReactNode } from 'react';
 import { AuthProvider } from '@/lib/auth.tsx';
 import { DataProvider, useData } from '@/lib/data/context.tsx';
 import { ThemeProvider } from '@/lib/theme.tsx';
+import { AccessGate } from './AccessGate.tsx';
 import { NotMember, Onboarding } from './account/Onboarding.tsx';
 import { Icon } from './icons.tsx';
 import { subscribeScroll, useNavTransitionDone } from './motion.tsx';
@@ -123,12 +124,13 @@ function SourceTag() {
 
 /**
  * Real data chosen but nothing to chart: the tabs show the onboarding state (no nights yet) or the "not in the
- * household yet" state instead of empty charts. System and sign-in pages always render.
+ * household yet" state instead of empty charts. System, Live and sign-in pages always render.
  */
 function TabGate({ children }: { children: ReactNode }) {
   const path = usePathname();
   const { empty, mode, realGate } = useData();
-  if (activeTab(path) < 0 || path.startsWith('/settings')) return <>{children}</>;
+  // System and Live (the camera) don't need nights.
+  if (activeTab(path) < 0 || path.startsWith('/settings') || path === '/live') return <>{children}</>;
   if (empty) return <Onboarding />;
   if (mode === 'supabase' && realGate === 'not-member') return <NotMember />;
   return <>{children}</>;
@@ -183,7 +185,9 @@ export function Shell({ children }: { children: ReactNode }) {
     <ThemeProvider>
       <AuthProvider>
         <DataProvider>
-          <Frame>{children}</Frame>
+          <AccessGate>
+            <Frame>{children}</Frame>
+          </AccessGate>
         </DataProvider>
       </AuthProvider>
     </ThemeProvider>

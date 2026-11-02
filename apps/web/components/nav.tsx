@@ -3,7 +3,7 @@
  * Navigation model shared by the desktop Sidebar, the phone TopBar / TabBar and the System screens
  * (docs/DESIGN.md §5.3, §9.5). One source for the destinations, System's second level and the night picker.
  *
- *   TABS                       the five destinations (href, label, icon)
+ *   TABS                       the six destinations (href, label, icon)
  *   SYSTEM_PAGES               System's sub-pages in sidebar order, grouped (route = `/settings/${slug}`)
  *   systemHref(slug)           '/settings/plan' …
  *   activeTab(path)            index into TABS for a pathname
@@ -23,6 +23,7 @@ export const TABS: readonly { href: string; label: string; icon: IconName }[] = 
   { href: '/room', label: 'Room', icon: 'house' },
   { href: '/body', label: 'Body', icon: 'pulse' },
   { href: '/lab', label: 'Lab', icon: 'flask' },
+  { href: '/live', label: 'Live', icon: 'camera' },
   { href: '/settings', label: 'System', icon: 'gear' },
 ];
 

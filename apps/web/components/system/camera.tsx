@@ -21,15 +21,16 @@ import s from './system.module.css';
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ');
 
 export const SWITCHBOT_APP_URL = 'https://apps.apple.com/app/switchbot/id1087374760';
-/** go2rtc stream name of the bedroom camera on the Mac relay. */
-const STREAM = 'living';
+/** go2rtc stream names on the Mac relay: the camera's sub-stream (640×400) and its 3K main stream as H.264. */
+export const STREAM = 'living';
+export const STREAM_HD = 'living_hd';
 
 /**
  * The player URL for a stored address: an https go2rtc base ("https://host/" or ".../stream.html") becomes
- * stream.html?src=living&mode=mse,hls (HLS for iPhones without MSE); a src or mode already in the address is kept.
- * Null for anything else.
+ * stream.html?src=living&mode=mse,hls (HLS for iPhones without MSE); a src or mode already in the address is kept,
+ * unless `stream` asks for a specific one. Null for anything else.
  */
-export function cameraEmbedUrl(raw: string | null | undefined): string | null {
+export function cameraEmbedUrl(raw: string | null | undefined, stream?: string): string | null {
   if (!raw) return null;
   let u: URL;
   try {
@@ -39,7 +40,8 @@ export function cameraEmbedUrl(raw: string | null | undefined): string | null {
   }
   if (u.protocol !== 'https:') return null;
   if (!/\/stream\.html$/.test(u.pathname)) u.pathname = `${u.pathname.replace(/\/+$/, '')}/stream.html`;
-  if (!u.searchParams.has('src')) u.searchParams.set('src', STREAM);
+  if (stream) u.searchParams.set('src', stream);
+  else if (!u.searchParams.has('src')) u.searchParams.set('src', STREAM);
   if (!u.searchParams.has('mode')) u.searchParams.set('mode', 'mse,hls');
   return u.toString();
 }

@@ -124,7 +124,7 @@
   padding: 4px max(8px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(8px, env(safe-area-inset-left));
   view-transition-name: tabbar;
 }
-.tabbar ul { list-style: none; margin: 0 auto; padding: 0; max-width: 560px; display: grid; grid-template-columns: repeat(5, 1fr); height: var(--tabbar-h); }
+.tabbar ul { list-style: none; margin: 0 auto; padding: 0; max-width: 560px; display: grid; grid-template-columns: repeat(6, 1fr); height: var(--tabbar-h); }
 .tabbar a {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; height: 100%;
   color: var(--muted); font-size: 13px; font-weight: 500; line-height: 1.2; border-radius: var(--r-s);

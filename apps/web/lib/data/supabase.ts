@@ -178,6 +178,29 @@ export async function supabaseSignInWithPassword(email: string, password: string
   return friendlyAuthError(error.message);
 }
 
+/**
+ * Google sign-in (Supabase Auth → Google provider). Leaves the page for Google and returns to this origin's /signin
+ * with #access_token (implicit flow). Only the two household addresses can get an account: the database refuses any
+ * other new user (migration 0021, private.allowed_emails), so a stranger's Google account ends at an error.
+ */
+export async function supabaseSignInWithGoogle(redirectPath = '/signin'): Promise<string | null> {
+  if (!supabaseConfigured()) return 'Supabase is not configured.';
+  const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}${redirectPath}` : undefined;
+  // Ask first whether the provider is on: otherwise Supabase's authorize URL answers with a bare JSON error page.
+  const off = 'Google sign-in isn’t switched on for this project yet. Use your password or an email code.';
+  try {
+    const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1/settings`, { headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '' } });
+    const settings = (await res.json()) as { external?: { google?: boolean } };
+    if (settings.external?.google === false) return off;
+  } catch {
+    /* can't tell: try anyway */
+  }
+  const { data, error } = await db().auth.signInWithOAuth({ provider: 'google', options: { redirectTo, queryParams: { prompt: 'select_account' }, skipBrowserRedirect: true } });
+  if (error) return /provider is not enabled|unsupported provider/i.test(error.message) ? off : friendlyAuthError(error.message);
+  window.location.assign(data.url);
+  return null;
+}
+
 export const MIN_PASSWORD = 8;
 
 /** Sets (or changes) the signed-in user's password. */
