@@ -1,12 +1,13 @@
 'use client';
 /**
  * Desktop sidebar, the "inverted L" (docs/DESIGN.md §5.3). Shown at ≥1024 px only (CSS). Top to bottom: wordmark,
- * night picker ([ and ] keys), five destinations, System's second level (only while in System), and a footer with
- * the live bedroom readings and the data source.
+ * night picker ([ and ] keys), the destinations, System's second level (only while in System), the signed-in account
+ * (avatar, name, email, Sign out) and a footer with the live bedroom readings and the data source.
  */
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { MouseEvent, ReactNode } from 'react';
+import { useAuth } from '@/lib/auth.tsx';
 import { useData, useLive } from '@/lib/data/context.tsx';
 import { fmt, hm } from '@/lib/format.ts';
 import { Icon } from './icons.tsx';
@@ -53,6 +54,47 @@ export function NightPicker({ className = '' }: { className?: string }) {
       </button>
       <button type="button" className="icon-btn" aria-label="Next night" aria-keyshortcuts="]" disabled={!n.canNext} onClick={n.next}>
         <Icon name="chevron-right" size={18} />
+      </button>
+    </div>
+  );
+}
+
+const ACCOUNT_NAMES: Record<string, string> = { a: 'Cath', b: 'Erik' };
+
+/** Who is signed in: the household person's name when known, else the email's local part. */
+export function useAccountName(): { name: string; email: string } | null {
+  const auth = useAuth();
+  const { dataset, latest } = useData();
+  if (auth.status !== 'signed-in' || !auth.email) return null;
+  const pid = auth.probe?.personId ?? null;
+  const fromData = pid ? (dataset ?? latest)?.people.find((p) => p.id === pid)?.name?.trim() : undefined;
+  const name = (fromData && fromData.toLowerCase() !== 'you' ? fromData : pid ? ACCOUNT_NAMES[pid] : undefined) ?? auth.email.split('@')[0]!;
+  return { name, email: auth.email };
+}
+
+function AccountBlock() {
+  const auth = useAuth();
+  const who = useAccountName();
+  if (auth.status === 'off' || auth.status === 'loading') return null;
+  if (!who)
+    return (
+      <div className="side-account">
+        <Link href="/signin" prefetch={false} className="side-account-in">
+          Sign in for real data
+        </Link>
+      </div>
+    );
+  return (
+    <div className="side-account">
+      <span className="avatar side-avatar" aria-hidden>
+        {who.name.trim()[0]?.toUpperCase() ?? '?'}
+      </span>
+      <span className="side-account-t">
+        <b>{who.name}</b>
+        <span title={who.email}>{who.email}</span>
+      </span>
+      <button type="button" className="btn text sm side-signout" onClick={() => void auth.signOut()}>
+        Sign out
       </button>
     </div>
   );
@@ -140,6 +182,7 @@ export function Sidebar() {
         </ul>
       </nav>
       <div className="side-grow" />
+      <AccountBlock />
       <LiveFooter />
     </aside>
   );

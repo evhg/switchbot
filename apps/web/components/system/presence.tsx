@@ -248,7 +248,7 @@ export function AwayDates({ t, onMsg }: { t: Tonight; onMsg?: (m: string | null)
 
 // ───────────────────────────────────────── System › Presence ─────────────────────────────────────────
 
-function CopyField({ label, value }: { label: string; value: string }) {
+export function CopyField({ label, value }: { label: string; value: string }) {
   const [done, setDone] = useState(false);
   return (
     <div className={s.copy}>
@@ -274,7 +274,7 @@ function CopyField({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Steps({ items }: { items: readonly ReactNode[] }) {
+export function Steps({ items }: { items: readonly ReactNode[] }) {
   return (
     <ol className={s.howto}>
       {items.map((x, i) => (

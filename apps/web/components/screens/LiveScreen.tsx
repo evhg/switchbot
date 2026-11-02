@@ -4,7 +4,8 @@
  *
  *   player     go2rtc's own player in an iframe: 3K (stream living_hd, the main stream transcoded to H.264 on the Mac)
  *              or Low data (living, the 640×400 sub-stream). The address comes from household_settings.camera_stream_url
- *              (members only, never in this public repo); the choice is remembered per browser.
+ *              (members only, never in this public repo); the choice is remembered per browser. With the stream lock
+ *              on (household_settings.camera_ticket_required), the player URL carries a signed pass (useCameraEmbed).
  *   commands   copyable Terminal commands for Erik's Mac: the go2rtc LaunchAgent, the Tailscale Funnel that publishes
  *              it, the camera login, and a new secret link. Nothing here can reach the Mac by itself.
  *   camera     what the SwitchBot app controls (pan/tilt, presets, patrol, privacy, night vision): its cloud API has no
@@ -13,7 +14,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useAuth } from '@/lib/auth.tsx';
 import { useChrome, systemHref } from '../nav.tsx';
-import { SWITCHBOT_APP_URL, STREAM, STREAM_HD, cameraEmbedUrl, useCameraUrl } from '../system/camera.tsx';
+import { SWITCHBOT_APP_URL, STREAM, STREAM_HD, useCameraEmbed, useCameraUrl } from '../system/camera.tsx';
 import { Group, PageHeader, Row, Segmented, Skeleton, Status } from '../ui.tsx';
 import sys from '../system/system.module.css';
 import s from './live.module.css';
@@ -113,7 +114,8 @@ export function LiveScreen() {
       /* ignore */
     }
   };
-  const embed = cameraEmbedUrl(url, quality === 'hd' ? STREAM_HD : STREAM);
+  // With the stream lock on (System › Camera), the address carries a signed pass, fetched again for a new quality.
+  const { embed, error: ticketError } = useCameraEmbed(url, quality === 'hd' ? STREAM_HD : STREAM, live);
 
   return (
     <div className={cx('content', s.page)}>
@@ -133,7 +135,7 @@ export function LiveScreen() {
         }
       />
 
-      {url === undefined ? (
+      {url === undefined || embed === undefined ? (
         <Skeleton h={320} r="lg" />
       ) : embed ? (
         <div className={sys.camera}>
@@ -153,11 +155,17 @@ export function LiveScreen() {
             <b>No live view yet</b>
           </Status>
           <p className="sec">
-            The stream address isn’t saved yet. Paste it in <a href={systemHref('camera')}>System › Camera</a>.
+            {url ? (
+              'The stream is locked to signed-in members and this app couldn’t get a pass for it.'
+            ) : (
+              <>
+                The stream address isn’t saved yet. Paste it in <a href={systemHref('camera')}>System › Camera</a>.
+              </>
+            )}
           </p>
         </div>
       )}
-      {error && <p className={cx('sec', sys.alert)}>{error}</p>}
+      {(error || ticketError) && <p className={cx('sec', sys.alert)}>{error ?? ticketError}</p>}
 
       <div className={cx(sys.inline, sys.cameraLinks)}>
         {embed && (

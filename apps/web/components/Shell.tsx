@@ -124,13 +124,13 @@ function SourceTag() {
 
 /**
  * Real data chosen but nothing to chart: the tabs show the onboarding state (no nights yet) or the "not in the
- * household yet" state instead of empty charts. System, Live and sign-in pages always render.
+ * household yet" state instead of empty charts. System, Live, Map and sign-in pages always render.
  */
 function TabGate({ children }: { children: ReactNode }) {
   const path = usePathname();
   const { empty, mode, realGate } = useData();
-  // System and Live (the camera) don't need nights.
-  if (activeTab(path) < 0 || path.startsWith('/settings') || path === '/live') return <>{children}</>;
+  // System, Live (the camera) and Map (OwnTracks locations) don't need nights.
+  if (activeTab(path) < 0 || path.startsWith('/settings') || path === '/live' || path.startsWith('/map')) return <>{children}</>;
   if (empty) return <Onboarding />;
   if (mode === 'supabase' && realGate === 'not-member') return <NotMember />;
   return <>{children}</>;

@@ -1,0 +1,51 @@
+/* Map (MapScreen.tsx): the map box on top, then a card per person (Now) or the playback controls (Timelapse). */
+.page { padding-bottom: var(--sp-8); }
+.alert { color: var(--signal); margin-top: var(--sp-3); }
+.foot { margin-top: var(--sp-4); color: var(--muted); }
+.setup { display: grid; gap: var(--sp-2); padding: var(--sp-5) var(--sp-6); margin-top: var(--sp-6); max-width: var(--measure); }
+.setup :global(.status) { font-size: var(--t-body); color: var(--text); }
+.setup b { font-weight: 600; }
+.setup a, .person a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+
+/* ── Now ── */
+.together { margin: var(--sp-5) 0 0; font-size: var(--t-body); }
+.together :global(.status) { color: var(--text); }
+.cards { display: grid; gap: var(--sp-4); grid-template-columns: minmax(0, 1fr); margin-top: var(--sp-5); }
+@media (min-width: 720px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.person { --c: var(--person-a); padding: var(--sp-5) var(--sp-6); display: grid; gap: var(--sp-3); min-width: 0; }
+.person[data-person='b'] { --c: var(--person-b); }
+.personH { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--t-body); }
+.personH b { font-weight: 600; }
+.swatch { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--c); color: var(--bg); font-size: 12px; font-weight: 650; }
+:root[data-theme='night'] .swatch { background: transparent; color: var(--c); box-shadow: inset 0 0 0 1.5px var(--c); }
+.kv { margin: 0; display: grid; gap: var(--sp-2); }
+.kv > div { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-4); font-size: var(--t-sec); min-width: 0; }
+.kv dt { color: var(--muted); flex: none; }
+.kv dd { margin: 0; color: var(--text); text-align: right; min-width: 0; overflow-wrap: anywhere; }
+
+/* ── Timelapse ── */
+.rangeBar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-4); }
+.rangeBar :global(.seg) { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.dateField :global(.input) { min-height: 40px; }
+.controlsSkel { margin-top: var(--sp-5); }
+.controls { margin-top: var(--sp-5); padding: var(--sp-5) var(--sp-6); display: grid; gap: var(--sp-3); }
+.clockRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3) var(--sp-5); }
+.playBtn { min-width: 96px; }
+.clock { display: grid; flex: 1; min-width: 120px; }
+.clockT { font-size: 28px; font-weight: 500; line-height: 1.1; letter-spacing: -0.01em; }
+.clockD { color: var(--muted); }
+
+/* The scrubber with the "together" band drawn on its track. */
+.scrubWrap { position: relative; height: 32px; }
+.band { position: absolute; left: 10px; right: 10px; top: 50%; height: 10px; margin-top: -5px; border-radius: 5px; background: var(--hairline); overflow: hidden; pointer-events: none; }
+.band i { position: absolute; top: 0; bottom: 0; background: var(--signal); opacity: .55; }
+.scrub { position: relative; width: 100%; height: 32px; margin: 0; background: transparent; -webkit-appearance: none; appearance: none; cursor: pointer; }
+.scrub:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; border-radius: 6px; }
+.scrub::-webkit-slider-runnable-track { height: 10px; background: transparent; }
+.scrub::-moz-range-track { height: 10px; background: transparent; }
+.scrub::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; margin-top: -5px; border-radius: 50%; background: var(--text); border: 3px solid var(--surface); box-shadow: 0 0 0 1px var(--hairline-2); }
+.scrub::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--text); border: 3px solid var(--surface); box-shadow: 0 0 0 1px var(--hairline-2); }
+.scrubFoot { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); color: var(--muted); }
+.legend { display: inline-flex; align-items: center; gap: 6px; }
+.legendBand { display: inline-block; width: 16px; height: 8px; border-radius: 4px; background: var(--signal); opacity: .55; }
+.followRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-5); color: var(--muted); }

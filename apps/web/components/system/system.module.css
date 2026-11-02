@@ -102,6 +102,8 @@
 
 /* ── Phone root ── */
 .root { max-width: 640px; margin-inline: auto; }
+.account { margin-bottom: var(--sp-6); }
+.account :global(.list-row-t) > b { overflow-wrap: anywhere; }
 .mini { margin: var(--sp-2) 0 var(--sp-4); }
 .mini svg { display: block; }
 .strip { display: flex; justify-content: space-between; gap: var(--sp-3); margin: 0; flex-wrap: wrap; }

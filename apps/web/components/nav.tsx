@@ -3,7 +3,7 @@
  * Navigation model shared by the desktop Sidebar, the phone TopBar / TabBar and the System screens
  * (docs/DESIGN.md §5.3, §9.5). One source for the destinations, System's second level and the night picker.
  *
- *   TABS                       the six destinations (href, label, icon)
+ *   TABS                       the seven destinations (href, label, icon)
  *   SYSTEM_PAGES               System's sub-pages in sidebar order, grouped (route = `/settings/${slug}`)
  *   systemHref(slug)           '/settings/plan' …
  *   activeTab(path)            index into TABS for a pathname
@@ -24,10 +24,11 @@ export const TABS: readonly { href: string; label: string; icon: IconName }[] = 
   { href: '/body', label: 'Body', icon: 'pulse' },
   { href: '/lab', label: 'Lab', icon: 'flask' },
   { href: '/live', label: 'Live', icon: 'camera' },
+  { href: '/map', label: 'Map', icon: 'map' },
   { href: '/settings', label: 'System', icon: 'gear' },
 ];
 
-export type SystemSlug = 'plan' | 'tags' | 'presence' | 'general' | 'morning' | 'data' | 'health' | 'camera' | 'co2' | 'setup' | 'diagnostics';
+export type SystemSlug = 'plan' | 'tags' | 'presence' | 'location' | 'general' | 'morning' | 'data' | 'health' | 'camera' | 'co2' | 'setup' | 'diagnostics';
 export const SYSTEM_GROUPS: readonly { label: string; pages: readonly { slug: SystemSlug; label: string }[] }[] = [
   {
     label: 'Tonight',
@@ -35,6 +36,7 @@ export const SYSTEM_GROUPS: readonly { label: string; pages: readonly { slug: Sy
       { slug: 'plan', label: 'Tonight’s plan' },
       { slug: 'tags', label: 'Tonight’s tags' },
       { slug: 'presence', label: 'Presence' },
+      { slug: 'location', label: 'Location' },
     ],
   },
   {

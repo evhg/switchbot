@@ -33,6 +33,8 @@ supabase/
     weather-poll/             Phuket outdoor temp/RH every 15 min (Google Weather or Open-Meteo) → outdoor_readings
     food-photo/               meal photo (Storage 'meals') → Gemini → meals → Google Health nutrition log (0020)
     camera-event/             Mac relay's camera sightings (labels only) → camera_events; unknown-person push (0022)
+    owntracks/                OwnTracks HTTP-mode fixes → locations; home/away from them; friends array (0023)
+    camera-ticket/            Ed25519-signed camera viewer tickets for the Mac's stream gate; public key on GET (0023)
     tests/                    `deno test` (Web Push RFC vector, coach grounding, health helpers)
 scripts/seed-supabase.ts      simulated nights → Supabase (Node)
 ```
@@ -435,6 +437,101 @@ malformed or unknown token) · `405` (not POST) · `500 {"error":"internal"}`. A
 - **App**: System › Camera shows "Activity today" below the live view (`apps/web/lib/camera.ts`): today's rows (ICT),
   newest first, as time · Cath / Erik / guest label / Unknown person / Someone · zone · duration. Simulated mode shows
   sample sightings.
+
+## Location (owntracks, migration 0023)
+
+Decided 2026-11-02: both iPhones run the **OwnTracks** app (App Store) in HTTP mode. Each fix goes to
+`public.locations`; the app's Map tab draws "now" and a timelapse from it, and fixes near home drive home/away for the
+pre-cool gate, so the Shortcut automations become optional.
+
+**Phone setup** (also in the app, System › Location): Settings → Mode **HTTP**; URL
+`https://vaelokyqjdsxveqvdtbo.supabase.co/functions/v1/owntracks`; Authentication **on**, UserID `cath` / `erik`
+(informational only), Password = that person's presence token (System › Presence; the same `slp_…` token as the
+Shortcut and the Mac, so rotating it means updating every place it is pasted); TrackerID `C` / `E`; Monitoring
+**Significant** (battery-friendly) or **Move** (detailed trails). iOS Settings → OwnTracks → Location **Always** + Precise.
+
+**Request** (`verify_jwt = false`; the presence token is the credential):
+```
+POST https://<project>.supabase.co/functions/v1/owntracks
+Authorization: Basic base64(<user>:slp_<64 hex>)   (or X-Presence-Token: slp_… / Authorization: Bearer slp_…, for curl)
+Content-Type: application/json
+
+{"_type":"location","lat":7.88,"lon":98.39,"tst":1793606700,"acc":12,"alt":8,"vel":0,"cog":90,"batt":87,
+ "conn":"w","SSID":"…","t":"u","inregions":["Home"]}              one message, or an array of messages
+{"_type":"transition","event":"enter","desc":"Home","tst":…,"lat":…,"lon":…,"acc":30}
+{"ping":true}                                                       token check only → {"ok":true,"person":"a"}
+```
+**Responses**: `200 [...]` (OwnTracks expects an array; anything else makes the phone queue and retry): for every
+**other** person with a fix in the last 7 days a `{"_type":"card","tid":"E","topic":"owntracks/erik/E","name":"Erik"}` and their latest
+`{"_type":"location","tid","topic","lat","lon","tst","acc","batt","conn"}`, so each phone shows the other as a friend
+(Android keys friends by `tid`, iOS by `topic`) · `200 []`
+when the request held only ignored messages (`waypoint(s)`, `lwt`, `status`, unknown types, unparseable JSON) · `401`
+with `WWW-Authenticate: Basic realm="Sleep Lab"` (missing, malformed or unknown token) · `405` (not POST; GET answers
+`{"ok":true,"hint"}`) · `413` (body > 256 KB: by Content-Length, and the body is read with a byte cap only after the token is checked, so a
+chunked upload is never buffered whole) · `500` when storing the fixes failed (the phone keeps them and retries).
+
+- **Validation** (core `location/owntracks.ts`): lat/lon must be finite and in range; `tst` (seconds) at most 1 day
+  ahead and at most 400 days old; invalid messages are skipped and logged. Optional numbers out of range (OwnTracks
+  sends −1 for unknown) are dropped. `(person_id, ts)` is unique: a retried queue stores nothing twice.
+- **Transitions** (region monitoring) are stored as rows too: `event` = enter/leave, `note` = region name.
+- **Home/away**: from the batch's newest message that says something and is ≤ 60 min old and newer than the person's
+  latest presence event: a transition of a region named Home / thuis / huis / house (enter → home, leave → away; works
+  without a home point), or a fix judged against the home circle (`household_settings.home_lat/home_lon/home_radius_m`,
+  set in System › Location) by `homeState()`: home inside the radius with acc ≤ max(2 × radius, 250 m); away beyond
+  radius + max(150 m, acc); in between, or acc > 1000 m, no change. `record_presence_for(person, state, 'owntracks')`
+  stores it only when it differs from the latest state (per-person advisory lock, one statement), as `source 'shortcut'`
+  (a phone signal for ac-curve's gate) with `via 'owntracks'`. `presence_events.source` keeps its 0009 check; the new
+  `via` column (`shortcut | owntracks | wifi | test | manual`, null for older rows) says which signal it was.
+  A failed presence update is logged; the response is still 200 (the fixes are stored).
+- **Settings** (owners/members, RPCs returning the settings row): `set_home_location(lat, lon, radius_m = 150)` (null
+  lat/lon clears home; radius 30..2000), `set_maps_browser_key(key)` (trimmed, `^[A-Za-z0-9_-]{20,100}$`, null/empty
+  clears; a Google Maps JavaScript API key restricted by HTTP referrer to the site, readable by members because the
+  browser needs it), `set_camera_ticket_required(bool)` (see Camera ticket).
+- **Reading**: household members read `locations` under RLS (`(person_id, ts desc)` and `(ts desc)` indexes); rows are
+  never removed.
+- **Core**: `location/owntracks.ts` (`parseOwnTracks`, `locationRow`), `location/geo.ts` (`haversineM`, `homeState`,
+  `isHomeRegion`, `positionAt`, `trackUpTo`, `togetherSpans`, `together`); `_shared/owntracks.ts` (`owntracksToken`,
+  `presenceDecision`, `friendsResponse`). Tests: `packages/core/test/location.test.ts`, `tests/owntracks.test.ts`.
+
+## Camera ticket (camera-ticket)
+
+The go2rtc stream URL (`household_settings.camera_stream_url`) is a secret link: anyone who has it can watch. With
+`household_settings.camera_ticket_required` on (System › Camera, "Require sign-in for the stream"), the app first asks
+`camera-ticket` for a signed ticket and embeds `<camera_stream_url>/t/<encodeURIComponent(ticket)>/<path>` (e.g.
+`…/t/<ticket>/stream.html?src=living&mode=mse,hls`); the Mac's ticket gate in front of go2rtc serves only requests whose
+ticket verifies, strips the `/t/<ticket>` prefix and proxies the rest. Turn it on only after the gate runs.
+
+```
+GET  /functions/v1/camera-ticket       public, no auth (cache 5 min)
+  → {"alg":"Ed25519","publicKey":"<base64url, raw 32 bytes, 43 chars>","format":"<b64url(payload)>.<b64url(sig)>",
+     "payload":{"sub":"<user uuid>","exp":"<epoch s>","iat":"<epoch s>","aud":"camera"},"ttlS":43200}
+POST /functions/v1/camera-ticket
+  Authorization: Bearer <the signed-in user's Supabase access token>
+  → 200 {"ticket":"…","exp":"2026-11-03T02:00:00.000Z","ttlS":43200}
+    401 (no / invalid user token) · 403 (no public.household_members row; any role may watch)
+```
+The key pair is created on first use (WebCrypto Ed25519) and kept in `private.camera_ticket_key` (private half as a
+JWK; `camera_ticket_key()` / `camera_ticket_key_init()`, service role; the first stored pair wins, so concurrent first
+calls agree). The app refreshes a ticket when the quality changes or within 30 min of `exp`.
+
+**Ticket format** (reference: `supabase/functions/_shared/ticket.ts`):
+```
+ticket = part1 + "." + part2
+part1  = base64url_nopad( UTF-8 JSON {"sub":"<uuid>","iat":<int s>,"exp":<int s>,"aud":"camera"} )
+part2  = base64url_nopad( Ed25519_sign(private_key, ASCII bytes of part1) )      64-byte signature, pure Ed25519
+```
+**Verify recipe for the Mac proxy** (fetch `publicKey` once from the GET above and pin it; it only changes if the
+`private.camera_ticket_key` row is replaced):
+1. URL-decode the path segment after `/t/`; refuse if longer than 1024 chars or not exactly two `.`-separated parts,
+   each `[A-Za-z0-9_-]+`.
+2. `sig = b64url_decode(part2)`; must be 64 bytes. Verify `sig` over the **ASCII bytes of part1 as received** with the
+   32-byte public key (`b64url_decode(publicKey)`; e.g. Python `cryptography` `Ed25519PublicKey.from_public_bytes(pk)
+   .verify(sig, part1.encode())`, Node `crypto.verify(null, Buffer.from(part1), crypto.createPublicKey({key: {kty: 'OKP', crv: 'Ed25519', x:
+   publicKey}, format: 'jwk'}), sig)`, Go
+   `ed25519.Verify(pk, []byte(part1), sig)`). Fail → 403.
+3. `payload = JSON.parse(b64url_decode(part1))`; require `aud == "camera"`, `sub` a string, `exp > now_s` and
+   `iat <= now_s + 300`. Fail → 403 (expired → the app fetches a new ticket on reload).
+4. Proxy `/<rest of the path>?<query>` to go2rtc (including its WebSocket upgrades); never forward the ticket.
 
 ## Sleep onset (migration 0011)
 

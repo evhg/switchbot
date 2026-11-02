@@ -7,15 +7,20 @@
  * go2rtc's own player (stream.html?src=living&mode=mse,hls) in an iframe. No address yet: an empty state explaining the
  * relay. Either way, "Open in SwitchBot app" is the fallback (an App Store link; the app has no documented deep link).
  * Below the live view, "Activity today": the Mac relay's sightings (camera_events, migration 0022; lib/camera.ts).
+ *
+ * Stream lock (migration 0023, household_settings.camera_ticket_required): when on, the Mac only serves the stream
+ * behind a signed ticket. useCameraEmbed asks the camera-ticket Edge Function for one with the signed-in user's access
+ * token (12 h, refreshed 30 min before it expires) and embeds <stream address>/t/<ticket>/stream.html?src=…; when off,
+ * the plain address as before.
  */
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useAuth } from '@/lib/auth.tsx';
 import { sightingWho, useCameraActivity } from '@/lib/camera.ts';
 import { useData } from '@/lib/data/context.tsx';
-import { supabaseClient } from '@/lib/data/supabase.ts';
+import { functionsUrl, supabaseClient } from '@/lib/data/supabase.ts';
 import { dur, hm } from '@/lib/format.ts';
 import { useChrome } from '../nav.tsx';
-import { Button, Field, Group, Input, PageHeader, Row, Skeleton, Status } from '../ui.tsx';
+import { Button, Field, Group, Input, PageHeader, Row, Skeleton, Status, Switch } from '../ui.tsx';
 import s from './system.module.css';
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ');
@@ -44,6 +49,146 @@ export function cameraEmbedUrl(raw: string | null | undefined, stream?: string):
   else if (!u.searchParams.has('src')) u.searchParams.set('src', STREAM);
   if (!u.searchParams.has('mode')) u.searchParams.set('mode', 'mse,hls');
   return u.toString();
+}
+
+/**
+ * The player URL behind the Mac's ticket gate: the stored address's directory (with a trailing slash) + 't/' + the
+ * ticket + '/' + the player path relative to it (stream.html?src=…&mode=…). Null when the address isn't usable.
+ */
+export function cameraTicketUrl(raw: string | null | undefined, ticket: string, stream?: string): string | null {
+  const full = cameraEmbedUrl(raw, stream);
+  if (!full) return null;
+  const u = new URL(full);
+  const dir = u.pathname.replace(/stream\.html$/, '');
+  const base = dir.endsWith('/') ? dir : `${dir}/`;
+  return `${u.origin}${base}t/${encodeURIComponent(ticket)}/stream.html${u.search}`;
+}
+
+/** household_settings.camera_ticket_required; undefined while loading, false when unreadable (before migration 0023). */
+export function useCameraTicketRequired(enabled: boolean, nonce = 0): boolean | undefined {
+  const [v, setV] = useState<boolean | undefined>(undefined);
+  useEffect(() => {
+    if (!enabled) return setV(false);
+    let alive = true;
+    supabaseClient()
+      .from('household_settings')
+      .select('camera_ticket_required')
+      .eq('id', 1)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (!alive) return;
+        setV(!error && (data as { camera_ticket_required?: unknown } | null)?.camera_ticket_required === true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [enabled, nonce]);
+  return v;
+}
+
+const TICKET_EARLY_MS = 30 * 60_000;
+
+/** A camera ticket from the camera-ticket Edge Function, for the signed-in user. */
+async function fetchCameraTicket(): Promise<{ ticket: string; exp: number }> {
+  const { data } = await supabaseClient().auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error('Sign in again to watch the camera.');
+  const res = await fetch(`${functionsUrl()}/camera-ticket`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: '{}' });
+  let json: Record<string, unknown> = {};
+  try {
+    json = (await res.json()) as Record<string, unknown>;
+  } catch {
+    /* not JSON */
+  }
+  if (res.status === 401) throw new Error('Sign in again to watch the camera.');
+  if (res.status === 403) throw new Error('Only household members can watch the camera.');
+  if (!res.ok || typeof json.ticket !== 'string') throw new Error(typeof json.error === 'string' ? json.error : `The camera pass couldn’t be issued (${res.status}).`);
+  const exp = typeof json.exp === 'string' ? Date.parse(json.exp) : NaN;
+  const ttl = typeof json.ttlS === 'number' ? json.ttlS * 1000 : 12 * 3_600_000;
+  return { ticket: json.ticket, exp: Number.isFinite(exp) ? exp : Date.now() + ttl };
+}
+
+/** Retry a failed ticket fetch after 30 s, doubling up to 5 min. */
+const TICKET_RETRY_MS = 30_000;
+const TICKET_RETRY_MAX_MS = 5 * 60_000;
+
+/**
+ * The URL to embed for a stored address and stream: plain when the stream lock is off, with a fresh ticket when it's on.
+ * embed: undefined while loading, null when there's nothing to show. `settingsNonce`: bump it to re-read the lock
+ * setting (System › Camera does after toggling it). A failed fetch is retried with backoff, and the ticket is renewed
+ * when the page comes back (visible / online) close to its expiry.
+ */
+export function useCameraEmbed(
+  url: string | null | undefined,
+  stream: string | undefined,
+  enabled: boolean,
+  settingsNonce = 0,
+): { embed: string | null | undefined; locked: boolean; error: string | null } {
+  const required = useCameraTicketRequired(enabled, settingsNonce);
+  const [pass, setPass] = useState<{ key: string; ticket: string; exp: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
+  const fails = useRef(0);
+  const passRef = useRef(pass);
+  passRef.current = pass;
+  const key = `${url ?? ''}|${stream ?? ''}`;
+  const want = required === true && !!url;
+
+  useEffect(() => {
+    if (!want) return;
+    let alive = true;
+    setError(null);
+    fetchCameraTicket()
+      .then((t) => {
+        if (!alive) return;
+        fails.current = 0;
+        setPass({ key, ...t });
+      })
+      .catch((e: unknown) => {
+        if (!alive) return;
+        fails.current += 1;
+        setError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [want, key, nonce]);
+
+  // Refresh 30 min before the ticket expires (at least a minute from now).
+  useEffect(() => {
+    if (!want || !pass) return;
+    const id = window.setTimeout(() => setNonce((n) => n + 1), Math.max(60_000, pass.exp - TICKET_EARLY_MS - Date.now()));
+    return () => window.clearTimeout(id);
+  }, [want, pass]);
+
+  // A failed fetch (first or refresh) tries again with backoff, so a blip never leaves the stream on an expiring pass.
+  useEffect(() => {
+    if (!want || !error) return;
+    const delay = Math.min(TICKET_RETRY_MAX_MS, TICKET_RETRY_MS * 2 ** Math.max(0, fails.current - 1));
+    const id = window.setTimeout(() => setNonce((n) => n + 1), delay);
+    return () => window.clearTimeout(id);
+  }, [want, error]);
+
+  // Timers are throttled while a laptop sleeps or the tab is hidden: on return, renew if the pass is due or missing.
+  useEffect(() => {
+    if (!want) return;
+    const check = () => {
+      if (document.visibilityState !== 'visible') return;
+      const p = passRef.current;
+      if (!p || p.key !== key || p.exp - Date.now() < TICKET_EARLY_MS) setNonce((n) => n + 1);
+    };
+    document.addEventListener('visibilitychange', check);
+    window.addEventListener('online', check);
+    return () => {
+      document.removeEventListener('visibilitychange', check);
+      window.removeEventListener('online', check);
+    };
+  }, [want, key]);
+
+  if (url === undefined || (enabled && required === undefined)) return { embed: undefined, locked: false, error: null };
+  if (!want) return { embed: cameraEmbedUrl(url, stream), locked: false, error: null };
+  if (pass && pass.key === key) return { embed: cameraTicketUrl(url, pass.ticket, stream), locked: true, error };
+  return { embed: error ? null : undefined, locked: true, error };
 }
 
 /** household_settings.camera_stream_url for members (null = none or not readable); undefined while loading. */
@@ -129,6 +274,39 @@ function UrlForm({ current, onSaved }: { current: string | null; onSaved: () => 
   );
 }
 
+/** "Require sign-in for the stream" (set_camera_ticket_required, migration 0023). */
+function StreamLock({ canWrite, nonce, onChanged }: { canWrite: boolean; nonce: number; onChanged: () => void }) {
+  const required = useCameraTicketRequired(true, nonce);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const set = async (v: boolean) => {
+    setBusy(true);
+    setMsg(null);
+    const { error } = await supabaseClient().rpc('set_camera_ticket_required', { p_required: v });
+    setBusy(false);
+    if (error) return setMsg(/could not find the function/i.test(error.message) ? 'The stream lock isn’t on the server yet (migration 0023).' : error.message);
+    onChanged();
+  };
+  return (
+    <Group
+      label="Stream lock"
+      footer={
+        <>
+          Without the lock, anyone who has the exact secret link can watch. With it, the Mac only serves the stream to people signed in here: this app fetches a
+          12-hour pass and the Mac checks it. Turn it on only after the Mac’s ticket gate is running, otherwise the stream stops working.{' '}
+          {msg && <span className="sig">{msg}</span>}
+        </>
+      }
+    >
+      <Row
+        title="Require sign-in for the stream"
+        sub={required === undefined ? <Skeleton w={120} h={14} r="text" inline /> : required ? 'On: the stream needs a pass from this app' : 'Off: the secret link alone is enough'}
+        trailing={<Switch checked={required === true} disabled={!canWrite || busy || required === undefined} onChange={(v) => void set(v)} label={<span className="sr-only">Require sign-in for the stream</span>} />}
+      />
+    </Group>
+  );
+}
+
 const FALLBACK_NAMES: Record<string, string> = { a: 'Cath', b: 'Erik' };
 
 /** Today's sightings from the Mac relay, newest first: time, who, zone, how long. */
@@ -168,13 +346,16 @@ export function CameraPage() {
   const [nonce, setNonce] = useState(0);
   const refresh = useCallback(() => setNonce((x) => x + 1), []);
   const { url, error } = useCameraUrl(live, nonce);
-  const embed = cameraEmbedUrl(url);
+  // Shared by the lock switch and the preview, so toggling the lock re-reads it for both.
+  const [lockNonce, setLockNonce] = useState(0);
+  const lockChanged = useCallback(() => setLockNonce((x) => x + 1), []);
+  const { embed, error: ticketError } = useCameraEmbed(url, undefined, live, lockNonce);
 
   return (
     <div className={cx(s.sub, s.col, s.drill)}>
       <PageHeader title="Camera" lede="The bedroom camera, live, through the relay on the Mac at home." className={s.header} />
 
-      {url === undefined ? (
+      {url === undefined || embed === undefined ? (
         <Skeleton h={240} r="lg" />
       ) : embed ? (
         <div className={s.camera}>
@@ -199,7 +380,7 @@ export function CameraPage() {
           {!live && <p className="sec">Sign in as a household member to see the camera.</p>}
         </div>
       )}
-      {error && <p className={cx('sec', s.alert)}>{error}</p>}
+      {(error || ticketError) && <p className={cx('sec', s.alert)}>{error ?? ticketError}</p>}
 
       <div className={cx(s.inline, s.cameraLinks)}>
         {embed && (
@@ -215,6 +396,8 @@ export function CameraPage() {
       <ActivityToday />
 
       {canWrite && <UrlForm current={url ?? null} onSaved={refresh} />}
+
+      {live && <StreamLock canWrite={canWrite} nonce={lockNonce} onChanged={lockChanged} />}
 
       <Group label="How it works" footer="Anyone with the address can watch the stream. Keep it private, and put the relay behind a login or a hard-to-guess path.">
         <Row title="Pan/Tilt Cam Plus 3K" sub="RTSP on the home network (Camera Account in the SwitchBot app)" />

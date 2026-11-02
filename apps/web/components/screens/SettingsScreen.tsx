@@ -3,7 +3,7 @@
  * System (docs/DESIGN.md §9.5). Two levels, one navigation layer each:
  *   /settings          phone: the root list (featured Tonight's plan card + grouped rows)
  *                      desktop (≥1024): Tonight's plan (the sidebar's second level is the list)
- *   /settings/<slug>   one page per topic: plan, tags, presence, general, morning, data, health, camera, co2, setup,
+ *   /settings/<slug>   one page per topic: plan, tags, presence, location, general, morning, data, health, camera, co2, setup,
  *                      diagnostics
  * Pages live in components/system/pages.tsx; the root list in components/system/Root.tsx.
  */

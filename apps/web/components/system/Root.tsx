@@ -1,19 +1,23 @@
 'use client';
 /**
  * Phone System root (docs/DESIGN.md §9.5, mock 07-system-390): a large "System" title, the featured Tonight's plan
- * card (mini curve + Starts / Coolest / Wake), then grouped lists whose rows show a value and a chevron.
+ * card (mini curve + Starts / Coolest / Wake), then grouped lists whose rows show a value and a chevron. When signed
+ * in, "Signed in as <email>" with Sign out sits under the title.
  */
 import { useMemo, type ReactNode } from 'react';
 import type { TemperatureCurve } from '@sleep-lab/core';
+import { useAuth } from '@/lib/auth.tsx';
 import { useData } from '@/lib/data/context.tsx';
 import { usePlannedCurve } from '@/lib/curve-store.ts';
 import { fmt } from '@/lib/format.ts';
 import { useTheme } from '@/lib/theme.tsx';
 import { linePath, scale } from '../charts/common.tsx';
 import { SYSTEM_GROUPS, systemHref, type SystemSlug } from '../nav.tsx';
-import { FeaturedCard, Group, PageHeader, Row, Skeleton, useWidth } from '../ui.tsx';
+import { Button, FeaturedCard, Group, PageHeader, Row, Skeleton, useWidth } from '../ui.tsx';
 import { clock, driftAlerts, planTimes, tagLabel, useMorningReport, usePlanClock, useSetupProgress, useTonightTags } from './model.ts';
+import { useAccountName } from '../Sidebar.tsx';
 import { useCameraSummary } from './camera.tsx';
+import { useLocationSummary } from './location.tsx';
 import { usePresenceSummary } from './presence.tsx';
 import s from './system.module.css';
 
@@ -57,6 +61,9 @@ export function SystemRoot() {
   const setup = useSetupProgress();
   const presence = usePresenceSummary();
   const camera = useCameraSummary();
+  const location = useLocationSummary();
+  const auth = useAuth();
+  const who = useAccountName();
   const drift = useMemo(() => (dataset ? driftAlerts(dataset).length : null), [dataset]);
   const people = (dataset ?? latest)?.people;
   const ph = curve.phases;
@@ -65,6 +72,7 @@ export function SystemRoot() {
   const values: Record<SystemSlug, ReactNode> = {
     plan: `${fmt(Math.min(...ph.map((p) => p.targetC)), 1)}° coolest`,
     presence,
+    location,
     tags: tags.length ? (tags.length > 2 ? `${tags.length} tags` : tags.map(tagLabel).join(', ')) : 'None',
     general: `${MODE[mode]}${people ? ` · ${people.map((p) => p.name).join(', ')}` : ''}`,
     morning: morning ? 'On' : 'Off',
@@ -79,6 +87,19 @@ export function SystemRoot() {
   return (
     <div className={s.root}>
       <PageHeader title="System" />
+      {who && (
+        <Group className={s.account}>
+          <Row
+            title={`Signed in as ${who.email}`}
+            sub={who.name}
+            trailing={
+              <Button size="sm" variant="text" onClick={() => void auth.signOut()}>
+                Sign out
+              </Button>
+            }
+          />
+        </Group>
+      )}
       <FeaturedCard title="Tonight’s plan" action={{ label: 'Edit', href: systemHref('plan') }}>
         <PlanMini curve={curve} />
         <dl className={s.strip}>

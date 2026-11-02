@@ -1,7 +1,7 @@
 'use client';
 /**
- * Phone bottom tab bar (docs/DESIGN.md §5.3): a solid --rail strip with a top hairline, six tabs (24 px icon over a
- * 13 px sentence-case label). Active: label --text, icon --signal. Hidden at ≥1024 px (the Sidebar takes over).
+ * Phone bottom tab bar (docs/DESIGN.md §5.3): a solid --rail strip with a top hairline, one column per tab (24 px icon
+ * over a 13 px sentence-case label, 11 px when seven tabs share a 360 px screen). Active: label --text, icon --signal. Hidden at ≥1024 px (the Sidebar takes over).
  */
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';

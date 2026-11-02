@@ -321,3 +321,37 @@ export function alertDue(lastSentAt | null, now, windowMin = 30): boolean       
 export function unknownToAlert(events, now, maxAgeMin = 30)          // newest recent 'unknown', or null
 export function unknownAlertText({ts, camera}, utcOffsetMin = 420)   // "Unknown person seen at home (living room, 14:05)"
 ```
+
+## location/ (2026-11-02)
+
+```ts
+// location/owntracks.ts: OwnTracks HTTP-mode messages → public.locations (owntracks Edge Function, migration 0023)
+export interface Fix { ts: Ms /* tst × 1000 */; lat; lon; accM?; altM?; velKmh?; cog? /* 0..360 */; batt? /* 0..100 */;
+  conn?: 'w' | 'm' | 'o'; ssid?; trigger? /* OwnTracks t */; regions?: string[] /* inregions */ }
+export interface Transition { event: 'enter' | 'leave'; region: string /* desc, '' if none */; ts: Ms; lat; lon; accM? }
+export type OwnTracksMessage = { kind: 'location'; fix } | { kind: 'transition'; transition }
+  | { kind: 'waypoint' | 'waypoints' | 'lwt' } | { kind: 'other'; type } | { kind: 'invalid'; type; reason }
+export const OWNTRACKS_MAX_FUTURE_MS = 1 day, OWNTRACKS_MAX_AGE_MS = 400 days, OWNTRACKS_MAX_MESSAGES = 1000
+export function parseOwnTracksMessage(raw, now): OwnTracksMessage   // invalid: lat/lon missing/NaN/out of range, tst > now + 1 d
+                                                                    // or < now − 400 d; optional numbers out of range are dropped
+export function parseOwnTracks(body, now): OwnTracksMessage[]       // one message or an array of them
+export function locationRow(personId, { fix } | { transition }): object   // snake_case insert row, source 'owntracks'
+                                                                    // (a transition: event + region name in note)
+// location/geo.ts: pure geometry; no clock reads (pass t / now)
+export type TrackPoint = { ts: number; lat: number; lon: number; accM?: number | null };   // tracks sorted by ts
+export const DEFAULT_MAX_GAP_MS = 30 min, STATIONARY_M = 50, TOGETHER_WITHIN_M = 150, HOME_MAX_ACC_M = 1000, DEFAULT_HOME_RADIUS_M = 150
+export function haversineM(a: { lat; lon }, b: { lat; lon }): number             // metres
+export function homeState(fix: { lat; lon; accM? }, home: { lat; lon; radiusM }, prev: 'home' | 'away' | null): 'home' | 'away' | null
+//   home: d ≤ radius and acc ≤ max(2 × radius, 250) (prev 'home': any acc ≤ 1000); away: d > radius + max(150, acc);
+//   null in between or acc > 1000 (= no change). A fix without acc counts as accurate.
+export function isHomeRegion(name): boolean                          // /^(home|thuis|huis|house)$/i after trim
+export function positionAt(track: readonly TrackPoint[], t: number, maxGapMs?: number): { lat; lon; ts; stale: boolean } | null
+//   null before the first point; interpolated (ts = t) between points ≤ maxGapMs apart, or any time apart when the two
+//   points are ≤ STATIONARY_M (50 m) apart (the phone stayed put); else the last point (its own ts), stale when it is
+//   more than maxGapMs older than t
+export function trackUpTo(track: readonly TrackPoint[], t: number): TrackPoint[]   // points with ts ≤ t + the interpolated point at t
+export function togetherSpans(a, b, opts?: { maxGapMs?; withinM? = 150; stepMs? = 60 000 }): { from: number; to: number }[]
+//   both fresh (no gap > maxGapMs, except stationary ones bridged as in positionAt) and within withinM, sampled every stepMs and at every point of either track
+export function together(a: { lat; lon; ts } | null, b | null, opts?): { together: boolean; distanceM } | null
+//   latest fixes: together when < 150 m apart and the fixes are ≤ 30 min apart
+```

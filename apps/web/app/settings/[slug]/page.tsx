@@ -8,6 +8,7 @@ const TITLES: Record<SystemSlug, string> = {
   plan: 'Tonight’s plan',
   tags: 'Tonight’s tags',
   presence: 'Presence',
+  location: 'Location',
   general: 'General',
   morning: 'Morning report',
   data: 'Data & devices',

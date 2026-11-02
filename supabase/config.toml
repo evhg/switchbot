@@ -83,3 +83,11 @@ verify_jwt = false
 # Camera sightings (labels only) from the Mac relay; authenticated by any household presence token (0021).
 [functions.camera-event]
 verify_jwt = false
+
+# OwnTracks (HTTP mode) locations → public.locations, home/away; HTTP Basic, password = the person's presence token (0023).
+[functions.owntracks]
+verify_jwt = false
+
+# Signed camera viewer tickets for the Mac's stream gate; GET = public key, POST checks the user's JWT itself (0023).
+[functions.camera-ticket]
+verify_jwt = false

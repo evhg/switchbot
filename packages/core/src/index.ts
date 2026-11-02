@@ -10,3 +10,4 @@ export * from './calendar/index.ts';
 export * from './weather/index.ts';
 export * from './food/index.ts';
 export * from './camera/index.ts';
+export * from './location/index.ts';

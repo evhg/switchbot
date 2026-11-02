@@ -1,0 +1,47 @@
+/* Map surface (layers.ts, MapCanvas.tsx): the map box, person markers, home marker, the SVG fallback and its scale bar.
+   Markers are plain DOM in both views, coloured with the app's person tokens. */
+.box {
+  position: relative; overflow: hidden; width: 100%; height: clamp(320px, 58vh, 640px);
+  border-radius: var(--r-l, 16px); background: var(--surface-2); border: 1px solid var(--hairline);
+  contain: layout paint;
+}
+.surface { position: absolute; inset: 0; }
+.note {
+  position: absolute; left: 12px; top: 12px; z-index: 3; max-width: calc(100% - 24px);
+  padding: 4px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--hairline);
+  font-size: var(--t-cap); color: var(--text-2); pointer-events: none;
+}
+
+.marker {
+  --c: var(--person-a);
+  position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 2;
+  will-change: transform;
+}
+.marker[data-person='b'] { --c: var(--person-b); }
+.dot {
+  position: absolute; left: 0; top: 0; transform: translate(-50%, -50%);
+  width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--c); color: var(--bg); font-size: 13px; font-weight: 650; line-height: 1;
+  box-shadow: 0 0 0 2px var(--bg), 0 1px 4px rgba(0, 0, 0, .25);
+  transition: background-color var(--d-fast, .15s);
+}
+.marker[data-stale] .dot { background: var(--muted); box-shadow: 0 0 0 2px var(--bg); opacity: .8; }
+:root[data-theme='night'] .dot { background: #000; color: var(--c); box-shadow: inset 0 0 0 2px var(--c); }
+.homeMarker { --c: var(--text-2); z-index: 1; }
+.homeMarker .dot { width: 12px; height: 12px; border-radius: 3px; background: var(--bg); box-shadow: inset 0 0 0 2px var(--c); }
+
+/* SVG fallback: no tiles, a faint grid from the surface colour. */
+.svg {
+  position: absolute; inset: 0; display: block;
+  background-color: var(--surface-2);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+.svgOverlay { position: absolute; inset: 0; pointer-events: none; }
+.scale {
+  --w: 80px;
+  position: absolute; right: 12px; bottom: 10px; z-index: 3; min-width: var(--w);
+  padding-top: 4px; border-top: 2px solid var(--text-2); text-align: right;
+  font-size: var(--t-cap); color: var(--text-2); font-variant-numeric: tabular-nums;
+}
+.scale { width: var(--w); }
