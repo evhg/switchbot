@@ -306,3 +306,18 @@ export function nutritionLogDataPoint(meal: MealForLog, pointId, utcOffsetMin = 
 export async function createNutritionLog(token, point, opts?): Promise<{ status: 'ok' | 'pending'; name; operation }>
 export async function deleteNutritionLogs(token, names, opts?)            // :batchDelete
 ```
+
+## camera/ (2026-11-02)
+
+```ts
+// camera/events.ts: Mac relay sightings → public.camera_events (camera-event Edge Function, migration 0021). Labels only.
+export const CAMERA_MAX_EVENTS = 100, CAMERA_MAX_SKEW_MS = 1 day, CAMERA_LABEL_MAX = 40, CAMERA_DEFAULT = 'living'
+export const UNKNOWN_ALERT_WINDOW_MIN = 30, UNKNOWN_ALERT_MAX_AGE_MIN = 30, UNKNOWN_LABEL = 'unknown', PERSON_LABEL = 'person'
+export function parseCameraTs(v): Ms | null                        // ISO 8601 with Z/offset, or epoch ms
+export function normalizeCameraLabel(v, personIds = ['a','b']): string | null   // fixed labels + person ids lower-cased
+export function parseCameraRequest(body, now, personIds?): CameraRequest        // ping | {events (oldest first), rejected} | error
+export function cameraEventRow(e, source = 'mac-relay'): object      // snake_case insert row
+export function alertDue(lastSentAt | null, now, windowMin = 30): boolean       // same rule as claim_camera_alert()
+export function unknownToAlert(events, now, maxAgeMin = 30)          // newest recent 'unknown', or null
+export function unknownAlertText({ts, camera}, utcOffsetMin = 420)   // "Unknown person seen at home (living room, 14:05)"
+```

@@ -79,3 +79,7 @@ verify_jwt = false
 # Food photo → Gemini → public.meals → Google Health nutrition log; a household owner/member's JWT (0020).
 [functions.food-photo]
 verify_jwt = false
+
+# Camera sightings (labels only) from the Mac relay; authenticated by any household presence token (0021).
+[functions.camera-event]
+verify_jwt = false

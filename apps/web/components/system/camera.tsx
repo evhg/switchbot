@@ -6,10 +6,14 @@
  * address is household_settings.camera_stream_url (migration 0020, set with set_camera_stream_url). The page embeds
  * go2rtc's own player (stream.html?src=living&mode=mse,hls) in an iframe. No address yet: an empty state explaining the
  * relay. Either way, "Open in SwitchBot app" is the fallback (an App Store link; the app has no documented deep link).
+ * Below the live view, "Activity today": the Mac relay's sightings (camera_events, migration 0021; lib/camera.ts).
  */
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { useAuth } from '@/lib/auth.tsx';
+import { sightingWho, useCameraActivity } from '@/lib/camera.ts';
+import { useData } from '@/lib/data/context.tsx';
 import { supabaseClient } from '@/lib/data/supabase.ts';
+import { dur, hm } from '@/lib/format.ts';
 import { useChrome } from '../nav.tsx';
 import { Button, Field, Group, Input, PageHeader, Row, Skeleton, Status } from '../ui.tsx';
 import s from './system.module.css';
@@ -123,6 +127,37 @@ function UrlForm({ current, onSaved }: { current: string | null; onSaved: () => 
   );
 }
 
+const FALLBACK_NAMES: Record<string, string> = { a: 'Cath', b: 'Erik' };
+
+/** Today's sightings from the Mac relay, newest first: time, who, zone, how long. */
+function ActivityToday() {
+  const { events, error, real } = useCameraActivity();
+  const { latest, dataset } = useData();
+  const people = (dataset ?? latest)?.people;
+  const nameOf = (id: string) => people?.find((p) => p.id === id)?.name ?? FALLBACK_NAMES[id] ?? id;
+  return (
+    <Group
+      label="Activity today"
+      footer={real ? 'Face recognition runs on the Mac, for enrolled people only. Only names and zones are sent here, never images.' : 'Sample sightings (Simulated data).'}
+    >
+      {events === null ? (
+        <Row title={<Skeleton w={160} h={14} r="text" inline />} />
+      ) : events.length === 0 ? (
+        <Row title="No camera activity yet" sub={error ?? 'The Mac relay posts sightings here'} />
+      ) : (
+        events.map((e) => (
+          <Row
+            key={e.id}
+            title={sightingWho(e, nameOf)}
+            sub={[e.activity && e.activity[0]!.toUpperCase() + e.activity.slice(1), e.durationS != null && e.durationS >= 60 ? dur(e.durationS / 60) : e.durationS != null ? `${e.durationS}s` : null].filter(Boolean).join(' · ') || undefined}
+            value={hm(e.ts)}
+          />
+        ))
+      )}
+    </Group>
+  );
+}
+
 export function CameraPage() {
   useChrome({ back: { href: '/settings', label: 'System' } });
   const auth = useAuth();
@@ -174,6 +209,8 @@ export function CameraPage() {
           Open in SwitchBot app
         </a>
       </div>
+
+      <ActivityToday />
 
       {canWrite && <UrlForm current={url ?? null} onSaved={refresh} />}
 

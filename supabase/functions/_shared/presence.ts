@@ -124,6 +124,16 @@ export function everyoneAway(latest: readonly LatestPresence[], people: readonly
   });
 }
 
+/**
+ * Nobody home right now, for the camera's "unknown person" push: every person of the household has a latest phone
+ * signal and it is 'away' (however old: someone away for days is still away). A person without any signal counts as
+ * possibly home, so a household without presence data never raises the alert.
+ */
+export function nobodyHome(latest: readonly LatestPresence[], people: readonly string[]): boolean {
+  const ids = people.length ? people : latest.map((x) => x.personId);
+  return ids.length > 0 && ids.every((id) => latest.find((l) => l.personId === id)?.state === 'away');
+}
+
 export function presenceGate(i: GateInput): GateResult {
   const away = nightAway(i.override, i.tags, i.awayPeriod);
   if (away) return { allow: false, status: 'away', reason: away };

@@ -32,6 +32,7 @@ supabase/
     calendar-sync/            both Google Calendars → household trips → away_periods (source 'calendar', 0018)
     weather-poll/             Phuket outdoor temp/RH every 15 min (Google Weather or Open-Meteo) → outdoor_readings
     food-photo/               meal photo (Storage 'meals') → Gemini → meals → Google Health nutrition log (0020)
+    camera-event/             Mac relay's camera sightings (labels only) → camera_events; unknown-person push (0021)
     tests/                    `deno test` (Web Push RFC vector, coach grounding, health helpers)
 scripts/seed-supabase.ts      simulated nights → Supabase (Node)
 ```
@@ -59,6 +60,8 @@ All timestamps are `timestamptz` (UTC). A night is keyed by the **ICT wake-up da
 | `events` | Shower, door, in-bed, `ac_missed` …; `source` = detector / manual / sim_truth / controller | nightly-report, ac-curve, seed |
 | `raw_health` | **Append-only** Google Health archive (`point_key`, `payload`, `update_time`, `data_source`); a trigger blocks UPDATE/DELETE | google-health-sync |
 | `meals` | Food photos analysed by Gemini: totals, `items` jsonb, `confidence`, `model`, `raw`, `google_status` / `google_point`; `hidden` instead of removal (0020) | food-photo; members edit their own person's (owner: any) |
+| `camera_events` | Camera sightings from the Mac relay: `label` (`a`/`b`, a consenting guest's label, `unknown`, `person`), `person_id`, `confidence`, `activity` (zone), `duration_s`; labels only, never biometric data; `hidden` instead of removal (0021) | camera-event; members may set `hidden` |
+| `camera_alerts` | Last push per alert kind (`unknown`), claimed atomically by `claim_camera_alert()` (0021); service role only | camera-event |
 | `health_hr` (1-min means), `health_hrv`, `health_spo2`, `sleep_sessions`, `health_daily`, `health_vitals_daily` | Derived layers, rebuildable from `raw_health` | google-health-sync, seed |
 | `health_sync_jobs` | Queue fed by the Google webhook | webhook, OAuth |
 | `reports` | `report` (NightReport, possibly Claude-worded), `rule_report`, `generated_by`, `model` | nightly-report, seed |
@@ -391,6 +394,48 @@ Decided 2026-11-01: a photo of each meal gives calories and macros, logged to th
   `meals/<person>/<uuid>.jpg` and calls food-photo; System › Camera (`/settings/camera`) embeds
   `<camera_stream_url>/stream.html?src=living&mode=mse,hls` (a `src`/`mode` already in the URL is kept).
 
+## Camera activity (camera-event, migration 0021)
+
+Decided 2026-11-02: Erik's always-on Mac runs face recognition locally on the living-room camera (go2rtc stream
+`living`), for **enrolled, consenting people only** (Cath = `a`, Erik = `b`; a guest only after they agree, under a
+label of their choosing). It posts **labels only**: no image, face embedding or other biometric data ever reaches the
+backend. A face that matches nobody is `unknown`; a body without a visible face is `person`.
+
+**Request** (`verify_jwt = false`; the credential is any household person's presence token, System › Presence):
+```
+POST https://<project>.supabase.co/functions/v1/camera-event
+X-Presence-Token: slp_<64 hex>        (or Authorization: Bearer slp_…)
+Content-Type: application/json
+
+{"camera":"living",                    optional, lower-case [a-z0-9 _-], ≤ 40 chars; default "living"
+ "events":[                            1–100 per request (more → 400); oldest or newest first, either is fine
+   {"ts":"2026-11-02T14:05:00+07:00",  required: ISO 8601 WITH Z or an offset, or epoch ms; within ±1 day of now
+    "label":"b",                       required: "a" | "b" | "unknown" | "person" | a guest label
+                                       (1–40 chars: letters, digits, space, . _ ' -; must start with a letter/digit)
+    "confidence":0.91,                 optional, 0..1 (rounded to 3 decimals)
+    "activity":"sofa",                 optional zone name, lower-case [a-z0-9 _-], ≤ 40 chars (desk, sofa, kitchen, dining)
+    "durationS":120}]}                 optional integer seconds 0..86400 (also accepted: duration_s)
+
+{"ping":true}                          token check only; stores nothing
+```
+**Responses**: `200 {"ok":true,"person":"b"}` (ping) · `200 {"ok":true,"person","received","stored","duplicates",
+"rejected":[{"index","reason"}],"alert"}` (`alert`: null, `sent`, `someone_home`, `deduped` or `error`) · `400
+{"error"}` (not an object, no `events` array, > 100 events, bad `camera`) · `401 {"error":"unauthorized"}` (missing,
+malformed or unknown token) · `405` (not POST) · `500 {"error":"internal"}`. An invalid event is skipped and listed in
+`rejected`; the rest are stored. `(camera, ts, label)` is unique, so retrying a batch is safe (`duplicates`).
+
+- **Auth**: `presence_token_person(token)` (service role) returns the token's person without recording presence or
+  touching `last_used_at`, so the phones' Shortcut status stays readable. Rotating that person's token breaks the Mac too.
+- **Unknown-person push**: a newly stored `unknown` sighting at most 30 min old, while **nobody is home** (every
+  person's latest phone signal is `away`, however old; a person with no signal counts as possibly home), sends one push
+  "Unknown person seen at home (living room, HH:MM)" (ICT) to every subscription, opening System › Camera.
+  `claim_camera_alert('unknown', 30)` makes it at most one per 30 min, also under concurrent uploads.
+- **Core**: `camera/events.ts` (`parseCameraRequest`, `cameraEventRow`, `unknownToAlert`, `alertDue`,
+  `unknownAlertText`); `_shared/presence.ts` `nobodyHome()`.
+- **App**: System › Camera shows "Activity today" below the live view (`apps/web/lib/camera.ts`): today's rows (ICT),
+  newest first, as time · Cath / Erik / guest label / Unknown person / Someone · zone · duration. Simulated mode shows
+  sample sightings.
+
 ## Sleep onset (migration 0011)
 
 Decided 2026-10-29: in bed at 22:00 every day, asleep around 23:00, up around 08:30.
@@ -686,6 +731,9 @@ until it is redeployed.
 `calendar-sync` and `weather-poll` (`verify_jwt = false`) are written but not applied / deployed. `google-health-sync`
 now gets its token through `_shared/google.ts` (same behaviour); redeploy it with the others. `GOOGLE_WEATHER_API_KEY`
 is not set (Open-Meteo until then).
+
+**Camera activity (2026-11-02, not deployed).** Migration `0021_camera_events` and the new function `camera-event`
+(`verify_jwt = false`) are written but not applied / deployed.
 
 ### 2026-10-30 evening fixes (nightly-report v6, migration 0017)
 
