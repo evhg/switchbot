@@ -91,3 +91,7 @@ verify_jwt = false
 # Signed camera viewer tickets for the Mac's stream gate; GET = public key, POST checks the user's JWT itself (0023).
 [functions.camera-ticket]
 verify_jwt = false
+
+# Night sounds (minutes + events, classified on the Mac) and "listen now?"; any household presence token (0024).
+[functions.night-sound]
+verify_jwt = false

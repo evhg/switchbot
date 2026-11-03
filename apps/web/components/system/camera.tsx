@@ -1,12 +1,17 @@
 'use client';
 /**
- * System › Camera (/settings/camera): the bedroom camera's live view.
+ * System › Camera (/settings/camera): the bedroom camera, which now listens at night (migration 0024).
+ *
+ * Night sounds: Listening (Auto / Off, set_sound_settings), "Save short clips of loud moments" (sound_clips), the Mac
+ * listener's status (newest sound_minutes row) and a running pause (pause_sound_until). Video: "Show live video"
+ * (household_settings.live_video, set_live_video, default off). While it is off, neither this page nor the Live tab
+ * renders a player or fetches a camera ticket, and the stream address and lock below are hidden.
  *
  * The Pan/Tilt Cam's RTSP feed is relayed by go2rtc on the Mac at home and published at an https address; that
  * address is household_settings.camera_stream_url (migration 0020, set with set_camera_stream_url). The page embeds
  * go2rtc's own player (stream.html?src=living&mode=mse,hls) in an iframe. No address yet: an empty state explaining the
  * relay. Either way, "Open in SwitchBot app" is the fallback (an App Store link; the app has no documented deep link).
- * Below the live view, "Activity today": the Mac relay's sightings (camera_events, migration 0022; lib/camera.ts).
+ * "Activity today" (camera_events, migration 0022) is no longer shown: the camera faces the bedroom wall now.
  *
  * Stream lock (migration 0023, household_settings.camera_ticket_required): when on, the Mac only serves the stream
  * behind a signed ticket. useCameraEmbed asks the camera-ticket Edge Function for one with the signed-in user's access
@@ -15,12 +20,13 @@
  */
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useAuth } from '@/lib/auth.tsx';
-import { sightingWho, useCameraActivity } from '@/lib/camera.ts';
-import { useData } from '@/lib/data/context.tsx';
 import { functionsUrl, supabaseClient } from '@/lib/data/supabase.ts';
-import { dur, hm } from '@/lib/format.ts';
-import { useChrome } from '../nav.tsx';
-import { Button, Field, Group, Input, PageHeader, Row, Skeleton, Status, Switch } from '../ui.tsx';
+import { hm } from '@/lib/format.ts';
+import { isListening, isPaused, pauseSoundUntil, setLiveVideo, setSoundSettings, useNewestSoundMinute, useSoundSettings, type SoundMode } from '@/lib/sound.ts';
+import { systemHref, useChrome } from '../nav.tsx';
+import { ago } from './bands.tsx';
+import { clock, usePlanClock } from './model.ts';
+import { Button, Field, Group, Input, PageHeader, Row, Segmented, Skeleton, Status, Switch } from '../ui.tsx';
 import s from './system.module.css';
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ');
@@ -216,14 +222,18 @@ export function useCameraUrl(enabled: boolean, nonce = 0): { url: string | null 
   return res;
 }
 
-/** System root row value. */
+/** System root row value: the night listener's state. */
 export function useCameraSummary(): ReactNode {
   const auth = useAuth();
   const live = auth.status === 'signed-in' && !!auth.probe?.member;
-  const { url } = useCameraUrl(live);
+  const { settings } = useSoundSettings(live);
+  const { ts } = useNewestSoundMinute(live);
   if (!live) return 'Not set up';
-  if (url === undefined) return <Skeleton w={52} h={14} r="text" inline />;
-  return url ? 'Live view' : 'Not set up';
+  if (settings === undefined || ts === undefined) return <Skeleton w={52} h={14} r="text" inline />;
+  if (isListening(ts)) return 'Listening';
+  if (settings?.mode === 'off') return 'Sounds off';
+  if (isPaused(settings)) return 'Paused';
+  return 'Night sounds';
 }
 
 function UrlForm({ current, onSaved }: { current: string | null; onSaved: () => void }) {
@@ -307,33 +317,107 @@ function StreamLock({ canWrite, nonce, onChanged }: { canWrite: boolean; nonce: 
   );
 }
 
-const FALLBACK_NAMES: Record<string, string> = { a: 'Cath', b: 'Erik' };
-
-/** Today's sightings from the Mac relay, newest first: time, who, zone, how long. */
-function ActivityToday() {
-  const { events, error, real } = useCameraActivity();
-  const { latest, dataset } = useData();
-  const people = (dataset ?? latest)?.people;
-  const nameOf = (id: string) => people?.find((p) => p.id === id)?.name ?? FALLBACK_NAMES[id] ?? id;
+/** Night sounds: listening mode, clips, the Mac listener's status and a running pause. */
+function NightSoundsSettings({ live, canWrite }: { live: boolean; canWrite: boolean }) {
+  const [nonce, setNonce] = useState(0);
+  const { settings, error } = useSoundSettings(live, nonce);
+  const { ts, error: tsError } = useNewestSoundMinute(live, nonce);
+  const pc = usePlanClock();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const run = async (f: () => Promise<string | null>) => {
+    setBusy(true);
+    setMsg(null);
+    const e = await f();
+    setBusy(false);
+    if (e) setMsg(e);
+    setNonce((x) => x + 1);
+  };
+  const now = Date.now();
+  const loading = settings === undefined;
+  const disabled = !canWrite || busy || !settings;
+  const listening = isListening(ts, now);
   return (
     <Group
-      label="Activity today"
-      footer={real ? 'Face recognition runs on the Mac, for enrolled people only. Only names and zones are sent here, never images.' : 'Sample sightings (Simulated data).'}
+      label="Night sounds"
+      footer={
+        <>
+          The Mac listens from {clock(pc.lightsOut - 15)} to {clock(pc.wake + 30)} (lights-out to the aircon going off), only when you’re home. It sends loudness and
+          snoring per minute; clips are about 10 s, never of talking, and are kept 14 days. {(msg ?? error ?? tsError) && <span className="sig">{msg ?? error ?? tsError}</span>}
+        </>
+      }
     >
-      {events === null ? (
-        <Row title={<Skeleton w={160} h={14} r="text" inline />} />
-      ) : events.length === 0 ? (
-        <Row title="No camera activity yet" sub={error ?? 'The Mac relay posts sightings here'} />
-      ) : (
-        events.map((e) => (
-          <Row
-            key={e.id}
-            title={sightingWho(e, nameOf)}
-            sub={[e.activity && e.activity[0]!.toUpperCase() + e.activity.slice(1), e.durationS != null && e.durationS >= 60 ? dur(e.durationS / 60) : e.durationS != null ? `${e.durationS}s` : null].filter(Boolean).join(' · ') || undefined}
-            value={hm(e.ts)}
+      <Row
+        title="Listening"
+        sub={loading ? <Skeleton w={120} h={14} r="text" inline /> : settings?.mode === 'off' ? 'Off: the Mac never listens' : 'Auto: only while you sleep'}
+        trailing={
+          <Segmented<SoundMode>
+            label="Listening"
+            value={settings?.mode ?? 'auto'}
+            onChange={(m) => !disabled && void run(() => setSoundSettings(m, null))}
+            options={[
+              { value: 'auto', label: 'Auto' },
+              { value: 'off', label: 'Off' },
+            ]}
           />
-        ))
+        }
+      />
+      <Row
+        title="Save short clips of loud moments"
+        sub="Snoring, coughs and loud noises, up to 40 a night"
+        trailing={<Switch checked={settings?.clips ?? true} disabled={disabled} onChange={(v) => void run(() => setSoundSettings(null, v))} label={<span className="sr-only">Save short clips of loud moments</span>} />}
+      />
+      {isPaused(settings, now) && (
+        <Row
+          title="Paused"
+          sub={`Until ${hm(settings!.pausedUntil!)}`}
+          trailing={
+            <Button size="sm" variant="text" disabled={disabled} onClick={() => void run(() => pauseSoundUntil(null))}>
+              Resume
+            </Button>
+          }
+        />
       )}
+      <Row
+        title="Mac listener"
+        sub={ts === undefined ? <Skeleton w={140} h={14} r="text" inline /> : ts ? `Last minute ${ago(ts, now)} (${hm(ts)})` : 'Nothing received yet'}
+        value={ts === undefined ? undefined : <Status tone={listening ? 'on' : 'off'}>{listening ? 'Listening' : 'Not listening'}</Status>}
+        href="/live"
+      />
+    </Group>
+  );
+}
+
+/** "Show live video" (set_live_video, default off). */
+function VideoSwitch({ live, canWrite, onChanged }: { live: boolean; canWrite: boolean; onChanged: () => void }) {
+  const [nonce, setNonce] = useState(0);
+  const { settings } = useSoundSettings(live, nonce);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const set = async (v: boolean) => {
+    setBusy(true);
+    setMsg(null);
+    const e = await setLiveVideo(v);
+    setBusy(false);
+    if (e) setMsg(e);
+    setNonce((x) => x + 1);
+    onChanged();
+  };
+  return (
+    <Group
+      label="Video"
+      footer={
+        <>
+          Off: no player here or on the Live tab, and no camera pass is fetched. To watch, the Mac also has to publish the stream again (Tailscale Funnel, see the Live
+          tab’s commands). {msg && <span className="sig">{msg}</span>}
+        </>
+      }
+    >
+      <Row
+        title="Show live video"
+        sub={settings === undefined ? <Skeleton w={120} h={14} r="text" inline /> : settings?.liveVideo ? 'On' : 'Off'}
+        trailing={<Switch checked={settings?.liveVideo === true} disabled={!canWrite || busy || !settings} onChange={(v) => void set(v)} label={<span className="sr-only">Show live video</span>} />}
+      />
     </Group>
   );
 }
@@ -345,45 +429,65 @@ export function CameraPage() {
   const canWrite = live && (auth.probe?.role === 'owner' || auth.probe?.role === 'member');
   const [nonce, setNonce] = useState(0);
   const refresh = useCallback(() => setNonce((x) => x + 1), []);
-  const { url, error } = useCameraUrl(live, nonce);
+  const { settings } = useSoundSettings(live, nonce);
+  // The player, the stream address and its ticket only exist while Show live video is on.
+  const video = live && settings?.liveVideo === true;
+  const { url, error } = useCameraUrl(video, nonce);
   // Shared by the lock switch and the preview, so toggling the lock re-reads it for both.
   const [lockNonce, setLockNonce] = useState(0);
   const lockChanged = useCallback(() => setLockNonce((x) => x + 1), []);
-  const { embed, error: ticketError } = useCameraEmbed(url, undefined, live, lockNonce);
+  const { embed, error: ticketError } = useCameraEmbed(url, undefined, video, lockNonce);
 
   return (
     <div className={cx(s.sub, s.col, s.drill)}>
-      <PageHeader title="Camera" lede="The bedroom camera, live, through the relay on the Mac at home." className={s.header} />
+      <PageHeader
+        title="Camera"
+        lede="The Pan/Tilt Cam on the bedside table, facing the wall. At night the Mac at home listens to it for snoring and noise. The video is off unless you turn it on."
+        className={s.header}
+      />
 
-      {url === undefined || embed === undefined ? (
-        <Skeleton h={240} r="lg" />
-      ) : embed ? (
-        <div className={s.camera}>
-          <iframe
-            className={s.cameraFrame}
-            src={embed}
-            title="Bedroom camera, live"
-            allow="fullscreen; autoplay; picture-in-picture"
-            allowFullScreen
-            referrerPolicy="no-referrer"
-          />
-        </div>
-      ) : (
+      {!live && (
         <div className={cx('card', s.dataSummary)}>
           <Status tone="off">
-            <b>No live view yet</b>
+            <b>Sign in</b>
           </Status>
-          <p className="sec">
-            The camera only streams on the home network (RTSP). go2rtc on the Mac at home picks that stream up and publishes it at an https address;{' '}
-            {canWrite ? 'paste that address below' : 'once a household member saves that address'} and the live view appears here. Until then, use the SwitchBot app.
-          </p>
-          {!live && <p className="sec">Sign in as a household member to see the camera.</p>}
+          <p className="sec">Sign in as a household member to see the camera’s settings.</p>
         </div>
       )}
-      {(error || ticketError) && <p className={cx('sec', s.alert)}>{error ?? ticketError}</p>}
+
+      {live && <NightSoundsSettings live={live} canWrite={canWrite} />}
+      {live && <VideoSwitch live={live} canWrite={canWrite} onChanged={refresh} />}
+
+      {video && (
+        <>
+          {url === undefined || embed === undefined ? (
+            <Skeleton h={240} r="lg" />
+          ) : embed ? (
+            <div className={s.camera}>
+              <iframe className={s.cameraFrame} src={embed} title="Bedroom camera, live" allow="fullscreen; autoplay; picture-in-picture" allowFullScreen referrerPolicy="no-referrer" />
+            </div>
+          ) : (
+            <div className={cx('card', s.dataSummary)}>
+              <Status tone="off">
+                <b>No live view</b>
+              </Status>
+              <p className="sec">
+                go2rtc on the Mac publishes the camera at an https address (Tailscale Funnel); {canWrite ? 'paste that address below' : 'once a household member saves that address'} and the
+                live view appears here and on the Live tab.
+              </p>
+            </div>
+          )}
+          {(error || ticketError) && <p className={cx('sec', s.alert)}>{error ?? ticketError}</p>}
+          {canWrite && <UrlForm current={url ?? null} onSaved={refresh} />}
+          <StreamLock canWrite={canWrite} nonce={lockNonce} onChanged={lockChanged} />
+        </>
+      )}
 
       <div className={cx(s.inline, s.cameraLinks)}>
-        {embed && (
+        <a className="btn secondary" href="/live">
+          Night sounds on Live
+        </a>
+        {embed && video && (
           <a className="btn secondary" href={embed} target="_blank" rel="noopener noreferrer">
             Open full screen
           </a>
@@ -393,16 +497,11 @@ export function CameraPage() {
         </a>
       </div>
 
-      <ActivityToday />
-
-      {canWrite && <UrlForm current={url ?? null} onSaved={refresh} />}
-
-      {live && <StreamLock canWrite={canWrite} nonce={lockNonce} onChanged={lockChanged} />}
-
-      <Group label="How it works" footer="Anyone with the address can watch the stream. Keep it private, and put the relay behind a login or a hard-to-guess path.">
-        <Row title="Pan/Tilt Cam Plus 3K" sub="RTSP on the home network (Camera Account in the SwitchBot app)" />
-        <Row title="go2rtc on the Mac" sub={`Reads RTSP, serves stream “${STREAM}” as MSE video`} />
-        <Row title="https address" sub="The relay published outside the home network; stored for the household" value={url ? <Status tone="on">Set</Status> : <Status tone="off">Not set</Status>} />
+      <Group label="How it works" footer={<>The sound never leaves the Mac except as numbers and short clips. See <a href={systemHref('presence')}>System › Presence</a> for the token the Mac uses.</>}>
+        <Row title="Pan/Tilt Cam Plus 3K" sub="RTSP on the home network, with sound (Camera Account in the SwitchBot app)" />
+        <Row title="go2rtc on the Mac" sub={`Reads RTSP, stream “${STREAM}” (sound and the low-res picture)`} />
+        <Row title="Night listener on the Mac" sub="Asks the server every minute whether to listen; classifies sound on the Mac" />
+        <Row title="Public video link" sub="Tailscale Funnel; off while the video is off" value={video ? <Status tone="on">Video on</Status> : <Status tone="off">Off</Status>} />
       </Group>
     </div>
   );

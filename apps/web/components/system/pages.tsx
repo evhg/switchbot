@@ -543,8 +543,8 @@ export function DataPage() {
           <Row key={d.name} title={d.name} sub={d.detail} value={<Status tone={d.state === 'Open loop' ? 'on' : 'off'}>{d.state === 'Open loop' ? 'Open loop (commands only)' : d.state}</Status>} />
         ))}
       </Group>
-      <Group label="Camera" footer="The live view runs through go2rtc on the Mac at home. The analyses listed here come later (phase 3).">
-        <Row title="Pan/Tilt Cam Plus 3K" sub="Live view through the Mac relay" value="Camera" href={systemHref('camera')} />
+      <Group label="Camera" footer="The Mac at home listens to the bedroom camera at night: snoring and noise per minute, with short clips. The video is off. Ideas for later are listed below.">
+        <Row title="Pan/Tilt Cam Plus 3K" sub="Night sounds through the Mac" value="Camera" href={systemHref('camera')} />
         {CAMERA_LATER.map((x) => (
           <Row key={x} title={<span className="ink-2">{x}</span>} />
         ))}

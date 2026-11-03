@@ -35,6 +35,7 @@ supabase/
     camera-event/             Mac relay's camera sightings (labels only) → camera_events; unknown-person push (0022)
     owntracks/                OwnTracks HTTP-mode fixes → locations; home/away from them; friends array (0023)
     camera-ticket/            Ed25519-signed camera viewer tickets for the Mac's stream gate; public key on GET (0023)
+    night-sound/              Mac night listener: listen now? (GET); minute summaries + events → sound_minutes/sound_events, clip upload URLs (0024)
     tests/                    `deno test` (Web Push RFC vector, coach grounding, health helpers)
 scripts/seed-supabase.ts      simulated nights → Supabase (Node)
 ```
@@ -532,6 +533,76 @@ part2  = base64url_nopad( Ed25519_sign(private_key, ASCII bytes of part1) )     
 3. `payload = JSON.parse(b64url_decode(part1))`; require `aud == "camera"`, `sub` a string, `exp > now_s` and
    `iat <= now_s + 300`. Fail → 403 (expired → the app fetches a new ticket on reload).
 4. Proxy `/<rest of the path>?<query>` to go2rtc (including its WebSocket upgrades); never forward the ticket.
+
+## Night sounds (night-sound, migration 0024)
+
+Decided 2026-11-03: the live video is off. The SwitchBot Pan/Tilt Cam Plus 3K stands on Cath's bedside table (window
+side), pointed at the wall; Erik snores the loudest. Erik's Mac only **listens, and only while the household sleeps**:
+it asks `night-sound` every 60 s and runs its audio pipeline (ffmpeg on go2rtc's local RTSP stream, video dropped →
+YAMNet AudioSet classifier, all on the Mac) only while the answer is `listen: true`. No continuous audio leaves the
+Mac; it posts per-minute summaries and events, plus ~10 s clips of notable moments (never speech). The Tailscale Funnel
+is off, so nothing is streamed publicly. Mac setup: `docs/mac-prompts/night-sound.md`.
+
+**Listen window** = tonight's lights-out − 15 min → the aircon's scheduled OFF at wake + 30 min (`nights.lights_out` /
+`nights.wake`, or the default schedule; the controller's "off (wake + 30 min)", core `OFF_AFTER_WAKE_MIN`). With the
+22:00 / 08:30 defaults: **21:45 → 09:00 ICT**. Nights are keyed by the wake date (`nightDateFor`: from 12:00 ICT it is
+tomorrow's night); between the OFF and 12:00 GET reports the coming night's window. `listen` is true only when also:
+`household_settings.sound_mode = 'auto'`, `sound_paused_until` null or past, the night not away (ac-curve's
+`nightAway`: "Away tonight" / travel tag / an away period covering tonight, unless "Home tonight"), and not everyone's
+latest phone signal a fresh `away` (`everyoneAway`, as the pre-cool gate). Logic: `_shared/sound.ts` `listenDecision`.
+
+```
+GET  https://<project>.supabase.co/functions/v1/night-sound
+X-Presence-Token: slp_<64 hex>            (any household person's presence token; or Authorization: Bearer slp_…)
+→ {"listen":true,"reason":"Listening until 09:00","from":"2026-11-03T14:45:00.000Z","until":"2026-11-04T02:00:00.000Z",
+   "clips":true,"clipsLeft":40,"night":"2026-11-04","now":"…"}
+   reason: "Listening until 09:00" · "Off — starts 21:45" · "Paused until tomorrow 12:00" · "Away tonight" ·
+   "Nobody home" · "Turned off in settings"
+
+POST {"ping":true}                        → {"ok":true,"person":"b"}  (token check, stores nothing)
+POST {"camera":"bedroom",                 optional slug, default "bedroom"
+  "minutes":[{"ts":"2026-11-04T01:23:00+07:00","dbAvg":-52.1,"dbMax":-31.4,"dbFloor":-61.0,"snoreS":24,
+              "snoreProb":0.41,"speechS":0,"coughS":0,"classes":{"Snoring":24,"Breathing":11,"Silence":20},"n":61}],
+  "events":[{"ts":"2026-11-04T01:23:12.400+07:00","durationS":9.5,"kind":"snore","label":"Snoring","peakDb":-31.4,
+             "score":0.62,"wantClip":true}]}
+→ {"ok":true,"person":"b","received":{"minutes":1,"events":1},"stored":{"minutes":1,"events":1},
+   "duplicates":{"minutes":0,"events":0},"dropped":{"outsideWindow":0,"notListening":0},"rejected":[],
+   "uploads":[{"index":0,"path":"2026-11-04/20261103T182312.400Z_snore.m4a","signedUrl":"https://…/storage/v1/object/upload/sign/night-sounds/…?token=…","token":"…"}],
+   "listen":true}
+```
+- **Validation** (core `sound/payload.ts` `parseSoundPayload`): ≤ 120 minutes and ≤ 100 events per request (more →
+  400); ts ISO with a zone or epoch ms, at most 2 min ahead and 36 h old; dB clamped to −120..20 dBFS, seconds to 0..60,
+  scores to 0..1; classes: top 5; minute ts floored to the minute; `kind` ∈ snore | loud | cough | speech | other.
+  Invalid rows are skipped and listed in `rejected` (`{kind,index,reason}`).
+- **Server-side privacy**: a row is stored only when its ts is inside **its own night's** listen window ± 5 min (a
+  night without a `nights` row keeps nothing): others count in `dropped.outsideWindow`. While `sound_mode = 'off'` or
+  paused, nothing is stored (`dropped.notListening`). Away nights are left to the Mac's GET (presence can be wrong).
+- **Idempotent**: `sound_minutes` primary key `(camera, ts)`, `sound_events` unique `(camera, ts, kind)`, inserted with
+  on conflict do nothing (`duplicates`).
+- **Clips**: for a stored event with `wantClip`, `kind ≠ speech`, a label outside the speech classes (`SPEECH_LABELS` in
+  core: Speech, Conversation, Shout, Yell, Whispering, Laughter, …), `ts` at most 10 min old (a re-sent outbox batch
+  has no audio), `sound_clips` on, and fewer than 40 clips this night,
+  the function reserves `clip_path` (object name in bucket `night-sounds`, **no bucket prefix**:
+  `<night>/<YYYYMMDDTHHMMSS[.mmm]Z>_<kind>.m4a`) and returns a signed upload URL (`createSignedUploadUrl`, upsert, valid
+  2 h). The Mac PUTs the m4a there: `curl -X PUT -H 'Content-Type: audio/mp4' --data-binary @clip.m4a "<signedUrl>"`
+  (≤ 1 MB; the bucket takes audio/mp4, aac, mpeg, ogg, webm up to 2 MB). A retried batch gets a fresh URL for the same
+  path. `clip_path` can point at a missing object when the upload failed; the app shows no player when the signed URL
+  fails. `index` = position in the request's `events` array.
+- **Retention**: on any authorised GET or POST (the Mac GETs every 60 s even while not listening), at most once an
+  hour per worker, clips older than 14 days (up to 100 per run) are removed with the
+  Storage API and their `clip_path` set to null. Minute and event rows stay (never removed by SQL); `hidden = true`
+  takes an event out of the app (owners/members, like `camera_events`).
+- **Settings** (owners/members; RPCs return the settings row): `set_sound_settings(p_mode 'auto'|'off', p_clips)` (null
+  = keep), `pause_sound_until(p_until)` (null or past = resume; ≤ 7 days ahead; the app's "Pause tonight" passes the
+  next 12:00 ICT), `set_live_video(p_on)` (`live_video`, default **false**: the Live tab hides the video player and
+  fetches no ticket until it is turned back on in System › Camera).
+- **Reading**: members read `sound_minutes` / `sound_events` under RLS (`(night_date, ts)` indexes) and clips with
+  `storage.from('night-sounds').createSignedUrls(paths, 3600)`. Core `sound/summary.ts`: `nightSoundSummary`,
+  `awakeningStarts` (Cath's awake runs after sleep onset from her stages) and `wakeTriggers` ("4 of your 6 wake-ups came
+  within 2 min of snoring").
+- **Tests**: `packages/core/test/sound.test.ts`, `supabase/functions/tests/night-sound.test.ts`.
+- **Deploy**: apply `0024_night_sounds.sql`, deploy `night-sound` (`verify_jwt = false`, in `config.toml`). The
+  living-room face recognition (`camera-event`) is retired on the Mac; `camera_events` is left as it is.
 
 ## Sleep onset (migration 0011)
 

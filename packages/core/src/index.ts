@@ -11,3 +11,4 @@ export * from './weather/index.ts';
 export * from './food/index.ts';
 export * from './camera/index.ts';
 export * from './location/index.ts';
+export * from './sound/index.ts';

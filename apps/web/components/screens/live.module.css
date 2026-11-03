@@ -13,3 +13,9 @@
 .cmdSub a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
 .cmd { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3); border-radius: var(--r-s); background: var(--surface-2); }
 .cmdText { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
+
+/* Night sounds (default) and the optional player, stacked. */
+.stack { display: grid; gap: var(--sp-4); min-width: 0; }
+.stack > :global(.label) { margin-top: var(--sp-4); }
+.playerHead { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); margin-top: var(--sp-6); }
+.more { margin-top: var(--sp-10); }

@@ -47,10 +47,7 @@ export const DEVICES: readonly { name: string; detail: string; state: DeviceStat
   { name: 'Fitbit Air × 2', detail: 'Google Health paired devices: last sync, battery', state: 'Not linked' },
 ];
 export const CAMERA_LATER: readonly string[] = [
-  'Movement strip under the hypnogram (IR video frame difference)',
-  'Sleep position and covers on or off, from snapshots',
-  'Snoring and sound timeline with playable clips',
-  'Nightly light-leak map: new glows get circled',
+  'Sound-based movement and restlessness, from the same audio',
 ];
 
 export const PHASE_NAME: Record<CurvePhaseName, string> = {

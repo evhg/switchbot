@@ -355,3 +355,45 @@ export function togetherSpans(a, b, opts?: { maxGapMs?; withinM? = 150; stepMs? 
 export function together(a: { lat; lon; ts } | null, b | null, opts?): { together: boolean; distanceM } | null
 //   latest fixes: together when < 150 m apart and the fixes are ≤ 30 min apart
 ```
+
+## sound/ (2026-11-03)
+
+```ts
+// sound/payload.ts: Mac night listener → public.sound_minutes / sound_events (night-sound Edge Function, migration 0024)
+export const SOUND_MAX_MINUTES = 120, SOUND_MAX_EVENTS = 100, SOUND_MAX_FUTURE_MS = 2 min, SOUND_MAX_AGE_MS = 36 h
+export const SOUND_DB_MIN = -120, SOUND_DB_MAX = 20 (dBFS), SOUND_CLIPS_PER_NIGHT = 40, SNORE_MIN_S = 10, LOUD_ABOVE_FLOOR_DB = 15
+export const LISTEN_BEFORE_LIGHTS_OUT_MIN = 15, LISTEN_GRACE_MS = 5 min, SOUND_CAMERA_DEFAULT = 'bedroom'
+export const SOUND_KINDS = ['snore', 'loud', 'cough', 'speech', 'other']
+export interface SoundMinute { ts /* minute start */; dbAvg; dbMax; dbFloor /* p10 */: number | null; snoreS /* 0..60 */;
+  snoreProb: number | null /* 0..1 */; speechS; coughS; classes: Record<string, number> /* top 5, seconds */; n /* frames */ }
+export interface SoundEvent { ts; durationS: number | null; kind: SoundKind; label: string | null /* YAMNet class */;
+  peakDb: number | null; score: number | null; wantClip: boolean }
+export function parseSoundPayload(body, now): { camera; ping; minutes; events: (SoundEvent & { index })[]; errors; fatal }
+//   dB clamped to −120..20, seconds to 0..60, probabilities to 0..1; ts (ISO with zone or epoch ms) > now + 2 min or
+//   < now − 36 h → error; minute ts floored to the minute (a duplicate minute keeps the first); fatal (→ 400): not an
+//   object, > 120 minutes / > 100 events, bad camera slug. `index` = position in the request's events array.
+export function soundNightDate(ts): string          // wake-date key, ICT, switches at 12:00 (= _shared/time.ts nightDateFor)
+export function listenWindow({ lightsOut, offAt? | wake? }): { from: lightsOut − 15 min, until: offAt ?? wake + OFF_AFTER_WAKE_MIN }
+export function inWindow(ts, window, graceMs = 0): boolean    // from − grace ≤ ts ≤ until + grace
+export const SPEECH_LABELS: string[]   // YAMNet voice classes (Speech, Conversation, Shout, Yell, Whispering, Laughter, …)
+export function isSpeechLabel(label): boolean
+export const CLIP_MAX_AGE_MS = 10 min
+export function clipAllowed({ ts, kind, label, wantClip }, now): boolean
+//   a clip is reserved only for wantClip, kind ≠ 'speech', label not a speech class, ts ≥ now − 10 min (a re-sent
+//   outbox batch no longer has its audio)
+export function soundClipPath(nightDate, { ts, kind }): string // '<night>/<YYYYMMDDTHHMMSS[.mmm]Z>_<kind>.m4a' (bucket 'night-sounds')
+export function soundMinuteRow(m, camera?, nightDate?) / soundEventRow(e, camera?, nightDate?)   // snake_case insert rows
+export function soundMinuteFromRow(row): SoundMinute
+export function soundEventFromRow(row): SoundEvent & { id?; clipPath: string | null; hidden: boolean }
+// sound/summary.ts
+export function nightSoundSummary(minutes, events): { listenedMin; snoreMin /* snoreS ≥ 10 */; snorePct /* 0..100 */;
+  loudEvents /* kind 'loud' */; longestSnoreRunMin /* consecutive minutes */; loudestDb /* max dbMax / peakDb */;
+  floorDb /* median dbFloor */ }
+export function awakeningStarts(stages: StageSegment[]): Ms[]   // start of each 'awake' run after the first sleep stage
+export function wakeTriggers(cathWakeStarts, minutes, events, { lookbackMs = 120 000, slackMs = 30 000 }?): {
+  rows: { wakeAt; heard; snore; loud; triggered; event }[]; wakeUps; heard; withSnore; withLoud; triggered }
+//   heard: a minute summary overlaps [wakeAt − lookback, wakeAt] (unheard awakenings never count as triggered);
+//   snore: such a minute with snoreS ≥ 10 or a snore event in it; loud: an event in [wakeAt − lookback, wakeAt + slack]
+//   with peakDb ≥ floor + 15 dB (floor = the event minute's dbFloor, else the night's median). "4 of your 6 wake-ups
+//   came within 2 min of snoring" = withSnore of heard.
+```

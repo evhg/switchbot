@@ -1,7 +1,7 @@
 'use client';
 // Today: the story of last night, told scene by scene as you scroll (docs/DESIGN.md §8.3, §9.1).
-//   1 Last night · 2 Before bed · 3 The night (pinned, scrubbed) · 4 The air · 5 Your bodies · 6 What drove it
-//   · 7 Tonight · close.
+//   1 Last night · 2 Before bed · 3 The night (pinned, scrubbed) · 4 The air · 4b Snoring & noise · 5 Your bodies
+//   · 6 What drove it · 7 Tonight · close.
 // This file owns the data wiring (components/story/model.ts), the phone top bar (current scene + progress line),
 // the desktop "On this page" rail and the drill-in sheets. Browsing another night re-tells that night from the top.
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -23,6 +23,7 @@ import { Bodies } from '../story/Bodies.tsx';
 import { Drivers, type DriverRow } from '../story/Drivers.tsx';
 import { LightsOut } from '../story/LightsOut.tsx';
 import { buildStory, co2CrossAt, co2PeakAt, nightSteps, whoLabel } from '../story/model.ts';
+import { Sounds } from '../story/Sounds.tsx';
 import { TheAir } from '../story/TheAir.tsx';
 import { ConnectHealthCard } from '../story/ConnectHealth.tsx';
 import { qualityNote, roomVerdict } from '../story/real.ts';
@@ -38,6 +39,7 @@ const SCENES = [
   { id: 'before', label: 'Before bed' },
   { id: 'night', label: 'The night' },
   { id: 'air', label: 'The air' },
+  { id: 'sounds', label: 'Snoring & noise' },
   { id: 'bodies', label: 'Your bodies' },
   { id: 'drivers', label: 'What drove it' },
   { id: 'tonight', label: 'Tonight' },
@@ -236,6 +238,7 @@ export function TodayScreen() {
         <LightsOut model={model} />
         <TheNight model={model} steps={steps} onOpenStrip={() => setSheet({ kind: 'strip' })} />
         <TheAir model={model} room={room} history={history} baseline={baseline} peakAt={peakAt} crossAt={crossAt} />
+        <Sounds model={model} />
         {!roomOnly && <Bodies people={heroPeople} dataset={dataset} index={sel.index} detail={detail} ready={vitalsReady} onHistory={() => setSheet({ kind: 'vitals' })} />}
         <Drivers
           rows={driverRows}
