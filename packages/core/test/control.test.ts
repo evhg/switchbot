@@ -825,7 +825,7 @@ describe('steady-18-5-quiet-v1 default curve: one fan-only step at lights-out + 
 
   it('is the default: flat 18.5 °C, fan auto until lights-out, low from +30, every phase from lights-out', () => {
     expect(DEFAULT_CURVE.id).toBe('steady-18-5-quiet-v1');
-    expect(BUILTIN_CURVES.map((c) => c.id)).toEqual(['steady-18-5-quiet-v1', 'steady-18-5-v1', 'one-beep-v2', 'one-beep-v1', 'default-v1']);
+    expect(BUILTIN_CURVES.map((c) => c.id)).toEqual(['steady-18-5-quiet-v1', 'steady-18-5-v1', 'one-beep-v2', 'one-beep-v1', 'default-v1', 'warm-late-19-5-quiet-v1', 'steady-19-5-quiet-v1', 'cool-early-warm-late-v1']);
     expect(new Set(DEFAULT_CURVE.phases.map((p) => p.targetC))).toEqual(new Set([18.5]));
     expect(DEFAULT_CURVE.phases.map((p) => [p.name, p.startMin, p.fan])).toEqual([
       ['precool', -30, 'auto'],

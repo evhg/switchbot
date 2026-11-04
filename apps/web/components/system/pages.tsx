@@ -47,6 +47,7 @@ import {
   useTonightTags,
 } from './model.ts';
 import { ago } from './bands.tsx';
+import { AlertsPage } from './alerts.tsx';
 import { CameraPage } from './camera.tsx';
 import { LocationPage } from './location.tsx';
 import { PresencePage, TonightBlock } from './presence.tsx';
@@ -864,6 +865,7 @@ export const SYSTEM_SCREENS: Record<SystemSlug, () => ReactNode> = {
   location: () => <LocationPage />,
   general: () => <GeneralPage />,
   morning: () => <MorningPage />,
+  alerts: () => <AlertsPage />,
   data: () => <DataPage />,
   health: () => <HealthPage />,
   camera: () => <CameraPage />,

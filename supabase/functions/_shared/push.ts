@@ -1,4 +1,4 @@
-// Web Push to every household subscription (push_subscriptions): success resets failures, 404/410 deletes the
+// Web Push to every household subscription (push_subscriptions), or only some users' (opts.userIds): success resets failures, 404/410 deletes the
 // subscription, anything else counts a failure. Keys come from Vault (vapid.ts), created on first use.
 import { optEnv } from './env.ts';
 import type { Db } from './supabase.ts';
@@ -44,15 +44,20 @@ export interface PushSummary {
   failed?: number;
 }
 
-export async function pushToAll(
-  db: Db,
-  n: NotificationContent,
-  topic: string,
-  opts: { urgency?: 'very-low' | 'low' | 'normal' | 'high'; ttlSec?: number } = {},
-): Promise<PushSummary> {
+export interface PushOptions {
+  urgency?: 'very-low' | 'low' | 'normal' | 'high';
+  ttlSec?: number;
+  /** Only these users' subscriptions (push_subscriptions.user_id); omitted = every subscription. */
+  userIds?: readonly string[];
+}
+
+export async function pushToAll(db: Db, n: NotificationContent, topic: string, opts: PushOptions = {}): Promise<PushSummary> {
+  if (opts.userIds && !opts.userIds.length) return { skipped: 'no recipients', subscriptions: 0, sent: 0 };
   const keys = await loadVapidKeys(db, { create: true });
   if (!keys) return { skipped: 'no VAPID keys' };
-  const { data, error } = await db.from('push_subscriptions').select('id,endpoint,p256dh,auth,failures');
+  let q = db.from('push_subscriptions').select('id,endpoint,p256dh,auth,failures');
+  if (opts.userIds) q = q.in('user_id', [...opts.userIds]);
+  const { data, error } = await q;
   if (error) throw new Error(`push_subscriptions: ${error.message}`);
   const subs = (data ?? []) as { id: number; endpoint: string; p256dh: string; auth: string; failures: number }[];
   const message = declarativePayload(n);

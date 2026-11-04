@@ -9,6 +9,7 @@ import { DEFAULT_CURVE, MANUAL_COMFORT_TARGET_C, SLEEP_AIR_WEIGHTS, SLEEP_SCORE_
 import { personColor, personName, useData, useNightDetail, useNightInfo, useSelectedNight, withNames } from '@/lib/data/context.tsx';
 import { curveById, fetchNightCurveId } from '@/lib/data/supabase.ts';
 import { tonightDate } from '@/lib/tonight.ts';
+import { experimentLine, useExperiments } from '@/lib/experiments.ts';
 import { usePlannedCurve } from '@/lib/curve-store.ts';
 import { dayLabel, dur, fmt, hm, ictDate as ictDateOf, ictMidnight as ictMidnightOf, tidyReport } from '@/lib/format.ts';
 import { clock, planTimes } from '../system/model.ts';
@@ -126,6 +127,7 @@ export function TodayScreen() {
   }, [live]);
   const plan = live ? curveById(tonightCurve, latest?.curves) : localPlan;
   const [sheet, setSheet] = useState<SheetKind>(null);
+  const experiments = useExperiments();
   const dataset = latest;
   // useNightDetail keeps the previous night's detail while the next loads: never mix nights.
   const detail = rawDetail && sel && rawDetail.date === sel.night.date ? rawDetail : null;
@@ -234,6 +236,7 @@ export function TodayScreen() {
           roomOnly={roomOnly}
           note={note}
           side={<ConnectHealthCard everSynced={everSynced} />}
+          experiment={experiments.loading || (live && !experiments.real) ? null : experimentLine(experiments, night.date, experiments.tonight, isLatest)}
         />
         <LightsOut model={model} />
         <TheNight model={model} steps={steps} onOpenStrip={() => setSheet({ kind: 'strip' })} />

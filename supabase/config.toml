@@ -95,3 +95,11 @@ verify_jwt = false
 # Night sounds (minutes + events, classified on the Mac) and "listen now?"; any household presence token (0024).
 [functions.night-sound]
 verify_jwt = false
+
+# Lab › Experiments engine: tonight's arm, the 20:30 push, outcomes + verdict, Autopilot; cron or an owner/member's JWT (0025).
+[functions.experiments]
+verify_jwt = false
+
+# Phone alerts: Fitbit battery, a band not syncing, the night listener stopped; cron or an owner/member's JWT (0026).
+[functions.alerts]
+verify_jwt = false

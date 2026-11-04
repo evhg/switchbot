@@ -21,7 +21,7 @@ export const ONE_BEEP_V2: TemperatureCurve     // 'one-beep-v2' (default 2026-10
 //   LIGHTS-OUT) · deep +30 19 · middle +270 21 = THE warming step · late +360 21 · wake +570 21 (from SLEEP ONSET)
 export const ONE_BEEP_V1: TemperatureCurve     // 'one-beep-v1' (default 2026-10-29): same, every phase from lights-out (wake +510)
 export const CURVE_V1: TemperatureCurve        // 'default-v1': precool −90, ramp, 3 beeps while asleep
-export const BUILTIN_CURVES                    // [DEFAULT_CURVE, STEADY_18_5_V1, ONE_BEEP_V2, ONE_BEEP_V1, CURVE_V1]
+export const BUILTIN_CURVES                    // [DEFAULT_CURVE, STEADY_18_5_V1, ONE_BEEP_V2, ONE_BEEP_V1, CURVE_V1, ...EXPERIMENT_CURVES]
 // CurvePhase.fan?: FanSpeed (optional): the phase's fan; omitted = 'auto' for a ladder remote, else 'high' for precool,
 // 'low' after. fanFor(remote, phaseName, curve?) applies it. remoteCommand picks the ladder button with the nearest
 // setpoint and, among buttons with that setpoint, the one whose fan (then mode) matches; other ties keep ladder order.
@@ -396,4 +396,98 @@ export function wakeTriggers(cathWakeStarts, minutes, events, { lookbackMs = 120
 //   snore: such a minute with snoreS ≥ 10 or a snore event in it; loud: an event in [wakeAt − lookback, wakeAt + slack]
 //   with peakDb ≥ floor + 15 dB (floor = the event minute's dbFloor, else the night's median). "4 of your 6 wake-ups
 //   came within 2 min of snoring" = withSnore of heard.
+```
+
+## experiments/ (2026-11-04)
+
+```ts
+// Lab › Experiments (migration 0025, experiments Edge Function). Arms JSON is stored as-is in experiments.arms.
+export interface ExperimentArm { key: string; label: string; curve_id?: string /* auto */; instruction?: string /* manual */; tag?: TagKey }
+export interface Experiment { id?; slug; title; kind: 'auto' | 'manual'; arms: ExperimentArm[] /* first = control */;
+  primaryOutcome: string /* OutcomeKey */; status: 'running' | 'finished' | 'stopped'; startedOn; endedOn?; winnerArm?;
+  seed: number; autopilot?: boolean; notes?; minPerArm? /* 4 */; maxNights? /* 21 */ }
+export interface ExperimentNight { nightDate; armKey; source: 'random' | 'pinned'; followed: boolean; outcomes: NightOutcomes | null }
+export interface PersonOutcomes { onsetMin; deepMin; remMin; lightMin; awakeMin; awakenings }
+export interface NightOutcomes { people: Record<personId, PersonOutcomes>; co2Mean; co2Over1000Min; tempMean; snoreMin /* null = none */;
+  missing: string[] /* 'room' | 'sound' | 'sleep:a' | 'sleep:b' */ }
+export function personOutcomes(stages, lightsOut): PersonOutcomes | null   // onset = lights-out → first non-awake stage (≥ 0);
+//   minutes between the first and last sleep stage; awakenings = awake runs ≥ 2 min (back-to-back awake segments merged)
+export function nightOutcomes({ lightsOut, wake, sleep: Record<id, StageSegment[] | null>, room, sound? }): NightOutcomes
+//   room lights-out → wake, plausible CO₂ only, ≥ 30 readings; minutes > 1000 weigh each reading up to 5 min;
+//   snoreMin = sound minutes with snoreS ≥ SNORE_MIN_S (10)
+export const MIN_NIGHTS_PER_ARM = 4, MAX_EXPERIMENT_NIGHTS = 21, CLEAR_P = 0.9, LEANING_P = 0.75, EXPERIMENT_PEOPLE = { a: 'Cath', b: 'Erik' }
+export function outcomeDefs(names?): OutcomeDef[]   // keys: sleep_score, co2_mean, co2_over_1000, <id>_score|_onset|_deep|_rem|
+//   _awake|_awakenings, snore_min, temp_mean (info: shown, never in the verdict). OutcomeDef {key,label,unit,better,info?,words,decimals,person?}
+export function outcomeValue(o, key, scores?): number | null; export function hasOutcome(o, key): boolean
+export function sleepScores(nights): Map<nightDate, Record<id, number>>
+//   Sleep score = (z(deep) + z(REM) − z(awake min) − z(awakenings)) / 4, z against the experiment's own nights per person
+//   (0 = an average night; a component without spread counts 0). sleep_score (household) = mean of the people's.
+export function nightCounts(exp, night, pendingCounts?): boolean   // followed, a known arm, data for the primary outcome
+export function assignArm(exp, nights, nightDate): string
+//   balanced blocks of arms.length over COUNTED nights, block order = seeded shuffle(seed ^ block); a night that doesn't
+//   count repeats its slot; pins take their place (all arms used → fewest counted); not-yet-computed nights count, and
+//   so do nights computed without data within OUTCOMES_PENDING_DAYS (2) before tonight (a late sync may fill them)
+export function analyzeExperiment(exp, nights, { names? }?): ExperimentAnalysis
+//   { status: 'running' | 'leaning' | 'clear_winner' | 'no_difference'; done (counted ≥ maxNights); primary;
+//     perOutcome: [{ key, label, unit, better: 'higher' | 'lower', info?, person?, arms: { [arm]: { n, mean, sd } },
+//       versus /* challenger */, diff /* challenger − control */, lo, hi /* 90 % */, pBetter, text }];
+//     verdict; control; leader; winner; counts; counted; excluded; minPerArm; maxNights; comparisons }
+//   Welch t posterior (flat priors). Status on the primary: running until every arm has minPerArm counted nights;
+//   P ≥ 0.9 (or ≤ 0.1 for every challenger) → clear_winner; ≥ 0.75 / ≤ 0.25 → leaning; else no_difference.
+//   verdict: "Door open a crack: Sleep score 0.41 higher (90 %: 0.2–0.62), CO₂ 178 ppm lower, Cath's awakenings 1.2
+//   fewer — clearly better (P=0.99). 6 vs 6 nights." / "Too early: 3 vs 3 nights so far, 4 each needed. …"
+//   An interval crossing zero reads "(90 %: −0.27 to 0.43)" (true minus, "to").
+export function experimentLine(exp, nights, nightDate): string | null   // "Experiment: door OPEN a crack (night 1 of ≥8)"
+export const EXPERIMENT_TEMPLATES   // 5: door-open-vs-closed (manual; open → tag door_ajar), earplugs, aircon-late-19-5
+//   (auto: steady-18-5-quiet-v1 vs warm-late-19-5-quiet-v1), no-screens, no-alcohol; primary sleep_score each
+export const AUTOPILOT_CANDIDATES /* EXPERIMENT_CURVES ids, then DEFAULT_CURVE.id */, AUTOPILOT_MIN_PER_ARM = 6, AWAKENINGS_WORSE_P = 0.75
+export function autopilotStep({ enabled, defaultCurveId, running: { exp, nights } | null, history, candidates? }):
+//   { action: 'none' | 'start' (curveId) | 'adopt' (arm, curveId) | 'finish' | 'stop'; reason }
+//   adopt only on clear_winner for the challenger with no person's awakenings P(more) ≥ 0.75; off stops only its own
+export function nextCandidate(defaultCurveId, history /* only status 'finished' (or no status) counts as tested */, candidates?); autopilotArms(def, cand); autopilotExperiment(def, cand, startedOn, seed)
+// stats: welchPosterior(a, b, level = 0.9), tCdf, tQuantile, incBeta, sampleMean, sampleSd, seededRandom, shuffled
+```
+Curve variants in `curve.ts` (`EXPERIMENT_CURVES`, also in `BUILTIN_CURVES` after the five older ones):
+`warm-late-19-5-quiet-v1` (18.5, 19.5 from lights-out + 300), `steady-19-5-quiet-v1` (flat 19.5),
+`cool-early-warm-late-v1` (18, 19.5 from + 300). Same shape as DEFAULT_CURVE (pre-cool −30 fan auto, low from +30,
+minC 17). The controller's "never warmer while asleep" holds for emergencies and re-measured biases; a planned step may
+warm (one-beep curves), so each variant warms at most once, at 03:00, after the deep-sleep window.
+
+## alerts/ (2026-11-04)
+
+```ts
+// alerts/alerts.ts: the pure decisions behind the phone alerts (alerts Edge Function, migration 0026). ICT for all text.
+export const CHARGE_RISE = 3 /* points: a rise this big is a charge */, DRAIN_MIN_SPAN_MS = 3 h, BATTERY_HOURS_LEFT = 24,
+  BATTERY_LOW = 15, BATTERY_LOW_NO_RATE = 20, STALE_SYNC_MS = 6 h, SERVER_SYNC_FRESH_MS = 2 h, LISTENER_SILENT_MS = 10 min
+export const BATTERY_HOURS = { from: '08:00', until: '21:30' }, STALE_HOURS = { from: '08:00', until: '22:00' }  // ICT, [from, until)
+export interface BatteryReading { ts; level /* 0..100 */ }
+export interface DrainEstimate { level; at /* last reading */; levelNow /* projected to now */; ratePerHour: number | null /* %/h ≥ 0 */;
+  hoursLeft: number | null; cycleStart /* first reading after the last charge = the cycle's id */; readings }
+export function batteryCycle(readings): BatteryReading[]   // valid, sorted, deduped by ts, from the last rise ≥ 3 points
+export function estimateDrain(readings, now): DrainEstimate | null
+//   least-squares slope over the cycle once it spans ≥ 3 h (else rate null); levelNow = level − rate × hours since;
+//   hoursLeft = levelNow / rate (null while the rate is unknown or 0)
+export function needsCharge(e): boolean        // levelNow ≤ 15, or hoursLeft < 24, or (no rate and levelNow ≤ 20)
+export function batteryText(e): string         // "83 %, ~5 days left" | "18 %, ~14 h left" | "40 %"
+export function hoursLeftText(h): string       // "under an hour" | "14 h" (< 48) | "5 days"
+export function inIctHours(now, { from, until }): boolean
+export function whenText(ts, now): string      // "14:20" | "yesterday 14:20" | "Mon 14:20"
+export function ictHm(ts): string
+export interface AlertDecision<S> { send; reason; title?; body?; state: S /* store when sent */ }
+export function batteryAlert({ name, estimate, state: { cycle }, now }): AlertDecision<{ cycle }>
+//   once per discharge cycle (state.cycle === estimate.cycleStart → no), only 08:00–21:30 (a night crossing waits for
+//   08:00). body "Charge your Fitbit before bed — 18 %, about 14 h left" (no rate: "… — 18 %"); title "Erik’s Fitbit battery"
+export function staleAlert({ name, seenAt, checkedAt, checkOk?, state: { seenAt }, now }): AlertDecision<{ seenAt }>
+//   seenAt = greatest(device_last_sync_at, newest_point_at); stale when now − seenAt > 6 h AND the server's own sync
+//   (checkedAt = band_sync.last_sync_at) ran ≤ 2 h ago and did not fail (checkOk = last_sync_ok ≠ false); 08:00–22:00;
+//   once per seenAt (episode).
+//   body "Erik’s Fitbit hasn’t synced since 14:20 — open the Fitbit app"
+export function listenerAlert({ listening, night, from, lastMinute, listeningSince?, macLabel, state: { night }, now }): AlertDecision<{ night }>
+//   listening (night-sound's decision) and ≥ 10 min since the newest sound_minutes row ended (or since `from` when none
+//   arrived in the window) and since listeningSince (the current listen stretch); once per night.
+export function nextListenerWatch(prev: { since, night } | null, listening, night, now): { since, night } | null
+//   kept while listening continues the same night; restarted at now after a pause / late arrival / new night "Night listener stopped at 01:43 — check Erik’s Mac" | "… didn’t start at 21:45 …"
+export interface AlertSettings { battery; staleSync; listener }  // DEFAULT_ALERT_SETTINGS = all true
+export function parseAlertSettings(jsonb): AlertSettings          // {battery, stale_sync, listener}; missing / non-boolean = on
+export function batteryFromDevices(devices): { level; ts: Ms | null } | null  // pairedDevices: TRACKER first, else first numeric
 ```

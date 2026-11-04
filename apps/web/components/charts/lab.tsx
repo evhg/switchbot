@@ -192,6 +192,7 @@ export function IntervalPlot({
   animKey = '',
   progressLabel,
   axisLabel,
+  ciLabel = '95% interval',
 }: {
   rows: IntervalRow[];
   zero?: number;
@@ -203,6 +204,8 @@ export function IntervalPlot({
   progressLabel?: (r: IntervalRow) => string;
   /** Axis title with the unit, e.g. "Change in deep sleep, min". */
   axisLabel?: string;
+  /** The interval's name in the tooltip and label (Lab › Experiments uses 90 %). */
+  ciLabel?: string;
 }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const box = useRevealClass<HTMLDivElement>();
@@ -231,7 +234,7 @@ export function IntervalPlot({
     <div ref={ref} className="chart-box">
       <div ref={box} className={s.ivp}>
         {width > 0 && (
-          <svg width={w} height={H} role="img" aria-label="Estimates with 95% intervals">
+          <svg width={w} height={H} role="img" aria-label={`Estimates with ${ciLabel}s`}>
             {ticks.map((t) => (
               <g key={t}>
                 <line x1={x(t)} x2={x(t)} y1={zero !== undefined ? 24 : 0} y2={axisY - 30} stroke="var(--grid)" />
@@ -301,7 +304,7 @@ export function IntervalPlot({
             {rows[hover].label}
           </div>
           <TipRow color={rows[hover].color} value={`${zero !== undefined ? sgn(rows[hover].est, digits) : fmt(rows[hover].est, digits)} ${unit}`} label="estimate" />
-          <TipRow value={zero !== undefined ? `${sgn(rows[hover].lo, digits)} to ${sgn(rows[hover].hi, digits)}` : `${fmt(rows[hover].lo, digits)} to ${fmt(rows[hover].hi, digits)}`} label="95% interval" />
+          <TipRow value={zero !== undefined ? `${sgn(rows[hover].lo, digits)} to ${sgn(rows[hover].hi, digits)}` : `${fmt(rows[hover].lo, digits)} to ${fmt(rows[hover].hi, digits)}`} label={ciLabel} />
           {rows[hover].sub && <TipRow value={rows[hover].sub} label={rows[hover].progress !== undefined ? 'nights tagged vs not' : ''} />}
         </FloatTip>
       )}

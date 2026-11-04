@@ -604,6 +604,76 @@ POST {"camera":"bedroom",                 optional slug, default "bedroom"
 - **Deploy**: apply `0024_night_sounds.sql`, deploy `night-sound` (`verify_jwt = false`, in `config.toml`). The
   living-room face recognition (`camera-event`) is retired on the Mac; `camera_events` is left as it is.
 
+## Experiments (migration 0025)
+
+Decided 2026-11-04 ("build experiments … but think bigger"). **Lab › Experiments** compares 2 (max 3) arms over
+nights, randomised, and says which is better per outcome. Core: `packages/core/src/experiments` (CONTRACT.md
+"experiments/"); engine: Edge Function `experiments` (`_shared/experiments.ts`); tables: `experiments`,
+`experiment_nights`, `experiment_log`; `household_settings.autopilot`.
+
+- **Kinds.** `auto` = Sleep Lab switches the arm: each arm is an aircon curve (`arms[].curve_id`); the engine sets
+  `nights.curve_id` for the upcoming night (`experiment_apply_night`) between 12:00 ICT and lights-out − 45 min (the
+  pre-cool starts at −30). ac-curve needs no change: it reads `nights.curve_id` (`loadCurve`) on every 5-min tick. A
+  curve is only replaced when the night still has the **default curve or one of the arms' curves**: a curve chosen by
+  hand (`set_night(p_curve_id)` or the dashboard) wins, and that night is marked not followed. `manual` = the household
+  does it: at **20:30 ICT** (or lights-out − 30 min if earlier) one push to every phone, "Tonight's experiment: Door OPEN
+  a crack" (claimed with `experiment_nights.notified_at`, so once per night); an arm's `tag` (only existing tags, e.g.
+  `door_ajar`) is added to the night (recorded in `experiment_nights.applied_tag`; on a re-pin only that tag is taken
+  off, tags set by hand stay; a night already carrying another arm's tag by hand is not followed); in the morning
+  "Didn't follow" (`mark_experiment_night(…, false)`) takes the night out. If the 20:30 push reaches nobody (no keys, no
+  subscriptions, every send failed) the claim is released and a later run retries until lights-out + 1 h.
+- **Assignment** (core `assignArm`): balanced randomisation in blocks of (number of arms), order shuffled with
+  `experiments.seed` and the block number, so it is reproducible. Away nights (`nightAway`: Away tonight / travel tag /
+  away period) and, for aircon experiments, nights with `ac_enabled = false` get no assignment. A night that does not
+  count (didn't follow, or no data for the primary outcome) repeats its slot the next night; a night computed without
+  data but still inside the 2-day recompute period keeps its slot (pending), so a late sleep sync can't give two nights
+  of one block the same arm. `pin_experiment_arm`
+  pins a night by hand (replaces a random one; applied at once when the night row exists).
+- **Outcomes** (core `nightOutcomes`, from 10:00 ICT once wake + 1 h has passed; recomputed every 2 h for 2 days for
+  late syncs): Cath (a) and Erik (b) each from their main sleep's stages: sleep onset latency from lights-out, deep /
+  REM / light minutes, awake minutes after onset, awakenings (awake runs ≥ 2 min after onset); room lights-out → wake:
+  CO₂ mean and minutes > 1000 ppm, mean temperature (shown only), snoring minutes (`sound_minutes.snore_s ≥ 10`).
+  **Sleep score** per person = (z(deep) + z(REM) − z(awake min) − z(awakenings)) / 4, z against the experiment's own
+  nights; household `sleep_score` = mean of the two. Primary outcome of every template: `sleep_score`.
+- **Verdict** (core `analyzeExperiment`): per outcome the arm means, challenger − control, a 90 % interval and
+  P(challenger better) from the Welch t posterior (flat priors, unequal variances). Status: `running` until every arm
+  has `min_per_arm` (4; Autopilot 6) counted nights, then `clear_winner` (P ≥ 0.9 either way on the primary),
+  `leaning` (P ≥ 0.75) or `no_difference`. Stored in `experiments.analysis` (`{status, verdict, leader, winner, counts,
+  counted, excluded, done, primary, line}`; `line` = "Experiment: door OPEN a crack (night 1 of ≥8)" for the coming
+  night). At `max_nights` (21) counted nights the experiment finishes on its own. "Adopt winner"
+  (`finish_experiment(id, true)`) makes an aircon arm's curve the default (`curves.is_default`; upcoming nights whose
+  pre-cool has not started move with it, except curves chosen by hand). `undo_adoption()` (owner/member; "Undo: go back
+  to …" under Autopilot) restores the curve before the newest adoption (one step).
+- **Hand-chosen curves**: `nights.curve_source` (`user` | `experiment` | `default`, null = not recorded) — `set_night`
+  with a curve records `user`; the engine never replaces it (that night is not followed) and adoptions / finishing leave
+  it alone. In the morning an aircon night whose `nights.curve_id` is not its arm's curve (changed after it was applied)
+  is marked not followed and logged; `mark_experiment_night(…, true)` refuses such a night. The decision log gets an
+  `analysis` entry only when the status, verdict or counts change.
+- **Autopilot** (off by default; `set_autopilot(true)`): when no aircon experiment runs, it starts the next candidate
+  against the current default (core `AUTOPILOT_CANDIDATES`: `warm-late-19-5-quiet-v1`, `steady-19-5-quiet-v1`,
+  `cool-early-warm-late-v1`, then the original `steady-18-5-quiet-v1` so it is re-tested after an adoption; each
+  skipped once a *finished* test ran against that default — a test stopped by switching Autopilot off is retried), runs it (≥ 6 counted nights per arm), adopts it
+  only when it is the clear winner on the sleep score **and** neither person's awakenings got worse (P(more) ≥ 0.75
+  blocks it), else keeps the default, then moves on. Switching it off stops its running experiment (one started by hand is
+  left alone). Every decision goes to `experiment_log` (kind `autopilot`; "nothing to do" only when its reason changes).
+- **Curve variants** (core `EXPERIMENT_CURVES`, inserted with `is_default = false`): the default's shape (pre-cool −30
+  fan auto, fan low from +30, minC 17, every phase from lights-out). The controller forbids warming while asleep only for
+  emergencies and re-measured biases, not for a planned step (one-beep curves have one); the variants warm at most once,
+  at lights-out + 300 min (03:00), after the deep-sleep window. Tests: every plan and every simulated controller command
+  ≥ 17, emergencies only cool, warming only as that planned step (`packages/core/test/experiments.test.ts`).
+- **RPCs** (owners/members): `create_experiment(p_title, p_kind, p_arms, p_primary = 'sleep_score', p_slug, p_notes,
+  p_started_on = tomorrow's wake date, p_pin_tonight)` (one running experiment per kind: unique index; 2–3 arms with
+  unique keys; auto arms need a known curve, manual arms an instruction) · `pin_experiment_arm(p_experiment, p_night,
+  p_arm)` · `mark_experiment_night(p_experiment, p_night, p_followed)` · `finish_experiment(p_experiment, p_adopt =
+  false, p_arm = winner)` · `set_autopilot(p_on)` · `undo_adoption()`. Service role only: `experiment_apply_night`, `experiment_finish(p_experiment,
+  p_status 'finished'|'stopped', p_adopt_arm, p_reason)`, `adopt_default_curve(p_curve_id)`. Members read the tables.
+- **Tonight (2026-11-04 evening)**: 0025 starts "Door: open a crack vs closed" (`door-open-vs-closed`, arms `closed` /
+  `open` with tag `door_ajar`) with night 2026-11-05 pinned to `open`, unless a household experiment already exists.
+- **Run by hand**: `curl -X POST …/functions/v1/experiments -H "x-cron-secret: $CRON_SECRET"` (or an owner/member JWT)
+  → `{ok, morning: [...], autopilot: {action, reason}, tonight: [{experiment, night, arm, source, applied, pushed}]}`.
+- **Tests**: `packages/core/test/experiments.test.ts`, `supabase/functions/tests/experiments.test.ts`.
+- **Deploy**: apply `0025_experiments.sql`, deploy `experiments` (`verify_jwt = false`, in `config.toml`).
+
 ## Sleep onset (migration 0011)
 
 Decided 2026-10-29: in bed at 22:00 every day, asleep around 23:00, up around 08:30.
@@ -637,6 +707,7 @@ Decided 2026-10-29: in bed at 22:00 every day, asleep around 23:00, up around 08
 | `sleeplab-health-sync-hourly` | `45 * * * *` | every hour at :45 | Light pull (`hours: 6`, `sleepDays: 2`) that keeps `band_sync` fresh for the Presence page (migration 0015) |
 | `sleeplab-calendar-sync` | `23 * * * *` | every hour at :23 | Both Google Calendars → household away nights (0018) |
 | `sleeplab-weather-poll` | `7-59/15 * * * *` | :07, :22, :37, :52 | Outdoor temp/RH → `outdoor_readings` (0018) |
+| `sleeplab-experiments` | `*/15 * * * *` | every 15 min | Experiments (0025): tonight's arm from 12:00, the 20:30 push, outcomes + verdict from 10:00, Autopilot |
 | `sleeplab-housekeeping` | `17 20 * * *` | 03:17 | Prunes `cron.job_run_details` (7 d), `api_quota_log` (60 d), old jobs and OAuth states |
 
 - **The report regenerates after late data** automatically (see `sleeplab-nightly-report`). To regenerate by hand, call `nightly-report` with `{"date": "YYYY-MM-DD"}` (no push unless `"push": true`). Owners and members can do it with their JWT for the last 7 days; `viewer` members are read-only everywhere (also in `set_night`). Scheduled callers use `x-cron-secret`.
@@ -918,3 +989,32 @@ is not set (Open-Meteo until then).
   temperature has climbed for more than 3 min.
 - **frozen_all**: a stretch where all three values repeat is now dropped only when it lasts more than 60 min and has no
   webhook row after its first row.
+
+## Alerts (migration 0026)
+
+Phone pushes from the app instead of an hourly chat check. Function `alerts` (`verify_jwt = false`; pg_cron job
+`sleeplab-alerts` at xx:05/20/35/50, just after the hourly band sync at xx:45; an owner/member may also call it,
+`{"dry":true}` returns the decisions without sending). Decisions are pure in core `src/alerts` (see CONTRACT.md).
+
+| Alert | When | Once per | Hours (ICT) | To |
+|---|---|---|---|---|
+| Fitbit battery: "Charge your Fitbit before bed — 18 %, about 14 h left" | < 24 h left, or ≤ 15 % (≤ 20 % while the drain rate is unknown) | discharge cycle | 08:00–21:30 (a night crossing goes out at 08:00) | that person + owner |
+| Not syncing: "Erik’s Fitbit hasn’t synced since 14:20 — open the Fitbit app" | band last reached Google > 6 h ago while `google-health-sync` ran in the last 2 h and succeeded (`last_sync_ok` not false: a failing server sync, e.g. expired Google sign-in, is not the band) | gap (the "last seen" time) | 08:00–22:00 | that person + owner |
+| Night listener: "Night listener stopped at 01:43 — check Erik’s Mac" | `night-sound` says listen (same `currentListen`), but no `sound_minutes` for 10 min, counted from no earlier than when listening (re)started (after a pause or a late arrival; `alert_state` key `listener_watch`) | night | the listen window | every member |
+
+- **Battery history**: `public.battery_log (person_id, ts, level)`, filled by the trigger `band_sync_battery_log`
+  (AFTER INSERT OR UPDATE on `band_sync`): the TRACKER's `batteryLevel` in `devices`, stamped with its `lastSyncTime`
+  (else `device_last_sync_at`); `on conflict do nothing`, and the trigger never fails the band_sync write. Drain rate =
+  least-squares slope over the current discharge cycle (readings since the last rise of ≥ 3 points), once it spans 3 h.
+  The function reads 14 days so the cycle start (the dedupe id) stays stable.
+- **Dedupe**: `public.alert_state (key, last_sent_at, data)`, keys `battery:<person>`, `stale:<person>`, `listener` (plus `listener_watch`, the start of the current listen stretch, not an alert). It is
+  written only after at least one push went out, so an alert nobody could receive is retried on the next run.
+- **Recipients**: `push_subscriptions.user_id` → `household_members`. `_shared/push.ts` `pushToAll(…, { userIds })`
+  limits a push to those users (omitted = everyone, as before).
+- **Settings**: `household_settings.alerts` jsonb `{"battery":true,"stale_sync":true,"listener":true}` (missing = on);
+  `set_alerts(p jsonb)` merges booleans for those three keys (owner/member; definer in `private`, invoker wrapper).
+- **Optional secret**: `LISTENER_MAC_PERSON` (default `b`): whose Mac the listener message names.
+- **App**: System › Alerts (`/settings/alerts`): the three switches, each band's "83 %, ~5 days left", the last push of
+  each kind, and this device's push switch (the same subscription as the morning report).
+- **Deploy**: apply `0026_alerts.sql`, deploy `alerts`, and redeploy every function that imports `_shared/push.ts`
+  (`ac-curve`, `nightly-report`, `push-admin`, `camera-event`, `experiments`) only when convenient (the change is backwards compatible).

@@ -12,3 +12,5 @@ export * from './food/index.ts';
 export * from './camera/index.ts';
 export * from './location/index.ts';
 export * from './sound/index.ts';
+export * from './experiments/index.ts';
+export * from './alerts/index.ts';

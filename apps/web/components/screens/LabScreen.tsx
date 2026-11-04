@@ -26,6 +26,7 @@ import { lowerYou } from '../story/model.ts';
 import { CompromiseAxis, CorrMatrix, IntervalPlot, MirroredHypnogram, TrendScatter, type IntervalRow } from '../charts/lab.tsx';
 import s from '../charts/lab.module.css';
 import { Icon } from '../icons.tsx';
+import { ExperimentsPanel } from '../lab/Experiments.tsx';
 import { EventList, MoreAnalysis, OnThisPage, PageHeader, Section, Segmented, Sheet, Skeleton } from '../ui.tsx';
 
 type RoomKey = 'earlyTemp' | 'co2Mean' | 'rhMean' | 'ach';
@@ -303,6 +304,7 @@ export function LabScreen() {
     return { sync, best };
   }, [dataset, sel, rows, detail]);
 
+  const names = useMemo(() => Object.fromEntries((dataset?.people ?? []).map((p) => [p.id, p.name])), [dataset?.people]);
   const header = (lede: ReactNode) => <PageHeader title="Lab" lede={lede} />;
   if (!dataset || !sel || !scatter || !corr)
     return (
@@ -375,10 +377,20 @@ export function LabScreen() {
         </section>
       )}
 
-      {/* ───────── 1 Experiment board ───────── */}
+      {/* ───────── 0 Experiments (planned tests) ───────── */}
       <Section
         id="experiments"
         nav="Experiments"
+        title="Experiments: test one change at a time"
+        cap="Two options alternate over nights in random pairs, so the weather and the week can't fake a result."
+      >
+        <ExperimentsPanel names={names} />
+      </Section>
+
+      {/* ───────── 1 Tag board ───────── */}
+      <Section
+        id="tag-board"
+        nav="Tags"
         title={strongest?.significant ? `${strongest.nSig} of ${forest.length} tag splits clear the no-effect line` : `No tag has a clear effect on ${em.noun} yet`}
         cap="Tagged nights minus untagged nights, with a 95% interval. A bar that crosses the dashed line could be nothing."
       >

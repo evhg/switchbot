@@ -2,6 +2,7 @@
 // Scene 1 · Last night (docs/DESIGN.md §9.1). The one reading of the screen: the room score at hero size, its
 // 0–100 scale with "typical 70", the two-tone verdict, then You and Erik. Desktop adds the "at a glance" row and
 // the whole night as a hypnogram strip that opens "The night" below.
+import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { dur, fmt, hm } from '@/lib/format.ts';
 import { scale } from '../charts/common.tsx';
@@ -103,7 +104,10 @@ export function Verdict({
   roomOnly = false,
   note = null,
   side = null,
+  experiment = null,
 }: {
+  /** One line under the night header when the night is part of an experiment (Lab › Experiments). */
+  experiment?: string | null;
   /** No watch data: the room score is the hero reading and `side` (the Google Health card) takes the room's place. */
   roomOnly?: boolean;
   /** One calm sentence about missing or left-out data, under the verdict. */
@@ -127,6 +131,13 @@ export function Verdict({
           <Reveal as="p" className={`label ${s.heroLabel}`} y={10}>
             {label}
           </Reveal>
+          {experiment && (
+            <Reveal as="p" className={`sec ${s.quality}`} y={10} delay={30}>
+              <Link className="link" href="/lab#experiments">
+                {experiment}
+              </Link>
+            </Reveal>
+          )}
           {roomOnly ? (
             <Reveal delay={60}>
               <button type="button" className={s.roomHero} onClick={() => onFocus('room')} aria-label={`Room score ${fmt(score)} out of 100, typical ${TYPICAL}. See what drove it`}>

@@ -17,6 +17,7 @@ import { Button, FeaturedCard, Group, PageHeader, Row, Skeleton, useWidth } from
 import { clock, driftAlerts, planTimes, tagLabel, useMorningReport, usePlanClock, useSetupProgress, useTonightTags } from './model.ts';
 import { useAccountName } from '../Sidebar.tsx';
 import { useCameraSummary } from './camera.tsx';
+import { useAlertsSummary } from './alerts.tsx';
 import { useLocationSummary } from './location.tsx';
 import { usePresenceSummary } from './presence.tsx';
 import s from './system.module.css';
@@ -62,6 +63,7 @@ export function SystemRoot() {
   const presence = usePresenceSummary();
   const camera = useCameraSummary();
   const location = useLocationSummary();
+  const alerts = useAlertsSummary();
   const auth = useAuth();
   const who = useAccountName();
   const drift = useMemo(() => (dataset ? driftAlerts(dataset).length : null), [dataset]);
@@ -76,6 +78,7 @@ export function SystemRoot() {
     tags: tags.length ? (tags.length > 2 ? `${tags.length} tags` : tags.map(tagLabel).join(', ')) : 'None',
     general: `${MODE[mode]}${people ? ` · ${people.map((p) => p.name).join(', ')}` : ''}`,
     morning: morning ? 'On' : 'Off',
+    alerts,
     data: sourceKind === 'sim' ? (dataMode === 'sim' ? 'Simulated' : 'Simulated for now') : 'Real data',
     health: 'Not connected',
     camera,

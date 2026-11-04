@@ -1,0 +1,73 @@
+/* Lab › Experiments (components/lab/Experiments.tsx). Same instrument language as the rest of the Lab:
+   type from role tokens, colour only for meaning (arms are ink / accent / outdoor), hairlines for structure. */
+
+.wrap { display: grid; gap: var(--sp-10); min-width: 0; }
+.note { font-size: var(--t-sec); line-height: 1.5; color: var(--text-2); max-width: var(--measure-text); margin: 0; }
+.cap { font-size: var(--t-cap); line-height: 1.5; color: var(--muted); max-width: var(--measure-text); margin: 0; }
+.err { font-size: var(--t-sec); color: var(--signal); margin: 0; }
+
+/* ───── running experiment ───── */
+.exp { display: grid; gap: var(--sp-6); min-width: 0; padding-top: var(--sp-6); border-top: 1px solid var(--hairline); }
+.expHead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--sp-2) var(--sp-6); }
+.expTitle { font-size: var(--t-head); font-weight: 600; letter-spacing: -0.012em; margin: 0; }
+.kind { font-size: var(--t-cap); color: var(--muted); }
+.verdict { font-size: var(--t-head); font-weight: 400; line-height: 1.4; color: var(--text); max-width: 46rem; margin: 0; }
+
+.tonight { display: grid; gap: var(--sp-3); padding: var(--sp-5); border: 1px solid var(--hairline-2); border-radius: var(--r-m); background: var(--surface); }
+.tonightArm { font-size: var(--t-head); font-weight: 600; margin: 0; }
+.tonightArm small { font-size: var(--t-sec); font-weight: 400; color: var(--muted); margin-left: var(--sp-2); }
+.pinRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); }
+
+.arms { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-6); margin: 0; padding: 0; list-style: none; font-size: var(--t-sec); color: var(--text-2); }
+.arms li { display: inline-flex; align-items: center; gap: 8px; }
+.arms i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.arms b { font-weight: 560; color: var(--text); font-variant-numeric: tabular-nums; }
+
+.bar { position: relative; height: 4px; border-radius: 2px; background: var(--hairline); overflow: hidden; max-width: 320px; }
+.bar i { position: absolute; inset: 0 auto 0 0; background: var(--text); border-radius: 2px; transform-origin: left center; }
+
+.grid { display: grid; gap: var(--sp-8); min-width: 0; }
+@media (min-width: 1280px) { .grid { grid-template-columns: minmax(0, 1fr) clamp(280px, 32%, 420px); column-gap: var(--sp-12); align-items: start; } }
+.col { display: grid; gap: var(--sp-5); min-width: 0; align-content: start; }
+
+.table { width: 100%; border-collapse: collapse; font-size: var(--t-sec); }
+.table th { text-align: left; font-weight: 400; color: var(--muted); font-size: var(--t-cap); padding: 0 var(--sp-3) var(--sp-2) 0; border-bottom: 1px solid var(--hairline); }
+.table td { padding: var(--sp-2) var(--sp-3) var(--sp-2) 0; border-bottom: 1px solid var(--hairline); color: var(--text-2); vertical-align: baseline; font-variant-numeric: tabular-nums; }
+.table td:first-child { color: var(--text); }
+.table tr.primary td:first-child { font-weight: 600; }
+.table td.good { color: var(--text); font-weight: 560; }
+.tableWrap { overflow-x: auto; min-width: 0; }
+
+.nights { list-style: none; margin: 0; padding: 0; display: grid; }
+.nights li { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); min-height: 48px; border-bottom: 1px solid var(--hairline); font-size: var(--t-sec); }
+.nights li > span { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-2); }
+.nights li > span b { font-weight: 560; color: var(--text); white-space: nowrap; }
+.nights li.off > span { text-decoration: line-through; text-decoration-color: var(--muted); }
+.nights i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+
+.choices { display: grid; gap: var(--sp-2); }
+.choice { display: flex; align-items: center; gap: var(--sp-3); min-height: 44px; padding: 0 var(--sp-4); border: 1px solid var(--hairline-2); border-radius: var(--r-m); font-size: var(--t-sec); color: var(--text); cursor: pointer; }
+.choice:has(input:checked) { border-color: var(--text); font-weight: 560; }
+.choice input { margin: 0; flex: none; accent-color: var(--text); }
+.choice span { min-width: 0; overflow-wrap: anywhere; }
+
+.actions { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+
+/* ───── templates ───── */
+.templates { display: grid; gap: var(--sp-4); grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); margin: 0; padding: 0; list-style: none; }
+.tpl {
+  width: 100%; height: 100%; display: grid; gap: var(--sp-2); align-content: start; text-align: left; padding: var(--sp-5);
+  border: 1px solid var(--hairline-2); border-radius: var(--r-m); background: var(--surface); color: var(--text); font: inherit;
+}
+.tpl:hover:not(:disabled) { border-color: var(--muted); }
+.tpl:disabled { opacity: .5; cursor: not-allowed; }
+.tpl b { font-size: var(--t-body); font-weight: 600; }
+.tpl span { font-size: var(--t-sec); color: var(--text-2); line-height: 1.45; }
+.tpl em { font-style: normal; font-size: var(--t-cap); color: var(--muted); }
+
+.sheet { display: grid; gap: var(--sp-6); padding-bottom: var(--sp-6); min-width: 0; }
+
+/* ───── autopilot ───── */
+.auto { display: grid; gap: var(--sp-4); max-width: var(--measure-plan); }
+.autoRow { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-6); }
+.autoRow p { margin: 0; }
