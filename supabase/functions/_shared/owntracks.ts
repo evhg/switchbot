@@ -48,6 +48,30 @@ export async function readBodyLimited(req: Request, max: number = OWNTRACKS_MAX_
  * informational and ignored), else X-Presence-Token, else "Authorization: Bearer slp_…" (for curl tests).
  * Trimmed and lower-cased; the caller still checks PRESENCE_TOKEN and the database.
  */
+/** Device-token kinds OwnTracks accepts (migration 0028): a night-listener token may not post locations or home/away. */
+export const OWNTRACKS_DEVICE_KINDS = ['phone', 'device'] as const;
+
+type RpcResult = { data: unknown; error: { message: string; code?: string } | null };
+type RpcCaller = { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<RpcResult> };
+
+/** The RPC does not exist yet (PostgREST PGRST202 / Postgres 42883): migration 0028 is not applied. */
+export function isMissingRpc(error: { message: string; code?: string } | null): boolean {
+  if (!error) return false;
+  return error.code === 'PGRST202' || error.code === '42883' || /could not find the function/i.test(error.message);
+}
+
+/**
+ * The person an OwnTracks token belongs to: a presence token, or a non-revoked device token of kind phone/device
+ * (presence_token_person_kinds, 0028). Before 0028 there are no device tokens, so presence_token_person (0022) is
+ * the same check. Returns { error } for a database failure, { person: null } for an unknown/refused token.
+ */
+export async function owntracksPerson(db: RpcCaller, token: string): Promise<{ person: string | null; error?: string }> {
+  let res = await db.rpc('presence_token_person_kinds', { p_token: token, p_kinds: [...OWNTRACKS_DEVICE_KINDS] });
+  if (isMissingRpc(res.error)) res = await db.rpc('presence_token_person', { p_token: token });
+  if (res.error) return { person: null, error: res.error.message };
+  return { person: typeof res.data === 'string' && res.data ? res.data : null };
+}
+
 export function owntracksToken(headers: Headers): string | null {
   const auth = headers.get('authorization')?.trim() ?? '';
   const basic = auth.match(/^Basic\s+([A-Za-z0-9+/=_-]+)$/i);

@@ -428,7 +428,9 @@ malformed or unknown token) · `405` (not POST) · `500 {"error":"internal"}`. A
 `rejected`; the rest are stored. `(camera, ts, label)` is unique, so retrying a batch is safe (`duplicates`).
 
 - **Auth**: `presence_token_person(token)` (service role) returns the token's person without recording presence or
-  touching `last_used_at`, so the phones' Shortcut status stays readable. Rotating that person's token breaks the Mac too.
+  touching the presence token's `last_used_at`, so the phones' Shortcut status stays readable. Since migration 0028 it
+  also accepts device tokens, so the Mac should use its own (see "Device tokens (migration 0028)"); rotating a person's
+  presence token then no longer breaks it.
 - **Unknown-person push**: a newly stored `unknown` sighting at most 30 min old, while **nobody is home** (every
   person's latest phone signal is `away`, however old; a person with no signal counts as possibly home), sends one push
   "Unknown person seen at home (living room, HH:MM)" (ICT) to every subscription, opening System › Camera.
@@ -1018,3 +1020,40 @@ Phone pushes from the app instead of an hourly chat check. Function `alerts` (`v
   each kind, and this device's push switch (the same subscription as the morning report).
 - **Deploy**: apply `0026_alerts.sql`, deploy `alerts`, and redeploy every function that imports `_shared/push.ts`
   (`ac-curve`, `nightly-report`, `push-admin`, `camera-event`, `experiments`) only when convenient (the change is backwards compatible).
+
+## Device tokens (migration 0028)
+
+Added 2026-11-04 after rotating Erik's presence token for his phone's OwnTracks stopped the Mac's night listener, which
+used the same token. Any device that acts for a person now gets its own token.
+
+- **Table** `private.device_tokens (id, person_id, label 1–60 chars, kind 'listener' | 'phone' | 'device', token_hash
+  unique, created_at, created_by, last_used_at, revoked_at)`: RLS on, no access for anon/authenticated (definer
+  functions only), service_role all. Only the SHA-256 (`private.presence_token_hash`) is stored. Revoking sets
+  `revoked_at`; rows are kept and listed as Revoked.
+- **Format**: the same as presence tokens, `slp_` + 64 hex (256 random bits), so `PRESENCE_TOKEN` in
+  `_shared/presence.ts`, the token parsing of every function and all clients are unchanged.
+- **Resolution**: `presence_token_person(token)` (camera-event, night-sound) returns the person of a presence token,
+  else of a non-revoked device token of any kind, and sets that device token's `last_used_at` (at most once a minute).
+  Now `volatile` (it writes); name, argument and return type are unchanged. New `presence_token_person_kinds(token,
+  kinds text[])` (service_role) does the same but accepts only device tokens of the listed kinds (null = any);
+  owntracks calls it with `{phone,device}` (`owntracksPerson` in `_shared/owntracks.ts`, falling back to
+  `presence_token_person` while 0028 is not applied). `record_presence(token, state, source)` (the `presence` function)
+  also accepts non-revoked device tokens of kind `phone` or `device` (e.g. a second phone's Shortcut). So a `listener`
+  token is refused by `presence` and owntracks (401: no home/away, no locations) and accepted only by night-sound and
+  camera-event. `source` / `via` are unchanged.
+- **RPCs** (definer in `private`, invoker wrapper in `public`, `authenticated`):
+  `create_device_token(person, label, kind default 'listener') → (id, token)` returns the plain token once;
+  `revoke_device_token(id) → boolean` (true when this call revoked it); both need an owner/member role and the own
+  person (`household_members.person_id`) unless household owner, the same rule as `rotate_presence_token` (0010).
+  `list_device_tokens() → (id, person_id, label, kind, created_at, last_used_at, revoked_at)` for any household member,
+  never the hash.
+- **App**: System › Presence › Other devices (`/settings/presence#devices`, `apps/web/lib/device-tokens.ts`): each token
+  with its label, whose it is, last use and Working / Waiting / Revoked, Revoke (with a confirm step), and "New device
+  token" (name default "Night listener (Erik’s Mac)", person default Erik, kind Night listener / Phone / Other). After
+  creating, the token is shown once with Copy buttons; for a night listener also the line to paste into the Mac
+  session. Before the migration the group says so; signed out / simulator shows a sample row. System › Camera's night
+  sounds group links to it ("Night listener token").
+- **Deploy**: apply `0028_device_tokens.sql`, then redeploy `owntracks` (the only function that changed; it works
+  before and after the migration, so the order does not matter). The others call the same RPCs as before. Then create
+  a Night listener token for Erik in System › Presence › Other devices and paste it on the Mac
+  (`~/sleep-lab-home/night-sound/token`, 0600); from then on the phone's token can be rotated freely.

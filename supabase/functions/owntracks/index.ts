@@ -6,7 +6,8 @@
 //   {"_type":"location","lat":7.88,"lon":98.39,"tst":1793606700,"acc":12,"batt":87,"conn":"w","SSID":"…", …}
 //   (or an array of messages; X-Presence-Token or "Authorization: Bearer slp_…" also work, for curl tests)
 //   {"ping":true}                      → {"ok":true,"person":"a"} (checks the token, stores nothing)
-// The person comes from the token (presence_token_person, migration 0022; the user name is ignored). Core
+// The person comes from the token (presence_token_person_kinds, migration 0028: a presence token or a phone/device
+// device token, never a night-listener one; presence_token_person (0022) before 0028; the user name is ignored). Core
 // location/owntracks.ts parses the messages: 'location' fixes and 'transition' (region enter/leave) messages go to
 // public.locations (migration 0023; (person_id, ts) is unique, so the phone's retries store nothing twice); waypoints,
 // lwt and other types are ignored. Home/away: the newest fresh message of the batch (≤ 60 min old, newer than the
@@ -29,6 +30,7 @@ import {
   friendsResponse,
   homeFromSettings,
   OWNTRACKS_MAX_BODY,
+  owntracksPerson,
   owntracksToken,
   presenceDecision,
   readBodyLimited,
@@ -53,12 +55,12 @@ serve(async (req) => {
 
   // The token is checked before the body is read, so unknown callers never get a body buffered.
   const db = serviceClient();
-  const who = await db.rpc('presence_token_person', { p_token: token });
+  const who = await owntracksPerson(db, token);
   if (who.error) {
-    console.error('presence_token_person', who.error.message);
+    console.error('presence_token_person_kinds', who.error);
     return json({ error: 'internal' }, 500);
   }
-  const person = typeof who.data === 'string' ? who.data : null;
+  const person = who.person;
   if (!person) return unauthorized();
 
   const text = await readBodyLimited(req, OWNTRACKS_MAX_BODY);

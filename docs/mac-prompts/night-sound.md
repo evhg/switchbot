@@ -9,7 +9,7 @@ We're changing what this Mac does with the SwitchBot camera. The camera (Pan/Til
 - **The Mac only listens, and only while we sleep.** A new "night listener" asks the Sleep Lab backend every 60 s whether to listen. Only while the answer is `listen: true` does it read the camera's **audio** from go2rtc (video dropped). It classifies the sound here on the Mac with Google's YAMNet model through MediaPipe, and posts per-minute summaries and short event records. For notable moments it also uploads ~10 s clips. When the answer is `listen: false`, no audio process runs at all.
 
 Safety rules. These apply to every step:
-- **Never print, echo, log or commit the presence token.** Read it from its 0600 file only. Don't `cat` it, and don't put it in a plist, a command line, shell history or a log line. If you need to show that it works, show the `person` the ping returns.
+- **Never print, echo, log or commit the token.** Read it from its 0600 file only. Don't `cat` it, and don't put it in a plist, a command line, shell history or a log line. If you need to show that it works, show the `person` the ping returns.
 - **No audio is kept on disk.** The only exceptions are the transient clip files, which are written to a 0700 temp folder, uploaded and deleted right away (also after a failed upload). Don't write raw PCM, WAV dumps or debug recordings anywhere. The only exception is the synthetic test file in step 5, which you delete afterwards.
 - **Listen only when the backend says so.** Treat any doubt (errors, no answer, a passed `until`) as "stop listening".
 - Inspect before you change anything, and tell me what you found.
@@ -58,7 +58,7 @@ In the Sleep Lab app the video player is already hidden: System › Camera → "
 - Model: `curl -fL -o ~/sleep-lab-home/night-sound/yamnet.tflite https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/1/yamnet.tflite`. It's about 4 MB. The input is 15600 samples = 0.975 s at 16 kHz, and there are 521 AudioSet classes.
 - Token file:
   - create it with `install -m 600 /dev/null ~/sleep-lab-home/night-sound/token`;
-  - **ask me to paste the token myself**. It's the presence token (`slp_` + 64 hex) from Sleep Lab › System › Presence; Erik's is fine. Tell me a command like `pbpaste > ~/sleep-lab-home/night-sound/token` after I copy it on this Mac;
+  - **ask me to paste the token myself**. Use a device token of its own (`slp_` + 64 hex), not a phone's presence token: Sleep Lab › System › Presence › Other devices › New device token, kind "Night listener", for Erik. Then rotating a phone's token never stops the listener. Tell me a command like `pbpaste > ~/sleep-lab-home/night-sound/token` after I copy it on this Mac;
   - check the format without printing it: `python3 -c "import re,pathlib;print(bool(re.fullmatch(r'slp_[0-9a-f]{64}', pathlib.Path('~/sleep-lab-home/night-sound/token').expanduser().read_text().strip())))"`;
   - make sure `night-sound/token` is in a `.gitignore` if `~/sleep-lab-home` is a git repo.
 - Create `~/sleep-lab-home/night-sound/tmp/` (mode 0700) for transient clips. Empty it at startup.
@@ -319,6 +319,6 @@ Tomorrow morning, also paste the first minute summary line from tonight's log an
 
 - Stop listening for a night: Sleep Lab › Live → "Pause tonight", or System › Camera → Listening: Off. The Mac's next GET gets `listen:false` and ffmpeg stops within 60 s.
 - Stop the listener on the Mac: `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.sleeplab.night-sound.plist`, and move the plist to `~/sleep-lab-home/retired/` so it stays off after a reboot.
-- Revoke its access: rotate the presence token in Sleep Lab › System › Presence. Note that this also breaks the phones' Shortcut and OwnTracks until the new token is pasted there.
+- Revoke its access: Sleep Lab › System › Presence › Other devices → Revoke on the night listener's token. The phones keep working. (If the Mac still uses an older setup with a person's presence token, rotating that token also stops the phones' Shortcut and OwnTracks until the new token is pasted there.)
 - Stop the camera feed entirely: `launchctl bootout gui/$(id -u)/com.sleeplab.go2rtc`, or unplug the camera.
 - Clips older than 14 days are removed by the backend automatically, checked at most once an hour whenever the night-sound function is called (the listener's GET every 60 s does that, even while not listening). With the listener booted out for good, nothing calls it, so old clips stay until it runs again: before you stop it for good, leave it running (paused is fine) for 14 days after the last clip, or ask me to remove them.

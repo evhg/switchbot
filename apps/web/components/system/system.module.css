@@ -162,3 +162,6 @@
 .camera { position: relative; aspect-ratio: 16 / 9; border-radius: var(--r-l); overflow: hidden; background: var(--surface-2); }
 .cameraFrame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 .cameraLinks { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+
+/* ── Presence › Other devices: Revoke / Cancel side by side ── */
+.confirm { display: inline-flex; gap: var(--sp-2); flex: none; }

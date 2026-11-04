@@ -384,6 +384,7 @@ function NightSoundsSettings({ live, canWrite }: { live: boolean; canWrite: bool
         value={ts === undefined ? undefined : <Status tone={listening ? 'on' : 'off'}>{listening ? 'Listening' : 'Not listening'}</Status>}
         href="/live"
       />
+      <Row title="Night listener token" sub="System › Presence › Other devices: its own token, separate from the phone’s" href={`${systemHref('presence')}#devices`} />
     </Group>
   );
 }
@@ -497,7 +498,7 @@ export function CameraPage() {
         </a>
       </div>
 
-      <Group label="How it works" footer={<>The sound never leaves the Mac except as numbers and short clips. See <a href={systemHref('presence')}>System › Presence</a> for the token the Mac uses.</>}>
+      <Group label="How it works" footer={<>The sound never leaves the Mac except as numbers and short clips. The Mac uses its own device token: <a href={`${systemHref('presence')}#devices`}>System › Presence › Other devices</a>.</>}>
         <Row title="Pan/Tilt Cam Plus 3K" sub="RTSP on the home network, with sound (Camera Account in the SwitchBot app)" />
         <Row title="go2rtc on the Mac" sub={`Reads RTSP, stream “${STREAM}” (sound and the low-res picture)`} />
         <Row title="Night listener on the Mac" sub="Asks the server every minute whether to listen; classifies sound on the Mac" />

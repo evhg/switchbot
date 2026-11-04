@@ -4,7 +4,8 @@
  * (both editable), and the 21:30 pre-cool when the household is home: home by default, except away dates (e.g. Bangkok),
  * "Away tonight", or both phones saying "away". `TonightBlock` sits on top of System › Tonight's plan with the live /
  * dry-run switch and the away dates; `PresencePage` (System › Presence) explains the iPhone Shortcuts setup and
- * creates/rotates each person's token. Data and rules: lib/tonight.ts.
+ * creates/rotates each person's token, plus per-device tokens under "Other devices" (lib/device-tokens.ts, migration
+ * 0028). Data and rules: lib/tonight.ts.
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { DEFAULT_PEOPLE } from '@sleep-lab/core';
@@ -14,9 +15,22 @@ import { supabaseConfigured } from '@/lib/data/supabase.ts';
 import { dayLabel, hm, MIN } from '@/lib/format.ts';
 import { awayLabel, hhmm, parseHhmm, presenceUrl, rotatePresenceToken, usePresenceTokens, validSleepOnset, type Override, type Tonight } from '@/lib/tonight.ts';
 import { useBandSync } from '@/lib/bands.ts';
+import {
+  createDeviceToken,
+  DEFAULT_DEVICE_LABEL,
+  DEVICE_KINDS,
+  deviceStatus,
+  macInstruction,
+  MAX_DEVICE_LABEL,
+  revokeDeviceToken,
+  SAMPLE_DEVICE_TOKENS,
+  useDeviceTokens,
+  type DeviceKind,
+  type DeviceToken,
+} from '@/lib/device-tokens.ts';
 import { systemHref, useChrome } from '../nav.tsx';
 import { Button, Group, Input, PageHeader, Row, Segmented, Skeleton, Status, Switch } from '../ui.tsx';
-import { BandPresenceGroup } from './bands.tsx';
+import { ago, BandPresenceGroup } from './bands.tsx';
 import s from './system.module.css';
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ');
@@ -373,6 +387,8 @@ export function PresencePage() {
       })}
       {(msg || error) && <p className={cx('sec', s.alert)}>{msg ?? error}</p>}
 
+      <OtherDevices people={people} live={live} canWrite={canWrite} mayManage={mayRotate} url={url} />
+
       <BandPresenceGroup people={people} bands={bands} live={live} />
 
       <Group label="Set up on each iPhone (about 3 minutes)">
@@ -408,6 +424,182 @@ export function PresencePage() {
       </Group>
       <p className="cap">Lost phone or shared the token by mistake? Rotate it here: the old token stops working at once.</p>
     </div>
+  );
+}
+
+const DEVICE_STATUS_TONE = { Working: 'on', Waiting: 'off', Revoked: 'off' } as const;
+
+/**
+ * System › Presence › Other devices (migration 0028): a token per device (the Mac's night listener, a second phone),
+ * so rotating a phone's own token never stops it. The plain token is shown once, right after it is created.
+ */
+function OtherDevices({
+  people,
+  live,
+  canWrite,
+  mayManage,
+  url,
+}: {
+  people: readonly { id: string; name: string }[];
+  live: boolean;
+  canWrite: boolean;
+  mayManage: (personId: string) => boolean;
+  url: string;
+}) {
+  const { tokens, error, missing, refresh } = useDeviceTokens(live);
+  const defaultPerson = people.some((p) => p.id === 'b') ? 'b' : (people[0]?.id ?? 'a');
+  const [open, setOpen] = useState(false);
+  const [label, setLabel] = useState(DEFAULT_DEVICE_LABEL);
+  const [personId, setPersonId] = useState(defaultPerson);
+  const [kind, setKind] = useState<DeviceKind>('listener');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [shown, setShown] = useState<{ id: number; token: string; kind: DeviceKind } | null>(null);
+  const [confirmId, setConfirmId] = useState<number | null>(null);
+  const nameOf = (id: string) => people.find((p) => p.id === id)?.name ?? id;
+  const whose = (id: string) => {
+    const n = nameOf(id);
+    return n.trim().toLowerCase() === 'you' ? 'yours' : `for ${n}`;
+  };
+  const now = Date.now();
+  const list: DeviceToken[] | null = live ? tokens : SAMPLE_DEVICE_TOKENS(now);
+  const writable = live && canWrite && !missing;
+
+  const create = async () => {
+    setBusy(true);
+    setMsg(null);
+    const r = await createDeviceToken(personId, label, kind);
+    setBusy(false);
+    if ('error' in r) return setMsg(r.error);
+    setShown({ id: r.id, token: r.token, kind });
+    setOpen(false);
+    refresh();
+  };
+  const revoke = async (id: number) => {
+    setBusy(true);
+    setMsg(null);
+    const e = await revokeDeviceToken(id);
+    setBusy(false);
+    setConfirmId(null);
+    if (e) return setMsg(e);
+    if (shown?.id === id) setShown(null);
+    refresh();
+  };
+
+  return (
+    <Group
+      id="devices"
+      label="Other devices"
+      footer={
+        <>
+          Give each device its own token, so changing a phone’s token never stops it.
+          {!live && ' Sample: sign in as a household member to create real tokens.'} {(msg ?? error) && <span className="sig">{msg ?? error}</span>}
+        </>
+      }
+    >
+      {list === null ? (
+        <Row title="Device tokens" sub={<Skeleton w={160} h={14} r="text" inline />} />
+      ) : list.length === 0 ? (
+        <Row title={missing ? 'Not available yet' : 'No device tokens yet'} sub={missing ? 'Apply migration 0028 on the server first' : 'E.g. one for the night listener on the Mac'} />
+      ) : (
+        list.map((t) => {
+          const st = deviceStatus(t);
+          const kindLabel = DEVICE_KINDS.find((k) => k.value === t.kind)?.label ?? 'Other';
+          return (
+            <Row
+              key={t.id}
+              title={t.label}
+              sub={`${kindLabel} · ${whose(t.personId)} · ${t.revokedAt !== null ? `revoked ${ago(t.revokedAt, now)}` : t.lastUsedAt !== null ? `last used ${ago(t.lastUsedAt, now)}` : 'not used yet'}`}
+              value={<Status tone={DEVICE_STATUS_TONE[st]}>{st}</Status>}
+              trailing={
+                t.revokedAt === null && live ? (
+                  confirmId === t.id ? (
+                    <span className={s.confirm}>
+                      <Button size="sm" variant="primary" disabled={busy} onClick={() => void revoke(t.id)}>
+                        {busy ? 'Revoking…' : 'Revoke'}
+                      </Button>
+                      <Button size="sm" variant="text" onClick={() => setConfirmId(null)}>
+                        Cancel
+                      </Button>
+                    </span>
+                  ) : (
+                    <Button size="sm" variant="text" disabled={!writable || !mayManage(t.personId) || busy} onClick={() => setConfirmId(t.id)}>
+                      Revoke
+                    </Button>
+                  )
+                ) : undefined
+              }
+            />
+          );
+        })
+      )}
+      {confirmId !== null && <li className={cx('cap', s.btnLi)}>Revoke it? The device stops working at once; this can’t be undone (create a new token instead).</li>}
+      {shown && (
+        <li className={s.reveal}>
+          <span className="sec">
+            Shown once: after you leave this page only a fingerprint of it is kept.
+            {shown.kind === 'listener' ? ' Paste the line below into the Mac session:' : ' Use it like a phone token (header X-Presence-Token).'}
+          </span>
+          {shown.kind === 'listener' ? (
+            <CopyField label="For the Mac session" value={macInstruction(shown.token)} />
+          ) : (
+            <CopyField label="URL" value={url} />
+          )}
+          <CopyField label="Token" value={shown.token} />
+        </li>
+      )}
+      {writable && open && (
+        <li>
+          <div className={cx('list-row', s.awayForm)}>
+            <label className={s.awayField}>
+              <span className="cap">Name</span>
+              <Input type="text" maxLength={MAX_DEVICE_LABEL} value={label} onChange={(e) => setLabel(e.target.value)} />
+            </label>
+            <label className={s.awayField}>
+              <span className="cap">Acts for</span>
+              <select className="input" value={personId} onChange={(e) => setPersonId(e.target.value)}>
+                {people.map((p) => (
+                  <option key={p.id} value={p.id} disabled={!mayManage(p.id)}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={s.awayField}>
+              <span className="cap">Kind</span>
+              <select className="input" value={kind} onChange={(e) => setKind(e.target.value as DeviceKind)}>
+                {DEVICE_KINDS.map((k) => (
+                  <option key={k.value} value={k.value}>
+                    {k.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button size="sm" variant="primary" disabled={busy || !label.trim() || !mayManage(personId)} onClick={() => void create()}>
+              {busy ? 'Creating…' : 'Create'}
+            </Button>
+            <Button size="sm" variant="text" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+          </div>
+        </li>
+      )}
+      {!open && (
+        <li className={s.btnLi}>
+          <Button
+            variant="secondary"
+            disabled={!writable || busy}
+            onClick={() => {
+              setMsg(null);
+              setPersonId(mayManage(defaultPerson) ? defaultPerson : (people.find((p) => mayManage(p.id))?.id ?? defaultPerson));
+              setOpen(true);
+            }}
+          >
+            New device token
+          </Button>
+        </li>
+      )}
+    </Group>
   );
 }
 
