@@ -262,7 +262,8 @@ describe('experiment curve variants pass the controller safety rules', () => {
   const remotes = [DEFAULT_REMOTE, withQuiet(DEFAULT_REMOTE, false)];
 
   it('mirror the default shape: minC 17, every phase from lights-out, fan auto → low at +30', () => {
-    expect(EXPERIMENT_CURVES.map((c) => c.id)).toEqual(['warm-late-19-5-quiet-v1', 'steady-19-5-quiet-v1', 'cool-early-warm-late-v1']);
+    // No beeps while asleep (2026-11-04): only variants whose last command is at lights-out are offered.
+    expect(EXPERIMENT_CURVES.map((c) => c.id)).toEqual(['steady-19-5-quiet-v1']);
     expect(AUTOPILOT_CANDIDATES).toEqual([...EXPERIMENT_CURVES.map((c) => c.id), DEFAULT_CURVE.id]);
     for (const c of EXPERIMENT_CURVES) {
       expect(c.minC).toBe(17);
@@ -329,9 +330,9 @@ describe('autopilot', () => {
   const exp = { ...autopilotExperiment(def, AUTOPILOT_CANDIDATES[0]!, '2026-11-05', 7), id: 1 };
 
   it('starts the next untested candidate; waits for an experiment started by hand; off stops its own', () => {
-    expect(autopilotStep({ enabled: true, defaultCurveId: def, running: null, history: [] })).toMatchObject({ action: 'start', curveId: 'warm-late-19-5-quiet-v1' });
-    expect(nextCandidate(def, [{ autopilot: true, arms: exp.arms }])).toBe('steady-19-5-quiet-v1');
-    expect(nextCandidate('steady-19-5-quiet-v1', [])).toBe('warm-late-19-5-quiet-v1');
+    expect(autopilotStep({ enabled: true, defaultCurveId: def, running: null, history: [] })).toMatchObject({ action: 'start', curveId: 'steady-19-5-quiet-v1' });
+    expect(nextCandidate(def, [{ autopilot: true, arms: exp.arms }])).toBe(null);
+    expect(nextCandidate('steady-19-5-quiet-v1', [])).toBe(def);
     const all = AUTOPILOT_CANDIDATES.map((c) => ({ autopilot: true, arms: autopilotExperiment(def, c, '2026-11-05', 1).arms }));
     expect(autopilotStep({ enabled: true, defaultCurveId: def, running: null, history: all }).action).toBe('none');
     const byHand = { exp: { ...exp, autopilot: false, title: 'Aircon test' }, nights: [] };
@@ -342,11 +343,10 @@ describe('autopilot', () => {
   });
 
   it('a test stopped early is tried again; after an adoption the old default is re-tested', () => {
-    expect(nextCandidate(def, [{ autopilot: true, arms: exp.arms, status: 'stopped' }])).toBe('warm-late-19-5-quiet-v1');
-    expect(nextCandidate(def, [{ autopilot: true, arms: exp.arms, status: 'finished' }])).toBe('steady-19-5-quiet-v1');
-    const adopted = 'cool-early-warm-late-v1';
-    const tested = EXPERIMENT_CURVES.map((c) => ({ autopilot: true, status: 'finished' as const, arms: autopilotExperiment(adopted, c.id, '2026-11-05', 1).arms }));
-    expect(nextCandidate(adopted, tested)).toBe(def);
+    expect(nextCandidate(def, [{ autopilot: true, arms: exp.arms, status: 'stopped' }])).toBe('steady-19-5-quiet-v1');
+    expect(nextCandidate(def, [{ autopilot: true, arms: exp.arms, status: 'finished' }])).toBe(null);
+    const adopted = 'steady-19-5-quiet-v1';
+    expect(nextCandidate(adopted, [])).toBe(def);
   });
 
   function nightsFor(better: { deep: number; aw: number; awake?: number }): ExperimentNight[] {
@@ -362,7 +362,7 @@ describe('autopilot', () => {
 
   it('adopts a clear winner, but not one that costs awakenings', () => {
     const win = autopilotStep({ enabled: true, defaultCurveId: def, running: { exp, nights: nightsFor({ deep: 15, aw: -1 }) }, history: [] });
-    expect(win).toMatchObject({ action: 'adopt', curveId: 'warm-late-19-5-quiet-v1' });
+    expect(win).toMatchObject({ action: 'adopt', curveId: 'steady-19-5-quiet-v1' });
     const costly = autopilotStep({ enabled: true, defaultCurveId: def, running: { exp, nights: nightsFor({ deep: 40, aw: 1, awake: -20 }) }, history: [] });
     expect(costly.action).toBe('finish');
     expect(costly.reason).toMatch(/awakenings got worse/);

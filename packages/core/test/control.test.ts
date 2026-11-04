@@ -816,20 +816,20 @@ describe('remoteCommand: learned ladder', () => {
   });
 });
 
-describe('steady-18-5-quiet-v1 default curve: one fan-only step at lights-out + 30', () => {
+describe('steady-18-5-quiet-v1 default curve: one fan-only step at lights-out', () => {
   // Tonight: night 2026-11-02, lights-out 22:00 ICT, expected sleep onset 23:35, wake 08:30, bias −2.
   const LO22 = Date.UTC(2026, 10, 2, 15, 0); // 22:00 ICT
   const WAKE830 = LO22 + 630 * MIN; // 08:30 ICT 2026-11-03
   const ONSET = LO22 + 95 * MIN; // 23:35 ICT
   const at = (ts: number) => (ts - LO22) / MIN;
 
-  it('is the default: flat 18.5 °C, fan auto until lights-out, low from +30, every phase from lights-out', () => {
+  it('is the default: flat 18.5 °C, fan auto for the pre-cool, low from lights-out, every phase from lights-out', () => {
     expect(DEFAULT_CURVE.id).toBe('steady-18-5-quiet-v1');
     expect(BUILTIN_CURVES.map((c) => c.id)).toEqual(['steady-18-5-quiet-v1', 'steady-18-5-v1', 'one-beep-v2', 'one-beep-v1', 'default-v1', 'warm-late-19-5-quiet-v1', 'steady-19-5-quiet-v1', 'cool-early-warm-late-v1']);
     expect(new Set(DEFAULT_CURVE.phases.map((p) => p.targetC))).toEqual(new Set([18.5]));
     expect(DEFAULT_CURVE.phases.map((p) => [p.name, p.startMin, p.fan])).toEqual([
       ['precool', -30, 'auto'],
-      ['onset', 0, 'auto'],
+      ['onset', 0, 'low'],
       ['deep', 30, 'low'],
       ['middle', 270, 'low'],
       ['late', 360, 'low'],
@@ -841,19 +841,19 @@ describe('steady-18-5-quiet-v1 default curve: one fan-only step at lights-out + 
     expect(DEFAULT_CURVE.maxC).toBe(STEADY_18_5_V1.maxC);
   });
 
-  it('plans ON at 21:30 (fan auto), fan low at 22:30 (same setpoint), OFF at 09:00', () => {
+  it('plans ON at 21:30 (fan auto), fan low at 22:00 (same setpoint), OFF at 09:00', () => {
     for (const [biasC, sp] of [[-1, 18], [-2, 17]] as const) {
       const plan = planAcSchedule({ curve: DEFAULT_CURVE, lightsOut: LO22, wake: WAKE830, remote: DEFAULT_REMOTE, biasC, sleepOnset: ONSET });
       expect(plan.commands.map((c) => [at(c.ts), c.state.power ? c.state.setpointC : 'off', c.state.fan, c.kind])).toEqual([
         [-30, sp, 'auto', 'on'],
-        [30, sp, 'low', 'phase'],
+        [0, sp, 'low', 'phase'],
         [660, 'off', 'auto', 'off'],
       ]);
-      expect(plan.asleepCount).toBe(1);
+      expect(plan.asleepCount).toBe(0); // the quiet switch is at lights-out: nothing while asleep
     }
     const ladder = planAcSchedule({ curve: DEFAULT_CURVE, lightsOut: LO22, wake: WAKE830, remote: HOME_LADDER, biasC: -2, sleepOnset: ONSET });
-    expect(ladder.commands.map((c) => [at(c.ts), c.button])).toEqual([[-30, '17 cool auto'], [30, 'cool 17 low'], [660, 'off']]);
-    // The all-auto default ladder has no low button: nothing to send at 22:30.
+    expect(ladder.commands.map((c) => [at(c.ts), c.button])).toEqual([[-30, '17 cool auto'], [0, 'cool 17 low'], [660, 'off']]);
+    // The all-auto default ladder has no low button: nothing to send at 22:00.
     expect(planAcSchedule({ curve: DEFAULT_CURVE, lightsOut: LO22, wake: WAKE830, remote: DEFAULT_LADDER_REMOTE }).commands.map((c) => c.button)).toEqual(['C18', 'OFF']);
   });
 
@@ -897,15 +897,15 @@ describe('steady-18-5-quiet-v1 default curve: one fan-only step at lights-out + 
   for (const [label, remote] of [['quiet on', HOME_LADDER], ['quiet off (AC_QUIET unset)', withQuiet(HOME_LADDER, false)]] as const) {
     for (const offsetC of [1.8, 2, 2.6]) {
       for (const everyMin of [1, 5]) {
-        it(`tonight, ${label}, room settles at setpoint + ${offsetC}, cron every ${everyMin} min: 21:30 auto, 22:30 low, 09:00 off, nothing else`, () => {
+        it(`tonight, ${label}, room settles at setpoint + ${offsetC}, cron every ${everyMin} min: 21:30 auto, 22:00 low, 09:00 off, nothing else`, () => {
           const log = replay(remote, offsetC, everyMin);
           expect(log.map((c) => [hhmm(c.ts), c.button])).toEqual([
             ['21:30', '17 cool auto'],
-            ['22:30', 'cool 17 low'],
+            ['22:00', 'cool 17 low'],
             ['09:00', 'off'],
           ]);
           expect(log[1]!.state).toEqual({ power: true, setpointC: 17, mode: 'cool', fan: 'low' });
-          expect(log[1]!.reason).toMatch(/^curve: deep/);
+          expect(log[1]!.reason).toMatch(/^curve: onset/);
           expect(log.every((c) => c.via === 'customize')).toBe(true);
         });
       }

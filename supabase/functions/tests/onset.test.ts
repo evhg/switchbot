@@ -35,7 +35,7 @@ Deno.test('2026-10-31 (22:00 → 08:30, no stored onset, steady-18-5-v1): ON 21:
   eq(planAcSchedule({ curve: STEADY_18_5_V1, lightsOut, wake, remote: DEFAULT_REMOTE }).commands[0]!.state.setpointC, 18);
 });
 
-Deno.test('tonight 2026-11-02 (22:00 → 08:30, onset 23:35, steady-18-5-quiet-v1 default): ON 21:30 auto, 22:30 low, OFF 09:00', () => {
+Deno.test('tonight 2026-11-02 (22:00 → 08:30, onset 23:35, steady-18-5-quiet-v1 default): ON 21:30 auto, 22:00 low (at lights-out), OFF 09:00', () => {
   const { lightsOut, wake } = defaultSchedule('2026-11-02', '22:00', '08:30');
   const onset = expectedSleepOnset(lightsOut, lightsOut + 95 * MIN);
   eq(hm(onset), '23:35');
@@ -43,10 +43,10 @@ Deno.test('tonight 2026-11-02 (22:00 → 08:30, onset 23:35, steady-18-5-quiet-v
   const plan = planAcSchedule({ curve: DEFAULT_CURVE, lightsOut, wake, remote: DEFAULT_REMOTE, sleepOnset: onset, biasC: -2 });
   eq(plan.commands.map((c) => [hm(c.ts), c.state.power ? c.state.setpointC : 'off', c.state.fan, c.asleep]), [
     ['21:30', 17, 'auto', false],
-    ['22:30', 17, 'low', true],
+    ['22:00', 17, 'low', false],
     ['09:00', 'off', 'auto', false],
   ]);
-  eq(plan.asleepCount, 1);
+  eq(plan.asleepCount, 0);
 });
 
 Deno.test('onsetOnNight puts a minute of day on the right side of midnight', () => {

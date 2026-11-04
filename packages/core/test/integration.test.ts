@@ -173,17 +173,19 @@ describe('integration: simulator truth → detectors and metrics', () => {
       expect(n.ac.length, n.date).toBeGreaterThanOrEqual(3);
       expect(n.ac.length, n.date).toBeLessThanOrEqual(6);
       // Hard bound by design: the quiet-fan curve plans ONE command while asleep, the fan-only "fan low" at
-      // lights-out + 30 (whatever the expected sleep onset; a re-measured bias never adds one); only the safety nets
+      // lights-out (moved from + 30 on 2026-11-04) (whatever the expected sleep onset; a re-measured bias never adds one); only the safety nets
       // remain: one extra command (a resend or an emergency that cools, shared budget) → at most 2 beeps while asleep.
       expect(n.sleepOnset, n.date).toBeDefined();
       const plan = planAcSchedule({ curve: DEFAULT_CURVE, lightsOut: n.lightsOut, wake: n.wake, remote: DEFAULT_REMOTE, sleepOnset: n.sleepOnset! });
-      expect(plan.asleepCount, n.date).toBe(1);
+      expect(plan.asleepCount, n.date).toBe(0); // 2026-11-04: the quiet switch moved to lights-out
       expect(plan.commands.map((c) => c.kind), n.date).toEqual(['on', 'phase', 'off']);
       const planned = asleep.filter((c) => c.reason.startsWith('curve:'));
       const extra = asleep.filter((c) => !c.reason.startsWith('curve:'));
-      expect(planned.length, `${n.date} planned steps while asleep`).toBe(1);
-      expect(planned[0]!.state.fan, `${n.date} fan step`).toBe('low');
-      expect(Math.abs(planned[0]!.ts - plan.commands[1]!.ts), `${n.date} fan step time`).toBeLessThanOrEqual(5 * MIN);
+      expect(planned.length, `${n.date} planned steps while asleep`).toBe(0);
+      // The fan-low state arrives at lights-out: as the planned step, or carried by a resend of the precool due then.
+      const fanStep = n.ac.find((c) => c.state.power && c.state.fan === 'low');
+      expect(fanStep, `${n.date} fan step`).toBeDefined();
+      expect(Math.abs(fanStep!.ts - plan.commands[1]!.ts), `${n.date} fan step time`).toBeLessThanOrEqual(10 * MIN);
       expect(extra.length, `${n.date} extras while asleep`).toBeLessThanOrEqual(quiet.maxExtraPerNight);
       for (const c of extra) expect(c.reason, n.date).toMatch(/^(resend|emergency: room .* above)/);
       // An emergency only ever cools.
@@ -196,11 +198,13 @@ describe('integration: simulator truth → detectors and metrics', () => {
       const firstOn = n.ac.find((c) => c.state.power)!;
       expect(Math.abs(firstOn.ts - plan.commands[0]!.ts), `${n.date} precool start`).toBeLessThanOrEqual(5 * MIN);
       expect(Math.abs(firstOn.state.setpointC - plan.commands[0]!.state.setpointC), `${n.date} precool setpoint`).toBeLessThanOrEqual(1);
-      //  - no planned command around lights-out (precool already holds the lights-out target, same fan),
+      //  - exactly one planned command around lights-out: the fan-only "fan low" (same setpoint as the precool),
       const settle = n.ac.filter((c) => c.ts >= n.lightsOut && c.ts < from);
-      expect(settle.filter((c) => c.reason.startsWith('curve:')), `${n.date} lights-out`).toEqual([]);
-      //  - the evening (precool → settle) adds only resends/corrections of the precool, never another planned step,
-      const evening = n.ac.filter((c) => c.ts < from && c !== firstOn);
+      const settlePlanned = settle.filter((c) => c.reason.startsWith('curve:'));
+      expect(settlePlanned.length, `${n.date} lights-out`).toBeLessThanOrEqual(1);
+      for (const c of settlePlanned) expect(c.state.fan, `${n.date} lights-out fan`).toBe('low');
+      //  - the evening (precool → settle) adds only that fan step and resends/corrections, never another planned step,
+      const evening = n.ac.filter((c) => c.ts < from && c !== firstOn && !settlePlanned.includes(c));
       for (const c of evening) expect(c.reason, `${n.date} evening`).toMatch(/^(resend|correction)/);
       //  - and OFF at wake + 30 min, as planned.
       expect(n.ac.at(-1)!.state.power, n.date).toBe(false);
@@ -216,8 +220,8 @@ describe('integration: simulator truth → detectors and metrics', () => {
     asleepCounts.sort((a, b) => a - b);
     report.acCommands = `min ${counts[0]}, median ${counts[counts.length >> 1]}, max ${counts[counts.length - 1]}`;
     report.acWhileAsleep = `min ${asleepCounts[0]}, median ${asleepCounts[asleepCounts.length >> 1]}, max ${asleepCounts[asleepCounts.length - 1]} (beeps)`;
-    // One beep (the planned fan-only step) on a typical night, never more than that plus the one safety net.
-    expect(asleepCounts[asleepCounts.length >> 1]).toBe(1);
+    // No beep while asleep on a typical night (the quiet switch is at lights-out since 2026-11-04); a safety-net resend or cooling emergency at most adds one.
+    expect(asleepCounts[asleepCounts.length >> 1]).toBe(0);
     expect(asleepCounts[asleepCounts.length - 1]).toBeLessThanOrEqual(2);
   });
 

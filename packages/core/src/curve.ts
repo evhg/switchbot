@@ -12,12 +12,13 @@ export const MAX_SLEEP_ONSET_MIN = 180;
  * low half an hour after lights-out: on 2026-11-01 the household could not fall asleep with the auto fan running
  * (too loud). The pre-cool keeps fan auto for a fast pull-down before bed.
  *   precool  −30 min from lights-out  18.5 °C   ON at 21:30, fan auto (fast pull-down)
- *   onset      0                      18.5 °C   same target and fan → no command at lights-out
- *   deep     +30                      18.5 °C   fan low: the ONE command after lights-out (22:30), fan only, same setpoint
+ *   onset      0                      18.5 °C   fan low: the ONE command after the pre-cool (22:00, at lights-out), fan
+ *                                               only, same setpoint (moved from 22:30 on 2026-11-04: no beep once in bed)
+ *   deep     +30                      18.5 °C   same target and fan → no command
  *   middle   +270                     18.5 °C   same target and fan → no command while asleep
  *   late     +360                     18.5 °C   same → no command
  *   wake     +630                     18.5 °C   (08:30 for a 22:00 lights-out) same → no command; OFF at wake + 30
- * With the bias −2 and the learned "Others" ladder: 21:30 "17 cool auto", 22:30 "cool 17 low", 09:00 "off".
+ * With the bias −2 and the learned "Others" ladder: 21:30 "17 cool auto", 22:00 "cool 17 low", 09:00 "off".
  * Every phase counts from lights-out. minC 17: see STEADY_18_5_V1.
  */
 export const DEFAULT_CURVE: TemperatureCurve = {
@@ -27,7 +28,7 @@ export const DEFAULT_CURVE: TemperatureCurve = {
   maxC: 24,
   phases: [
     { name: 'precool', startMin: -30, targetC: 18.5, fan: 'auto' },
-    { name: 'onset', startMin: 0, targetC: 18.5, fan: 'auto' },
+    { name: 'onset', startMin: 0, targetC: 18.5, fan: 'low' },
     { name: 'deep', startMin: 30, targetC: 18.5, fan: 'low' },
     { name: 'middle', startMin: 270, targetC: 18.5, fan: 'low' },
     { name: 'late', startMin: 360, targetC: 18.5, fan: 'low' },
@@ -166,7 +167,7 @@ export const STEADY_19_5_QUIET_V1: TemperatureCurve = {
   maxC: 24,
   phases: [
     { name: 'precool', startMin: -30, targetC: 19.5, fan: 'auto' },
-    { name: 'onset', startMin: 0, targetC: 19.5, fan: 'auto' },
+    { name: 'onset', startMin: 0, targetC: 19.5, fan: 'low' },
     { name: 'deep', startMin: 30, targetC: 19.5, fan: 'low' },
     { name: 'middle', startMin: 270, targetC: 19.5, fan: 'low' },
     { name: 'late', startMin: 360, targetC: 19.5, fan: 'low' },
@@ -183,7 +184,7 @@ export const WARM_LATE_19_5_QUIET_V1: TemperatureCurve = {
   maxC: 24,
   phases: [
     { name: 'precool', startMin: -30, targetC: 18.5, fan: 'auto' },
-    { name: 'onset', startMin: 0, targetC: 18.5, fan: 'auto' },
+    { name: 'onset', startMin: 0, targetC: 18.5, fan: 'low' },
     { name: 'deep', startMin: 30, targetC: 18.5, fan: 'low' },
     { name: 'middle', startMin: 300, targetC: 19.5, fan: 'low' },
     { name: 'late', startMin: 360, targetC: 19.5, fan: 'low' },
@@ -200,7 +201,7 @@ export const COOL_EARLY_WARM_LATE_V1: TemperatureCurve = {
   maxC: 24,
   phases: [
     { name: 'precool', startMin: -30, targetC: 18, fan: 'auto' },
-    { name: 'onset', startMin: 0, targetC: 18, fan: 'auto' },
+    { name: 'onset', startMin: 0, targetC: 18, fan: 'low' },
     { name: 'deep', startMin: 30, targetC: 18, fan: 'low' },
     { name: 'middle', startMin: 300, targetC: 19.5, fan: 'low' },
     { name: 'late', startMin: 360, targetC: 19.5, fan: 'low' },
@@ -209,7 +210,9 @@ export const COOL_EARLY_WARM_LATE_V1: TemperatureCurve = {
 };
 
 /** The aircon variants experiments may assign (besides the default), in Autopilot's testing order. */
-export const EXPERIMENT_CURVES: readonly TemperatureCurve[] = [WARM_LATE_19_5_QUIET_V1, STEADY_19_5_QUIET_V1, COOL_EARLY_WARM_LATE_V1];
+// No beeps while asleep (2026-11-04): only variants whose last command is at lights-out may be assigned. The two
+// 03:00-step variants stay in BUILTIN_CURVES (readers of any night that stored them) but are never offered again.
+export const EXPERIMENT_CURVES: readonly TemperatureCurve[] = [STEADY_19_5_QUIET_V1];
 
 /**
  * The yardstick for a night run by hand (Night.manual): no plan ran, so the room is scored against the household's
@@ -234,7 +237,7 @@ export function scoringCurve(night: { manual?: boolean }, curve: TemperatureCurv
 }
 
 /** Built-in curves by id (a stored night's curve_id), for readers without the curves table. */
-export const BUILTIN_CURVES: readonly TemperatureCurve[] = [DEFAULT_CURVE, STEADY_18_5_V1, ONE_BEEP_V2, ONE_BEEP_V1, CURVE_V1, ...EXPERIMENT_CURVES];
+export const BUILTIN_CURVES: readonly TemperatureCurve[] = [DEFAULT_CURVE, STEADY_18_5_V1, ONE_BEEP_V2, ONE_BEEP_V1, CURVE_V1, WARM_LATE_19_5_QUIET_V1, STEADY_19_5_QUIET_V1, COOL_EARLY_WARM_LATE_V1];
 
 /** Does any phase count from sleep onset? */
 export function usesSleepOnset(curve: TemperatureCurve): boolean {

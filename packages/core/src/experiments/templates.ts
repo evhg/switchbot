@@ -1,5 +1,5 @@
 // Ready-made experiments for Lab › Experiments, and Autopilot's candidate list.
-import { DEFAULT_CURVE, EXPERIMENT_CURVES, WARM_LATE_19_5_QUIET_V1 } from '../curve.ts';
+import { DEFAULT_CURVE, EXPERIMENT_CURVES, STEADY_19_5_QUIET_V1 } from '../curve.ts';
 import type { ExperimentArm, ExperimentKind } from './types.ts';
 
 export interface ExperimentTemplate {
@@ -39,14 +39,14 @@ export const EXPERIMENT_TEMPLATES: readonly ExperimentTemplate[] = [
   },
   {
     slug: 'aircon-late-19-5',
-    title: 'Aircon: 18.5 vs 19.5 °C late at night',
+    title: 'Aircon: 18.5 vs 19.5 °C',
     kind: 'auto',
     arms: [
       { key: DEFAULT_CURVE.id, label: 'Steady 18.5 °C', curve_id: DEFAULT_CURVE.id },
-      { key: WARM_LATE_19_5_QUIET_V1.id, label: '19.5 °C from 03:00', curve_id: WARM_LATE_19_5_QUIET_V1.id },
+      { key: STEADY_19_5_QUIET_V1.id, label: 'Steady 19.5 °C', curve_id: STEADY_19_5_QUIET_V1.id },
     ],
     primaryOutcome: 'sleep_score',
-    description: 'Sleep Lab picks the aircon plan each night. Is a slightly warmer late night (more REM) better?',
+    description: 'Sleep Lab picks the aircon plan each night. Is a one-degree warmer night better? Both send their last command at lights-out: no beep while you sleep.',
   },
   {
     slug: 'no-screens',
