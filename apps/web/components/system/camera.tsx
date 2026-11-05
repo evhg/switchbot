@@ -23,7 +23,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import { useAuth } from '@/lib/auth.tsx';
 import { functionsUrl, supabaseClient } from '@/lib/data/supabase.ts';
 import { hm } from '@/lib/format.ts';
-import { isListening, isPaused, pauseSoundUntil, setLiveVideo, setSoundSettings, setSoundSleepTalk, useNewestSoundMinute, useSoundSettings, type SoundMode } from '@/lib/sound.ts';
+import { isListening, isPaused, pauseSoundUntil, setLiveVideo, setSoundSettings, setSoundSleepTalk, setSoundUncertainClips, useNewestSoundMinute, useSoundSettings, type SoundMode } from '@/lib/sound.ts';
 import { systemHref, useChrome } from '../nav.tsx';
 import { ago } from './bands.tsx';
 import { clock, usePlanClock } from './model.ts';
@@ -319,6 +319,9 @@ function StreamLock({ canWrite, nonce, onChanged }: { canWrite: boolean; nonce: 
 }
 
 /** Night sounds: listening mode, clips, the Mac listener's status and a running pause. */
+/** Borderline clips per night when "Save unclear sounds to label" is on (sound_uncertain_clips' default). */
+const UNCERTAIN_CLIPS = 8;
+
 function NightSoundsSettings({ live, canWrite }: { live: boolean; canWrite: boolean }) {
   const [nonce, setNonce] = useState(0);
   const { settings, error } = useSoundSettings(live, nonce);
@@ -382,6 +385,22 @@ function NightSoundsSettings({ live, canWrite }: { live: boolean; canWrite: bool
             disabled={disabled || settings?.sleepTalk === null}
             onChange={(v) => void run(() => setSoundSleepTalk(v))}
             label={<span className="sr-only">Save sleep talk</span>}
+          />
+        }
+      />
+      <Row
+        title="Save unclear sounds to label"
+        sub={
+          settings?.uncertainClips === null
+            ? 'Not on the server yet (migration 0030)'
+            : `Up to ${UNCERTAIN_CLIPS} short clips a night of sounds the Mac isn’t sure about, so you can tap Snoring or Not snoring. The Mac retunes itself every evening from your labels.${settings && !settings.clips ? ' Needs short clips on.' : ''}`
+        }
+        trailing={
+          <Switch
+            checked={(settings?.uncertainClips ?? 0) > 0}
+            disabled={disabled || settings?.uncertainClips === null}
+            onChange={(v) => void run(() => setSoundUncertainClips(v ? UNCERTAIN_CLIPS : 0))}
+            label={<span className="sr-only">Save unclear sounds to label</span>}
           />
         }
       />

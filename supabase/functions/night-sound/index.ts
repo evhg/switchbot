@@ -1,6 +1,8 @@
 // Night sounds from the Mac listener (the bedroom camera's audio, classified locally on Erik's Mac; migration 0024):
 //   GET  /functions/v1/night-sound                       should the Mac listen now?
-//        → {"listen","reason","from","until","clips","clipsLeft","sleepTalk","speechClipsLeft","night","now"}
+//        → {"listen","reason","from","until","clips","clipsLeft","sleepTalk","speechClipsLeft","uncertainClipsLeft",
+//           "calibration":{"labels":[…],"summary":{…}} | null,"night","now"}
+//   GET  /functions/v1/night-sound?labels=1              only the labels: {"calibration","uncertainClipsLeft","now"}
 //   POST {"ping":true}                                   → {"ok":true,"person"} (token check, stores nothing)
 //   POST {"camera":"bedroom","minutes":[…],"events":[…]} (≤ 120 minutes, ≤ 100 events)
 //        → {"ok","person","stored":{"minutes","events"},"dropped":{"outsideWindow","notListening"},"rejected":[…],
@@ -18,10 +20,17 @@
 // a night on top of the 40. Their optional transcript (≤ 2000 chars) and transcriptLang (≤ 10) are stored. With it off
 // speech is never clipped and transcripts are dropped before anything is stored (core applyTranscriptPolicy). The
 // server is authoritative: the Mac may ask wantClip for every speech event. nightly-report judges them next morning.
+// Sound labels (migration 0030): GET carries "calibration", the newest 200 events the household labelled ("Snoring" /
+// "Not snoring" under each clip in the app) with their YAMNet label, peak, minute floor, duration and score, plus the
+// summary the Mac tunes its snore rule from (core calibrationSummary); null before the migration or on a read error.
+// Events may carry "uncertain": true (a borderline sound sent so the household can label it): such a non-speech event
+// with wantClip gets a clip from household_settings.sound_uncertain_clips per night (default 8, 0 = off), separate
+// from the 40 and the 20; GET "uncertainClipsLeft" says how many are left. A speech-class event keeps the speech rules
+// whatever its uncertain flag. Before 0030 the flag is dropped (not stored) and no borderline clip is handed out.
 import {
   applyTranscriptPolicy,
+  clipAllowance,
   clipAllowed,
-  isSpeechEvent,
   inWindow,
   LISTEN_GRACE_MS,
   parseSoundPayload,
@@ -36,7 +45,18 @@ import {
 } from '../../../packages/core/src/sound/payload.ts';
 import { HttpError, json, readJson, serve } from '../_shared/http.ts';
 import { PRESENCE_TOKEN, presenceToken } from '../_shared/presence.ts';
-import { clipCounts, currentListen, isoOrNull, loadSoundNights, loadSoundSettings, notListening, soundWindow } from '../_shared/sound.ts';
+import {
+  type Calibration,
+  clipCounts,
+  currentListen,
+  isoOrNull,
+  loadCalibration,
+  loadSoundNights,
+  loadSoundSettings,
+  notListening,
+  type SoundSettings,
+  soundWindow,
+} from '../_shared/sound.ts';
 import { type Db, serviceClient } from '../_shared/supabase.ts';
 import { iso } from '../_shared/time.ts';
 
@@ -67,7 +87,10 @@ serve(async (req) => {
     await pruneClips(db, now).catch((e) => console.error('clip retention', e instanceof Error ? e.message : String(e)));
   }
   if (req.method === 'GET') {
-    const c = await currentListen(db, now);
+    const [c, calibration] = await Promise.all([currentListen(db, now), loadCalibration(db).catch(calibrationError)]);
+    if (new URL(req.url).searchParams.get('labels') === '1') {
+      return json({ calibration, uncertainClipsLeft: c.uncertainClipsLeft, now: iso(now) });
+    }
     return json({
       listen: c.listen,
       reason: c.reason,
@@ -77,6 +100,8 @@ serve(async (req) => {
       clipsLeft: c.clipsLeft,
       sleepTalk: c.sleepTalk,
       speechClipsLeft: c.speechClipsLeft,
+      uncertainClipsLeft: c.uncertainClipsLeft,
+      calibration,
       night: c.night,
       now: iso(now),
     });
@@ -91,7 +116,8 @@ serve(async (req) => {
   const settings = await loadSoundSettings(db);
   let minutes = parsed.minutes;
   // Transcripts only for speech events and only with "Save sleep talk" on; otherwise dropped here, never stored.
-  let events = parsed.events.map((e) => applyTranscriptPolicy(e, settings.sleepTalk));
+  // Before migration 0030 there is no sound_events.uncertain column: the flag is dropped, not stored.
+  let events = parsed.events.map((e) => applyTranscriptPolicy(settings.labels ? e : { ...e, uncertain: false }, settings.sleepTalk));
   let droppedOff = 0;
   if (notListening(settings, now)) {
     droppedOff = minutes.length + events.length;
@@ -124,7 +150,12 @@ serve(async (req) => {
   let storedEvents = 0;
   if (keptEvents.length) {
     const res = await db.from('sound_events')
-      .upsert(keptEvents.map((e) => soundEventRow(e, camera, nightOf(e.ts))), { onConflict: 'camera,ts,kind', ignoreDuplicates: true })
+      .upsert(keptEvents.map((e) => soundEventRow(e, camera, nightOf(e.ts), { uncertainColumn: settings.labels })), {
+        onConflict: 'camera,ts,kind',
+        ignoreDuplicates: true,
+        // A key missing from one row of the batch takes the column default, not NULL.
+        defaultToNull: false,
+      })
       .select('id');
     if (res.error) {
       console.error('sound_events', res.error.message);
@@ -137,7 +168,7 @@ serve(async (req) => {
   const speechClips = settings.clips && settings.sleepTalk;
   const wanted = keptEvents.filter((e) => clipAllowed(e, now, { speech: speechClips }));
   if (wanted.length && settings.clips) {
-    uploads = await reserveClips(db, camera, wanted, nightOf).catch((e) => {
+    uploads = await reserveClips(db, camera, wanted, nightOf, settings).catch((e) => {
       console.error('clips', e instanceof Error ? e.message : String(e));
       return [];
     });
@@ -158,6 +189,11 @@ serve(async (req) => {
   });
 });
 
+function calibrationError(e: unknown): Calibration | null {
+  console.error('calibration', e instanceof Error ? e.message : String(e));
+  return null;
+}
+
 interface Upload {
   index: number;
   path: string;
@@ -170,34 +206,43 @@ interface Upload {
 /**
  * Signed upload URLs for the wanted clips: an event that already has a clip_path (a retried batch) gets a fresh URL for
  * the same object; otherwise a path is reserved while the night has fewer than SOUND_CLIPS_PER_NIGHT clips (speech:
- * fewer than SOUND_SPEECH_CLIPS_PER_NIGHT speech clips, a separate allowance).
+ * fewer than SOUND_SPEECH_CLIPS_PER_NIGHT speech clips; uncertain: fewer than settings.uncertainClips borderline
+ * clips; separate allowances, core clipAllowance).
  */
 async function reserveClips(
   db: Db,
   camera: string,
-  wanted: readonly { index: number; ts: number; kind: 'snore' | 'loud' | 'cough' | 'speech' | 'other'; label: string | null }[],
+  wanted: readonly { index: number; ts: number; kind: 'snore' | 'loud' | 'cough' | 'speech' | 'other'; label: string | null; uncertain?: boolean }[],
   nightOf: (ts: number) => string,
+  settings: SoundSettings,
 ): Promise<Upload[]> {
   const tss = wanted.map((e) => e.ts);
-  const { data, error } = await db.from('sound_events').select('id,ts,kind,clip_path,night_date')
+  // The allowance follows the stored row (as clipCounts counts it), not the incoming flag: a re-post of an existing
+  // (camera, ts, kind) is ignored by the upsert, so its uncertain/label may differ from what is stored.
+  const cols = settings.labels ? 'id,ts,kind,label,uncertain,clip_path,night_date' : 'id,ts,kind,label,clip_path,night_date';
+  const { data, error } = await db.from('sound_events').select(cols)
     .eq('camera', camera).gte('ts', iso(Math.min(...tss))).lte('ts', iso(Math.max(...tss)));
   if (error) throw new Error(`sound_events: ${error.message}`);
-  const rows = (data ?? []) as { id: number; ts: string; kind: string; clip_path: string | null; night_date: string }[];
-  // Clips left per night and allowance: key '<night>|speech' or '<night>|other'.
+  const rows = (data ?? []) as unknown as {
+    id: number; ts: string; kind: string; label: string | null; uncertain?: boolean | null; clip_path: string | null; night_date: string;
+  }[];
+  // Clips left per night and allowance: key '<night>|speech', '<night>|uncertain' or '<night>|other'.
   const left = new Map<string, number>();
   const out: Upload[] = [];
   for (const e of wanted) {
     const row = rows.find((r) => Date.parse(r.ts) === e.ts && r.kind === e.kind);
     if (!row) continue;
-    const speech = isSpeechEvent(e);
+    const allowance = clipAllowance({ kind: row.kind, label: row.label, uncertain: row.uncertain === true });
+    const speech = allowance === 'speech';
     let path = row.clip_path;
     if (!path) {
       const night = nightOf(e.ts);
-      const key = `${night}|${speech ? 'speech' : 'other'}`;
+      const key = `${night}|${allowance}`;
       if (!left.has(key)) {
         const used = await clipCounts(db, night);
         left.set(`${night}|other`, SOUND_CLIPS_PER_NIGHT - used.other);
         left.set(`${night}|speech`, SOUND_SPEECH_CLIPS_PER_NIGHT - used.speech);
+        left.set(`${night}|uncertain`, (settings.uncertainClips ?? 0) - used.uncertain);
       }
       if ((left.get(key) ?? 0) <= 0) continue;
       const candidate = soundClipPath(night, e);

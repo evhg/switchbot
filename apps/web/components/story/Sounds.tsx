@@ -6,15 +6,19 @@
 // Clips of loud moments play inline (signed URLs from the private 'night-sounds' bucket, 1 h). "Sleep talk" lists the
 // night's talking in sleep (migration 0029: kept while "Save sleep talk" is on; talking while both were awake is
 // removed the next morning): time, "probably Cath/Erik" (talker_hint), the Mac's transcript in quotes and the clip.
-import { useMemo } from 'react';
+// Under each clip: "Snoring" / "Not snoring" (then Cath / Erik / ?) — sound labels, migration 0030, lib/soundLabels.ts.
+// A label wins over the detector in the minutes counted as snoring, and the Mac retunes itself from the labels.
+import { useMemo, useState } from 'react';
 import { nightSoundSummary, wakeTriggers } from '@sleep-lab/core';
 import { dur, fmt, hm, MIN } from '@/lib/format.ts';
 import { isSpeechEvent } from '@sleep-lab/core';
+import { useAuth } from '@/lib/auth.tsx';
 import { cathWakeStarts, dbText, eventWords, sleepTalkEvents, talkerWords, useClipUrls, useNightSounds, type SoundEvent } from '@/lib/sound.ts';
+import { labelTally, useSoundLabels, withLabels, type Labelling, type SoundLabel, type SoundLabelWho } from '@/lib/soundLabels.ts';
 import { SoundChart, type WakeMark } from '../charts/SoundChart.tsx';
 import { Reveal } from '../motion.tsx';
 import { clock, usePlanClock } from '../system/model.ts';
-import { EventList, Placeholder, Readout, Readouts } from '../ui.tsx';
+import { Chip, EventList, Placeholder, Readout, Readouts } from '../ui.tsx';
 import { possessive, type StoryModel } from './model.ts';
 import { Scene, SceneCols, SceneText, VisHead } from './parts.tsx';
 import s from './story.module.css';
@@ -23,19 +27,85 @@ import s from './story.module.css';
 const CATH = 'a';
 const LOOKBACK_MS = 2 * MIN;
 
-/** Notable moments, with an inline player when a clip was kept (talking: who probably said it and the transcript). */
+const DEFAULT_NAMES: Readonly<Record<string, string>> = { a: 'Cath', b: 'Erik' };
+
+/** "Snoring" / "Not snoring" under a clip, then who snored (Cath / Erik / ?). Read-only text for viewers. */
+function LabelButtons({ e, labelling, names }: { e: SoundEvent; labelling: Labelling; names: Readonly<Record<string, string>> }) {
+  const cur = labelling.labels.get(e.id) ?? null;
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const set = async (label: SoundLabel, who: SoundLabelWho | null = null) => {
+    setBusy(true);
+    setMsg(null);
+    setMsg(await labelling.setLabel(e.id, label, who));
+    setBusy(false);
+  };
+  const whoName = (w: SoundLabelWho | null) => (w === 'a' || w === 'b' ? (names[w] ?? DEFAULT_NAMES[w]) : w === 'both' ? 'both' : null);
+  if (!labelling.canLabel) {
+    if (!cur) return null;
+    const words = cur.label === 'snore' ? `Labelled snoring${whoName(cur.who) ? ` (${whoName(cur.who)})` : ''}` : cur.label === 'not_snore' ? 'Labelled not snoring' : `Labelled ${cur.label === 'speech' ? 'sleep talk' : 'other'}`;
+    return <span style={{ display: 'block', marginTop: 4 }}>{words}</span>;
+  }
+  const chips = { display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 } as const;
+  return (
+    <span style={{ display: 'block' }}>
+      <span className="chips" role="group" aria-label={`Was the sound at ${hm(e.ts)} snoring?`} style={chips}>
+        <Chip selected={cur?.label === 'snore'} disabled={busy} onClick={() => void set('snore', cur?.label === 'snore' ? cur.who : null)}>
+          Snoring
+        </Chip>
+        <Chip selected={cur?.label === 'not_snore'} disabled={busy} onClick={() => void set('not_snore')}>
+          Not snoring
+        </Chip>
+      </span>
+      {cur?.label === 'snore' && (
+        <span className="chips" role="group" aria-label="Who snored?" style={chips}>
+          {(['a', 'b', 'unknown'] as const).map((w) => (
+            <Chip key={w} selected={cur.who === w} disabled={busy} onClick={() => void set('snore', w)}>
+              {w === 'unknown' ? '?' : (names[w] ?? DEFAULT_NAMES[w])}
+            </Chip>
+          ))}
+        </span>
+      )}
+      {msg && (
+        <span className="sig" style={{ display: 'block', marginTop: 4 }}>
+          {msg}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** "Labelled: 6 snore, 3 not. The Mac retunes itself every evening from these." */
+export function LabelTally({ labelling }: { labelling: Labelling }) {
+  const tally = labelTally(labelling.counts);
+  if (!tally && !labelling.canLabel && !labelling.error) return null;
+  return (
+    <p className="sec">
+      {tally ? `${tally}. ` : 'Tap Snoring or Not snoring under a clip. '}
+      The Mac retunes itself every evening from these.
+      {labelling.error && <span className="sig"> {labelling.error}</span>}
+    </p>
+  );
+}
+
+/**
+ * Notable moments, with an inline player when a clip was kept (talking: who probably said it and the transcript).
+ * With `labelling`, every moment with a clip (or a transcript, or sample data) gets the Snoring / Not snoring buttons.
+ */
 export function SoundMoments({
   events,
   clips,
   max = 12,
   empty,
   names = {},
+  labelling,
 }: {
   events: readonly SoundEvent[];
   clips: Record<string, string>;
   max?: number;
   empty?: string;
   names?: Readonly<Record<string, string>>;
+  labelling?: Labelling;
 }) {
   if (!events.length) return empty ? <p className="sec">{empty}</p> : null;
   return (
@@ -46,6 +116,7 @@ export function SoundMoments({
         const speech = isSpeechEvent(e);
         const facts = [
           speech ? talkerWords(e.talkerHint, names) : null,
+          e.uncertain && e.label && !speech ? `sounded like “${e.label}”` : null,
           e.durationS === null ? null : e.durationS >= 60 ? dur(e.durationS / 60) : `${Math.max(1, Math.round(e.durationS))} s`,
           !speech && e.peakDb !== null ? `peak ${dbText(e.peakDb)}` : null,
         ]
@@ -62,6 +133,7 @@ export function SoundMoments({
                 // eslint-disable-next-line jsx-a11y/media-has-caption
                 <audio controls preload="none" src={url} style={{ display: 'block', width: '100%', maxWidth: 320, height: 36, marginTop: 6 }} aria-label={`${eventWords(e)} at ${hm(e.ts)}`} />
               )}
+              {labelling && (e.clipPath || e.transcript || e.sample) && <LabelButtons e={e} labelling={labelling} names={names} />}
             </>
           ),
         };
@@ -92,11 +164,14 @@ export function Sounds({ model }: { model: StoryModel }) {
     [model.date, model.lo, model.wake, erik],
   );
   const { real, data, error } = useNightSounds(input);
+  const auth = useAuth();
+  const labelling = useSoundLabels(real, real && (auth.probe?.role === 'owner' || auth.probe?.role === 'member'));
   const pc = usePlanClock();
   const listenWindow = `from ${clock(pc.lightsOut - 15)} to ${clock(pc.wake + 30)}`;
 
-  const minutes = data?.minutes ?? [];
-  const events = data?.events ?? [];
+  const minutes = useMemo(() => data?.minutes ?? [], [data]);
+  // The household's labels win over the detector (core nightSoundSummary / wakeTriggers read humanLabel).
+  const events = useMemo(() => withLabels(data?.events ?? [], labelling.labels), [data, labelling.labels]);
   const summary = useMemo(() => (minutes.length ? nightSoundSummary(minutes, events) : null), [minutes, events]);
   const wakeStarts = useMemo(() => (cath ? cathWakeStarts(cath.night.sleep.stages) : []), [cath]);
   const triggers = useMemo(() => {
@@ -104,10 +179,16 @@ export function Sounds({ model }: { model: StoryModel }) {
     const res = wakeTriggers(wakeStarts, minutes, events, { lookbackMs: LOOKBACK_MS });
     return res.rows.filter((r) => r.heard).map((r) => ({ ts: r.wakeAt, snore: r.snore, loud: r.loud }));
   }, [minutes, events, wakeStarts]);
-  const clipEvents = useMemo(
-    () => [...events].filter((e) => !isSpeechEvent(e)).sort((a, b) => (b.clipPath ? 1 : 0) - (a.clipPath ? 1 : 0) || (b.peakDb ?? -999) - (a.peakDb ?? -999)).slice(0, 8).sort((a, b) => a.ts - b.ts),
-    [events],
-  );
+  // Every clipped (or borderline) moment, at least the 8 loudest, at most 24: each clip can be labelled.
+  const clipEvents = useMemo(() => {
+    const rest = [...events].filter((e) => !isSpeechEvent(e));
+    const keep = (e: SoundEvent) => !!e.clipPath || !!e.uncertain;
+    const n = Math.min(24, Math.max(8, rest.filter(keep).length));
+    return rest
+      .sort((a, b) => (keep(b) ? 1 : 0) - (keep(a) ? 1 : 0) || (b.peakDb ?? -999) - (a.peakDb ?? -999))
+      .slice(0, n)
+      .sort((a, b) => a.ts - b.ts);
+  }, [events]);
   const talk = useMemo(() => sleepTalkEvents(events), [events]);
   const clipped = useMemo(() => [...clipEvents, ...talk], [clipEvents, talk]);
   const clips = useClipUrls(clipped, real);
@@ -150,6 +231,9 @@ export function Sounds({ model }: { model: StoryModel }) {
   const lede = [
     `${fmt(summary.snorePct)}% of the ${dur(summary.listenedMin)} the Mac listened.`,
     summary.loudEvents ? `${summary.loudEvents} loud moment${summary.loudEvents === 1 ? '' : 's'}.` : 'No loud moments.',
+    summary.labelAddedMin || summary.labelRemovedMin
+      ? `Your labels ${[summary.labelAddedMin ? `added ${dur(summary.labelAddedMin)}` : null, summary.labelRemovedMin ? `took out ${dur(summary.labelRemovedMin)}` : null].filter(Boolean).join(' and ')} of snoring.`
+      : null,
     sentence,
     real ? null : 'Sample sounds (Simulated data).',
   ]
@@ -182,11 +266,12 @@ export function Sounds({ model }: { model: StoryModel }) {
         </Reveal>
         <Reveal delay={120}>
           <h3 className="label">Notable moments</h3>
-          <SoundMoments events={clipEvents} clips={clips} empty="Nothing stood out." />
+          <SoundMoments events={clipEvents} clips={clips} names={names} labelling={labelling} max={24} empty="Nothing stood out." />
+          <LabelTally labelling={labelling} />
         </Reveal>
         <Reveal delay={140}>
           <h3 className="label">Sleep talk</h3>
-          <SoundMoments events={talk} clips={clips} names={names} max={20} empty="No sleep talk last night." />
+          <SoundMoments events={talk} clips={clips} names={names} labelling={labelling} max={20} empty="No sleep talk last night." />
           {talk.some((e) => e.sleepTalk == null) && <p className="sec">Some talking isn’t checked against your sleep yet. If you were both awake, it’s deleted this morning.</p>}
         </Reveal>
       </SceneCols>

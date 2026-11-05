@@ -6,8 +6,8 @@
  *
  *   useSoundSettings(enabled, nonce)    sound_mode ('auto' | 'off'), sound_paused_until, sound_clips, live_video,
  *                                       sound_sleeptalk (migration 0029)
- *   setSoundSettings / pauseSoundUntil / setLiveVideo / setSoundSleepTalk   the writers' RPCs; each returns an error
- *                                       message or null
+ *   setSoundSettings / pauseSoundUntil / setLiveVideo / setSoundSleepTalk / setSoundUncertainClips (0030)
+ *                                       the writers' RPCs; each returns an error message or null
  *   useRecentSounds(enabled, nonce)     the last 60 minutes + the newest events, refreshed every 60 s (Live tab)
  *   useNewestSoundMinute(enabled)       ts of the newest sound_minutes row (the Mac listener's status)
  *   useNightSounds(night)               one night's minutes and events (night_date = the morning's date); sample
@@ -66,6 +66,8 @@ export interface SoundSettings {
   liveVideo: boolean;
   /** "Save sleep talk" (sound_sleeptalk, migration 0029); null before the migration. */
   sleepTalk: boolean | null;
+  /** Borderline clips per night for labelling (sound_uncertain_clips, migration 0030; 0 = off); null before it. */
+  uncertainClips: number | null;
 }
 
 /** The listener counts as "listening" when its newest minute is this recent. */
@@ -124,6 +126,7 @@ export function toSoundEvent(r: Row): SoundEvent {
     transcriptLang: str(r.transcript_lang),
     sleepTalk: typeof r.sleep_talk === 'boolean' ? r.sleep_talk : null,
     talkerHint: str(r.talker_hint),
+    uncertain: r.uncertain === true,
   };
 }
 
@@ -145,9 +148,14 @@ export function talkerWords(hint: string | null | undefined, names: Readonly<Rec
   return n ? `probably ${n}` : null;
 }
 
-/** Plain words for an event: "Snoring", "Loud: Door", "Cough", "Talking", or the class name. */
-export function eventWords(e: Pick<SoundEvent, 'kind' | 'label'> & { sleepTalk?: boolean | null }): string {
+/**
+ * Plain words for an event: "Snoring", "Loud: Door", "Cough", "Talking", "Unclear sound" (a borderline sound the Mac
+ * clipped for labelling, migration 0030), or the class name. A "Snoring" label wins.
+ */
+export function eventWords(e: Pick<SoundEvent, 'kind' | 'label'> & { sleepTalk?: boolean | null; uncertain?: boolean; humanLabel?: string | null }): string {
   if (e.sleepTalk === true) return 'Sleep talk';
+  if (e.humanLabel === 'snore') return 'Snoring';
+  if (e.uncertain && e.kind !== 'speech') return 'Unclear sound';
   if (e.kind === 'snore') return 'Snoring';
   if (e.kind === 'cough') return 'Cough';
   if (e.kind === 'speech') return 'Talking';
@@ -183,6 +191,7 @@ export function useSoundSettings(enabled: boolean, nonce = 0): { settings: Sound
             clips: d.sound_clips !== false,
             liveVideo: d.live_video === true,
             sleepTalk: typeof d.sound_sleeptalk === 'boolean' ? d.sound_sleeptalk : null,
+            uncertainClips: Number.isFinite(num(d.sound_uncertain_clips)) ? num(d.sound_uncertain_clips) : null,
           },
           error: null,
         });
@@ -209,6 +218,13 @@ export async function setSoundSleepTalk(on: boolean): Promise<string | null> {
   const { error } = await supabaseClient().rpc('set_sound_sleeptalk', { p_on: on });
   if (!error) return null;
   return /set_sound_sleeptalk|sound_sleeptalk/i.test(error.message) ? 'Sleep talk isn’t on the server yet (migration 0029).' : errText(error.message);
+}
+
+/** Borderline clips per night (migration 0030): 0 turns them off. */
+export async function setSoundUncertainClips(n: number): Promise<string | null> {
+  const { error } = await supabaseClient().rpc('set_sound_uncertain_clips', { p_n: n });
+  if (!error) return null;
+  return /set_sound_uncertain_clips|sound_uncertain_clips/i.test(error.message) ? 'Labelling isn’t on the server yet (migration 0030).' : errText(error.message);
 }
 
 /**
@@ -485,6 +501,25 @@ export function sampleNightSounds(n: NightSoundsInput): { minutes: SoundMinute[]
       transcriptLang: null,
       sleepTalk: true,
       talkerHint: i === 0 ? 'b' : null,
+      sample: true,
+    });
+  }
+  // Borderline sounds the Mac clipped for labelling (migration 0030): quiet, YAMNet unsure what they are.
+  const deep = minutes.filter((m) => stageAt(m.ts) === 'deep' || stageAt(m.ts) === 'light');
+  for (const [frac, label] of [[0.55, 'Whale vocalization'], [0.85, 'Music']] as const) {
+    const m = deep[Math.floor(frac * deep.length)];
+    if (!m) continue;
+    events.push({
+      id: `s${id++}`,
+      ts: m.ts + 40_000,
+      durationS: 5 + Math.round(r() * 4),
+      kind: 'other',
+      label,
+      peakDb: (m.dbFloor ?? -70) + 8 + r() * 3,
+      score: 0.2 + r() * 0.2,
+      wantClip: false,
+      clipPath: null,
+      uncertain: true,
       sample: true,
     });
   }

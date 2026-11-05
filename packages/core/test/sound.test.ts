@@ -199,13 +199,15 @@ describe('nightSoundSummary', () => {
     expect(s).toEqual({
       listenedMin: 7,
       snoreMin: 6,
+      labelAddedMin: 0,
+      labelRemovedMin: 0,
       snorePct: 86,
       loudEvents: 1,
       longestSnoreRunMin: 3,
       loudestDb: -10,
       floorDb: -70,
     });
-    expect(nightSoundSummary([], [])).toEqual({ listenedMin: 0, snoreMin: 0, snorePct: 0, loudEvents: 0, longestSnoreRunMin: 0, loudestDb: null, floorDb: null });
+    expect(nightSoundSummary([], [])).toEqual({ listenedMin: 0, snoreMin: 0, labelAddedMin: 0, labelRemovedMin: 0, snorePct: 0, loudEvents: 0, longestSnoreRunMin: 0, loudestDb: null, floorDb: null });
   });
 });
 

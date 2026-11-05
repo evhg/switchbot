@@ -6,7 +6,16 @@
 // tonight's listen window: lights-out − 15 min → the aircon's scheduled OFF at wake + 30 min (core listenWindow, the
 // same "off (wake + 30 min)" the controller schedules). Nights are keyed by their wake date (nightDateFor). Between
 // that OFF and 12:00 the reported window is the coming night's (its nights row, else the default schedule).
-import { inWindow, isSpeechEvent, listenWindow, type ListenWindow, SOUND_CLIPS_PER_NIGHT, SOUND_SPEECH_CLIPS_PER_NIGHT } from '../../../packages/core/src/sound/payload.ts';
+import { clipAllowance, inWindow, listenWindow, type ListenWindow, SOUND_CLIPS_PER_NIGHT, SOUND_SPEECH_CLIPS_PER_NIGHT } from '../../../packages/core/src/sound/payload.ts';
+import {
+  CALIBRATION_MAX_LABELS,
+  type CalibrationLabel,
+  calibrationLabelFromRow,
+  type CalibrationSummary,
+  calibrationSummary,
+  SOUND_UNCERTAIN_CLIPS_DEFAULT,
+  SOUND_UNCERTAIN_CLIPS_MAX,
+} from '../../../packages/core/src/sound/labels.ts';
 import type { Ms } from '../../../packages/core/src/types.ts';
 import { DEFAULT_WAKE_HHMM } from './load.ts';
 import { optEnv } from './env.ts';
@@ -24,6 +33,10 @@ export interface SoundSettings {
   clips: boolean;
   /** "Save sleep talk" (sound_sleeptalk, migration 0029): speech clips and transcripts allowed. */
   sleepTalk: boolean;
+  /** Borderline clips per night (sound_uncertain_clips, migration 0030); 0 = off, and 0 before the migration. */
+  uncertainClips?: number;
+  /** Migration 0030 is applied (sound_events.uncertain and sound_labels exist). */
+  labels?: boolean;
 }
 
 /** The night fields the decision needs (a nights row, or the default schedule). */
@@ -124,7 +137,9 @@ export async function loadSoundSettings(db: Db): Promise<SoundSettings> {
   // select('*'): before migration 0029 there is no sound_sleeptalk column, and that must not break listening.
   const { data, error } = await db.from('household_settings').select('*').eq('id', 1).maybeSingle();
   if (error) throw new Error(`household_settings: ${error.message}`);
-  const r = data as { sound_mode?: string; sound_paused_until?: string | null; sound_clips?: boolean; sound_sleeptalk?: boolean } | null;
+  const r = data as { sound_mode?: string; sound_paused_until?: string | null; sound_clips?: boolean; sound_sleeptalk?: boolean; sound_uncertain_clips?: number } | null;
+  const labels = !!r && 'sound_uncertain_clips' in r;
+  const n = Number(r?.sound_uncertain_clips ?? SOUND_UNCERTAIN_CLIPS_DEFAULT);
   return {
     // No row = the column defaults: auto, clips on.
     mode: r?.sound_mode === 'off' ? 'off' : 'auto',
@@ -132,6 +147,9 @@ export async function loadSoundSettings(db: Db): Promise<SoundSettings> {
     clips: r?.sound_clips !== false,
     // Missing column (before 0029) = off: speech stays unclipped until the migration is applied.
     sleepTalk: r?.sound_sleeptalk === true,
+    // Missing column (before 0030) = no borderline clips, and the uncertain flag is not stored.
+    uncertainClips: labels && Number.isFinite(n) ? Math.min(SOUND_UNCERTAIN_CLIPS_MAX, Math.max(0, Math.round(n))) : 0,
+    labels,
   };
 }
 
@@ -145,6 +163,8 @@ export interface CurrentListen extends ListenDecision {
   /** Speech clips may be requested (clips and sleep talk on). */
   sleepTalk: boolean;
   speechClipsLeft: number;
+  /** Borderline clips left tonight (0 with clips off, sound_uncertain_clips 0, or before migration 0030). */
+  uncertainClipsLeft: number;
   settings: SoundSettings;
 }
 
@@ -170,30 +190,72 @@ export async function currentListen(db: Db, now: Ms): Promise<CurrentListen> {
     clipsLeft: Math.max(0, SOUND_CLIPS_PER_NIGHT - clipsUsed.other),
     sleepTalk: settings.clips && settings.sleepTalk,
     speechClipsLeft: settings.clips && settings.sleepTalk ? Math.max(0, SOUND_SPEECH_CLIPS_PER_NIGHT - clipsUsed.speech) : 0,
+    uncertainClipsLeft: settings.clips ? Math.max(0, (settings.uncertainClips ?? 0) - clipsUsed.uncertain) : 0,
     settings,
   };
 }
 
 /**
- * Clips reserved for a night (sound_events with clip_path set), split into speech (kind 'speech' or a speech-class
- * label: the sleep-talk allowance) and the rest.
+ * Clips reserved for a night (sound_events with clip_path set), split by allowance (core clipAllowance): speech (kind
+ * 'speech' or a speech-class label: the sleep-talk allowance), uncertain (borderline sounds, migration 0030) and the
+ * rest.
  */
-export async function clipCounts(db: Db, nightDate: string): Promise<{ other: number; speech: number }> {
-  const { data, error } = await db.from('sound_events').select('kind,label').eq('night_date', nightDate).not('clip_path', 'is', null).limit(1000);
+export async function clipCounts(db: Db, nightDate: string): Promise<{ other: number; speech: number; uncertain: number }> {
+  // '*': sound_events.uncertain exists only from migration 0030 on (rows with a clip are few: ≤ 40 + 20 + 40 a night).
+  const { data, error } = await db.from('sound_events').select('*').eq('night_date', nightDate).not('clip_path', 'is', null).limit(1000);
   if (error) throw new Error(`sound_events clips: ${error.message}`);
-  let speech = 0;
-  let other = 0;
-  for (const r of (data ?? []) as { kind: string; label: string | null }[]) {
-    if (isSpeechEvent(r)) speech++;
-    else other++;
-  }
-  return { other, speech };
+  const out = { other: 0, speech: 0, uncertain: 0 };
+  for (const r of (data ?? []) as { kind: string; label: string | null; uncertain?: boolean | null }[]) out[clipAllowance(r)]++;
+  return out;
 }
 
-/** Clips reserved for a night (both allowances together). */
+/** Clips reserved for a night (all allowances together). */
 export async function clipsStored(db: Db, nightDate: string): Promise<number> {
   const c = await clipCounts(db, nightDate);
-  return c.other + c.speech;
+  return c.other + c.speech + c.uncertain;
+}
+
+// ---------------------------------------------------------------- labels → the Mac's calibration (migration 0030)
+
+export interface Calibration {
+  /** The latest labelled events (≤ 200, newest label first). */
+  labels: CalibrationLabel[];
+  summary: CalibrationSummary;
+}
+
+/**
+ * The labelled events the Mac tunes its snore rule from: the newest CALIBRATION_MAX_LABELS sound_labels rows with
+ * their sound_events row and the quiet floor of the event's minute (sound_minutes.db_floor). Throws on a read error
+ * (e.g. before migration 0030); the caller answers calibration: null then.
+ */
+export async function loadCalibration(db: Db, limit = CALIBRATION_MAX_LABELS): Promise<Calibration> {
+  const { data, error } = await db.from('sound_labels').select('event_id,label,who,labelled_at')
+    .order('labelled_at', { ascending: false }).limit(Math.max(1, Math.min(CALIBRATION_MAX_LABELS, limit)));
+  if (error) throw new Error(`sound_labels: ${error.message}`);
+  const rows = (data ?? []) as { event_id: number; label: string; who: string | null; labelled_at: string }[];
+  if (!rows.length) return { labels: [], summary: calibrationSummary([]) };
+  type Ev = { id: number; ts: string; camera: string; kind: string; label: string | null; peak_db: number | null; duration_s: number | null; score: number | null; uncertain?: boolean | null };
+  const ev = await db.from('sound_events').select('id,ts,camera,kind,label,peak_db,duration_s,score,uncertain').in('id', rows.map((r) => r.event_id));
+  if (ev.error) throw new Error(`sound_events labelled: ${ev.error.message}`);
+  const events = new Map(((ev.data ?? []) as Ev[]).map((e) => [Number(e.id), e]));
+  // The quiet floor of each event's minute.
+  const minuteIso = (ts: string) => new Date(Math.floor(Date.parse(ts) / 60_000) * 60_000).toISOString();
+  const starts = [...new Set([...events.values()].map((e) => minuteIso(e.ts)))];
+  const floors = new Map<string, number>();
+  for (let i = 0; i < starts.length; i += 100) {
+    const m = await db.from('sound_minutes').select('camera,ts,db_floor').in('ts', starts.slice(i, i + 100));
+    if (m.error) throw new Error(`sound_minutes floors: ${m.error.message}`);
+    for (const r of (m.data ?? []) as { camera: string; ts: string; db_floor: number | null }[]) {
+      if (typeof r.db_floor === 'number') floors.set(`${r.camera}|${new Date(Date.parse(r.ts)).toISOString()}`, r.db_floor);
+    }
+  }
+  const labels: CalibrationLabel[] = [];
+  for (const r of rows) {
+    const e = events.get(Number(r.event_id)) ?? null;
+    const l = calibrationLabelFromRow(r, e, e ? floors.get(`${e.camera}|${minuteIso(e.ts)}`) ?? null : null);
+    if (l) labels.push(l);
+  }
+  return { labels, summary: calibrationSummary(labels) };
 }
 
 export const isoOrNull = (ms: Ms | null | undefined) => (ms === null || ms === undefined || !Number.isFinite(ms) ? null : iso(ms));

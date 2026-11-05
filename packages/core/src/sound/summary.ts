@@ -1,6 +1,7 @@
 // Night sounds: the night's summary and "does the snoring wake Cath?" (her Fitbit awakenings against the Mac's minutes
 // and events). Pure: pass the rows (soundMinuteFromRow / soundEventFromRow) and the awakening times.
 import type { Ms, StageSegment } from '../types.ts';
+import { eventMinutes } from './labels.ts';
 import { LOUD_ABOVE_FLOOR_DB, SNORE_MIN_S, type SoundEvent, type SoundMinute } from './payload.ts';
 
 const MIN = 60_000;
@@ -8,8 +9,12 @@ const MIN = 60_000;
 export interface NightSoundSummary {
   /** Minutes with a summary (= minutes the Mac listened). */
   listenedMin: number;
-  /** Minutes with snoreS ≥ 10. */
+  /** Minutes with snoreS ≥ 10, with the household's labels applied (labelledSnore). */
   snoreMin: number;
+  /** Of snoreMin: minutes counted only because an event in them was labelled snoring. */
+  labelAddedMin: number;
+  /** Minutes the detector called snoring that a "Not snoring" label took out. */
+  labelRemovedMin: number;
   /** snoreMin / listenedMin, percent 0..100 (rounded), 0 without data. */
   snorePct: number;
   /** Events of kind 'loud'. */
@@ -31,16 +36,46 @@ const median = (xs: number[]): number | null => {
 
 const isSnoreMinute = (m: SoundMinute) => m.snoreS >= SNORE_MIN_S;
 
+/**
+ * The household's labels per minute (a human label wins over the detector): minute start → true (an event covering it
+ * was labelled 'snore') or false (only 'not_snore' labels cover it). An event covers [ts, ts + durationS] (its own
+ * minute at least, 60 minutes at most). 'speech' / 'other' labels and unlabelled events leave the detector alone.
+ */
+export function labelledSnore(events: readonly Pick<SoundEvent, 'ts' | 'durationS' | 'humanLabel'>[]): Map<number, boolean> {
+  const out = new Map<number, boolean>();
+  for (const e of events) {
+    if (e.humanLabel !== 'snore' && e.humanLabel !== 'not_snore') continue;
+    for (const t of eventMinutes(e)) {
+      if (e.humanLabel === 'snore') out.set(t, true);
+      else if (!out.has(t)) out.set(t, false);
+    }
+  }
+  return out;
+}
+
+/** Snoring per minute after the labels: the detector (snoreS ≥ 10) unless a label covers the minute. */
+const snoreAt = (labels: Map<number, boolean>, ts: number, m: SoundMinute | undefined) => labels.get(ts) ?? (!!m && isSnoreMinute(m));
+
 export function nightSoundSummary(minutes: readonly SoundMinute[], events: readonly SoundEvent[]): NightSoundSummary {
   const byTs = new Map<number, SoundMinute>();
   for (const m of minutes) if (!byTs.has(Math.floor(m.ts / MIN) * MIN)) byTs.set(Math.floor(m.ts / MIN) * MIN, m);
-  const sorted = [...byTs].sort((a, b) => a[0] - b[0]);
+  const labels = labelledSnore(events);
+  // A labelled-snoring minute counts even without a summary row (the Mac heard it: there is an event).
+  const keys = new Set<number>(byTs.keys());
+  for (const [t, v] of labels) if (v) keys.add(t);
+  const sorted = [...keys].sort((a, b) => a - b).map((ts) => [ts, byTs.get(ts)] as const);
   let snoreMin = 0;
+  let labelAddedMin = 0;
+  let labelRemovedMin = 0;
   let run = 0;
   let longest = 0;
   let prevTs = -Infinity;
   for (const [ts, m] of sorted) {
-    if (isSnoreMinute(m)) {
+    const detector = !!m && isSnoreMinute(m);
+    const snoring = snoreAt(labels, ts, m);
+    if (snoring && !detector) labelAddedMin++;
+    if (!snoring && detector) labelRemovedMin++;
+    if (snoring) {
       snoreMin++;
       run = ts - prevTs === MIN && run > 0 ? run + 1 : 1;
       longest = Math.max(longest, run);
@@ -48,15 +83,17 @@ export function nightSoundSummary(minutes: readonly SoundMinute[], events: reado
     prevTs = ts;
   }
   const peaks = [
-    ...sorted.map(([, m]) => m.dbMax),
+    ...sorted.map(([, m]) => m?.dbMax),
     ...events.map((e) => e.peakDb),
   ].filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
-  const floors = sorted.map(([, m]) => m.dbFloor).filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
+  const floors = sorted.map(([, m]) => m?.dbFloor).filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
   const floor = median(floors);
   const listenedMin = sorted.length;
   return {
     listenedMin,
     snoreMin,
+    labelAddedMin,
+    labelRemovedMin,
     snorePct: listenedMin ? Math.round((snoreMin / listenedMin) * 100) : 0,
     loudEvents: events.filter((e) => e.kind === 'loud').length,
     longestSnoreRunMin: longest,
@@ -127,6 +164,7 @@ export function wakeTriggers(
   const byMinute = new Map<number, SoundMinute>();
   for (const m of minutes) byMinute.set(Math.floor(m.ts / MIN) * MIN, m);
   const nightFloor = nightSoundSummary(minutes, []).floorDb;
+  const labels = labelledSnore(events);
   const floorAt = (ts: Ms) => byMinute.get(Math.floor(ts / MIN) * MIN)?.dbFloor ?? nightFloor;
   const isLoud = (e: SoundEvent) => {
     if (e.peakDb === null) return e.kind === 'loud';
@@ -141,9 +179,13 @@ export function wakeTriggers(
     const heard = near.length > 0;
     if (!heard) return { wakeAt, heard, snore: false, loud: false, triggered: false, event: null };
     const evs = events.filter((e) => e.ts >= from && e.ts <= wakeAt + slack);
-    const snore = near.some((m) => m.snoreS >= SNORE_MIN_S) || evs.some((e) => e.kind === 'snore' && e.ts <= wakeAt);
+    // Labels win: a minute labelled snoring counts, one labelled "Not snoring" doesn't; likewise the events.
+    const nearTs = new Set(near.map((m) => Math.floor(m.ts / MIN) * MIN));
+    for (const [t, v] of labels) if (v && t <= wakeAt && t + MIN > from) nearTs.add(t);
+    const snoreEv = (e: SoundEvent) => (e.humanLabel === 'snore' ? true : e.humanLabel === 'not_snore' ? false : e.kind === 'snore');
+    const snore = [...nearTs].some((t) => snoreAt(labels, t, byMinute.get(t))) || evs.some((e) => snoreEv(e) && e.ts <= wakeAt);
     const loudEvs = evs.filter(isLoud);
-    const top = [...loudEvs, ...evs.filter((e) => e.kind === 'snore')]
+    const top = [...loudEvs, ...evs.filter(snoreEv)]
       .sort((a, b) => (b.peakDb ?? -Infinity) - (a.peakDb ?? -Infinity))[0];
     const loud = loudEvs.length > 0;
     return {

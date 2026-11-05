@@ -6,7 +6,8 @@
  *              (migration 0024; "Listening" when a minute arrived < 3 min ago), Pause tonight / Resume
  *              (pause_sound_until), the last 60 minutes as loudness + snoring, and the newest moments with clip
  *              players (signed URLs from the private 'night-sounds' bucket); speech clips with "Save sleep talk" on
- *              show who probably said it and the transcript (migration 0029). The Mac only listens from lights-out to
+ *              show who probably said it and the transcript (migration 0029); under each clip "Snoring" / "Not snoring" (and
+ *              who) labels it for the Mac's tuning (migration 0030). The Mac only listens from lights-out to
  *              the aircon's off time (wake + 30 min) and the night-sound Edge Function decides that, not this page.
  *   player     only when household_settings.live_video is true (System › Camera › Show live video, default off):
  *              go2rtc's own player in an iframe, 3K (living_hd) or Low data (living); with the stream lock on, the
@@ -15,15 +16,16 @@
  *   commands   collapsed: copyable Terminal commands for Erik's Mac (night listener, go2rtc, Tailscale Funnel).
  *   camera     collapsed: what the SwitchBot app controls (its cloud API has no commands for this model).
  */
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { DEFAULT_PEOPLE } from '@sleep-lab/core';
 import { useAuth } from '@/lib/auth.tsx';
 import { useData } from '@/lib/data/context.tsx';
 import { hm, ictDate, MIN } from '@/lib/format.ts';
 import { isListening, isPaused, nextNoon, pauseSoundUntil, useClipUrls, useRecentSounds, useSoundSettings, type SoundSettings } from '@/lib/sound.ts';
+import { useSoundLabels, withLabels } from '@/lib/soundLabels.ts';
 import { SoundChart } from '../charts/SoundChart.tsx';
 import { useChrome, systemHref } from '../nav.tsx';
-import { SoundMoments } from '../story/Sounds.tsx';
+import { LabelTally, SoundMoments } from '../story/Sounds.tsx';
 import { SWITCHBOT_APP_URL, STREAM, STREAM_HD, useCameraEmbed, useCameraUrl } from '../system/camera.tsx';
 import { clock, usePlanClock } from '../system/model.ts';
 import { Button, Disclosure, Group, PageHeader, Row, Segmented, Skeleton, Status } from '../ui.tsx';
@@ -128,6 +130,9 @@ function NightSounds({ live, canWrite, video }: { live: boolean; canWrite: boole
   const { settings, error: settingsError } = useSoundSettings(live, nonce);
   const { data, error } = useRecentSounds(live, nonce);
   const clips = useClipUrls(data?.events, live);
+  // "Snoring" / "Not snoring" under each clip (sound labels, migration 0030).
+  const labelling = useSoundLabels(live, canWrite);
+  const moments = useMemo(() => (data ? withLabels(data.events, labelling.labels) : []), [data, labelling.labels]);
   const { dataset, latest } = useData();
   const names = Object.fromEntries(((dataset ?? latest)?.people ?? DEFAULT_PEOPLE).map((p) => [p.id, p.name]));
   const pc = usePlanClock();
@@ -205,7 +210,19 @@ function NightSounds({ live, canWrite, video }: { live: boolean; canWrite: boole
       )}
 
       <h3 className="label">Latest moments</h3>
-      {data === undefined ? <Skeleton h={120} r="lg" /> : <SoundMoments events={data.events} clips={clips} names={names} max={20} empty="No moments yet. Snoring, coughs, loud noises and sleep talk show up here, with a short clip when one was kept." />}
+      {data === undefined ? (
+        <Skeleton h={120} r="lg" />
+      ) : (
+        <SoundMoments
+          events={moments}
+          clips={clips}
+          names={names}
+          labelling={labelling}
+          max={20}
+          empty="No moments yet. Snoring, coughs, loud noises and sleep talk show up here, with a short clip when one was kept."
+        />
+      )}
+      {data !== undefined && <LabelTally labelling={labelling} />}
       <p className={cx('cap', s.note)}>
         Sound is analysed on the Mac; only loudness, snoring and the kind of sound are sent, plus about 10 s clips of loud moments, kept 14 days.
         {settings?.sleepTalk ? ' Talking is clipped too (up to 30 s, with what was said); if you were both awake, it’s deleted the next morning.' : ' Talking is never clipped.'}

@@ -1142,3 +1142,57 @@ on the Mac. Talking while both of us were awake (a conversation) is removed the 
   2. Redeploy `night-sound` and `nightly-report`. Both work before the migration too: speech stays unclipped, and the
      judge reports an error and is skipped.
   3. Then paste the Mac prompt.
+
+## Sound labels (migration 0030)
+
+Added 2026-11-05 ("build 2"). The Mac listener missed most snoring: the camera's microphone is very quiet (about
+−68 dBFS, floor about −71) and YAMNet names real snoring "Whale vocalization", "Animal", "Wild animals", "Outside,
+rural or natural", "Music" or quiet "Speech". On night 2026-11-05 Cath snored but the detector found almost no snoring
+minutes after we both fell asleep. Now the household labels clips in the app and the Mac tunes itself from the labels.
+
+- **Schema** (`0030_sound_labels.sql`):
+  - `public.sound_labels`: `event_id` (primary key, references `sound_events.id`: one label per event, a re-label
+    replaces it), `label` (`snore` | `not_snore` | `speech` | `other`), `who` (`a` | `b` | `both` | `unknown` | null;
+    kept only for `snore`), `labelled_by` (auth.uid()), `labelled_at`. RLS: household members read; owners and members
+    write only through `label_sound_event(p_event_id, p_label, p_who default null)` (upsert; definer in `private`,
+    invoker wrapper in `public`); service role all. Index on `labelled_at desc`.
+  - `sound_events.uncertain` (boolean, default false): a borderline sound the Mac sent so we can label it.
+  - `household_settings.sound_uncertain_clips` (0..40, default 8; 0 = off) and `set_sound_uncertain_clips(p_n)`.
+- **night-sound**:
+  - GET adds `uncertainClipsLeft` (0 with clips off or the setting 0) and `calibration` (`_shared/sound.ts`
+    `loadCalibration`): `labels` = the newest 200 labelled events, newest label first, each
+    `{eventId, ts, label, who, kind, yamnet, peakDb, floorDb, durationS, score, uncertain, labelledAt}` (`yamnet` = the
+    event's YAMNet label; `floorDb` = `sound_minutes.db_floor` of the event's minute), and `summary` = core
+    `calibrationSummary` (counts, per-YAMNet-class snore precision and `trusted`, `snoreClasses`, `peakAboveFloor`,
+    `suggestedPeakAboveFloorDb`, `updatedAt`). `calibration` is null before the migration or on a read error (listening
+    is never blocked by it). `GET ?labels=1` returns only `{calibration, uncertainClipsLeft, now}`.
+  - Events may carry `"uncertain": true`. A non-speech uncertain event with `wantClip` gets a clip (maxS 10) from its
+    own allowance, `sound_uncertain_clips` a night, separate from the 40 ordinary and 20 sleep-talk clips (core
+    `clipAllowance`: speech → uncertain → other). A speech-class event keeps every sleep-talk rule whatever its flag.
+    Before 0030 the flag is dropped before storing (no column) and no borderline clip is handed out.
+- **Calibration math** (core `sound/labels.ts`, pure):
+  - precision of a YAMNet class = labelled snore / labelled events with that class; `trusted` = ≥ 3 labels
+    (`CALIBRATION_MIN_LABELS`) and precision ≥ 0.6 (`CALIBRATION_MIN_PRECISION`);
+  - `suggestedPeakAboveFloorDb` = median(peakDb − floorDb) over snore-labelled events with both values, − 2 dB, rounded
+    to 0.5, within 4..10; 10 (the night-sound-fix-2 value) with fewer than 3 such events.
+- **Labels win over the detector** (core `labelledSnore`, used by `nightSoundSummary` and `wakeTriggers`): an event
+  labelled `snore` makes the minutes it covers ([ts, ts + durationS], at least its own minute, at most 60) snoring
+  minutes, even without a minute summary; one labelled `not_snore` takes them out (a snore label in the same minute
+  wins). `speech` / `other` labels leave the detector alone. The summary adds `labelAddedMin` / `labelRemovedMin`.
+  The nightly report and experiments still read the raw detector minutes.
+- **App** (`lib/soundLabels.ts`, one shared store): under each clip in Today › Snoring & noise (notable moments, now
+  every clipped or borderline moment, up to 24), Today › Sleep talk and Live › Latest moments: **Snoring** / **Not
+  snoring**, then Cath / Erik / ? after Snoring; optimistic, reverted with a message when the RPC fails. Viewers see the
+  label as text. A line "Labelled: 6 snore, 3 not. The Mac retunes itself every evening from these." The Today card's
+  snoring minutes and wake-up sentence use the labels. Borderline moments read "Unclear sound" with "sounded like
+  “Whale vocalization”". System › Camera: "Save unclear sounds to label" (8 a night, or off). The simulator labels in
+  memory and adds two borderline sample moments per night.
+- **Mac**: `docs/mac-prompts/night-sound-labels.md` (read `calibration` at the start of the listen window and at most
+  hourly; snore = YAMNet Snoring ≥ 0.2, or the rhythm rule with the suggested peak threshold and a trusted top class,
+  falling back to the fix-2 class list for classes with fewer than 3 labels; borderline clips at most one per 20 min).
+- **Tests**: `packages/core/test/sound-labels.test.ts`, `supabase/functions/tests/sound-labels.test.ts`.
+- **Deploy**:
+  1. Apply `0030_sound_labels.sql`.
+  2. Redeploy `night-sound` (it also works before the migration: `calibration: null`, `uncertainClipsLeft: 0`).
+  3. Deploy the web app.
+  4. Paste the Mac prompt.

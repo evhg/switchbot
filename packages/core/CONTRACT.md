@@ -418,6 +418,26 @@ export function wakeTriggers(cathWakeStarts, minutes, events, { lookbackMs = 120
 //   snore: such a minute with snoreS ≥ 10 or a snore event in it; loud: an event in [wakeAt − lookback, wakeAt + slack]
 //   with peakDb ≥ floor + 15 dB (floor = the event minute's dbFloor, else the night's median). "4 of your 6 wake-ups
 //   came within 2 min of snoring" = withSnore of heard.
+// sound/labels.ts (migration 0030): the household's labels and the Mac's calibration
+export const SOUND_LABELS = ['snore', 'not_snore', 'speech', 'other'], SOUND_LABEL_WHO = ['a', 'b', 'both', 'unknown']
+export const CALIBRATION_MAX_LABELS = 200, CALIBRATION_MIN_LABELS = 3, CALIBRATION_MIN_PRECISION = 0.6
+export const DEFAULT_PEAK_ABOVE_FLOOR_DB = 10, MIN_PEAK_ABOVE_FLOOR_DB = 4, MAX_PEAK_ABOVE_FLOOR_DB = 10, PEAK_MARGIN_DB = 2
+export const SOUND_UNCERTAIN_CLIPS_DEFAULT = 8, SOUND_UNCERTAIN_CLIPS_MAX = 40
+export interface CalibrationLabel { eventId; ts /* ISO */; label: SoundLabel; who: SoundLabelWho | null; kind;
+  yamnet: string | null; peakDb; floorDb /* the event minute's dbFloor */; durationS; score: number | null; uncertain; labelledAt }
+export function calibrationSummary(labels): { total; counts: Record<SoundLabel, number>;
+  byYamnet: { yamnet; n; snore; notSnore; precision /* snore / n */; trusted /* n ≥ 3 && precision ≥ 0.6 */ }[];
+  snoreClasses: string[]; peakAboveFloor: { n; median }; suggestedPeakAboveFloorDb; updatedAt }
+export function suggestedPeakAboveFloor(gaps): number   // median − 2 dB, 0.5 dB steps, within 4..10; 10 with < 3 gaps
+export function calibrationLabelFromRow(labelRow, eventRow | null, floorDb?): CalibrationLabel | null
+export function labelCounts(labels): { snore; notSnore; total }
+export function eventMinutes({ ts, durationS }): Ms[]   // minute starts in [ts, ts + duration]; own minute at least, ≤ 60
+// SoundEvent also has uncertain?: boolean (parsed from "uncertain": true; soundEventRow(e, camera, night, { uncertainColumn }) writes uncertain: true|false on every row once migration 0030 is applied, never before),
+//   humanLabel?: SoundLabel | null and labelWho?: SoundLabelWho | null (the app fills these from sound_labels)
+export function clipAllowance({ kind, label, uncertain }): 'speech' | 'uncertain' | 'other'  // which nightly clip allowance
+export function labelledSnore(events): Map<minuteStart, boolean>  // label 'snore' → true, only 'not_snore' → false
+// nightSoundSummary and wakeTriggers apply labelledSnore: a human label wins over snoreS ≥ 10 for the minutes it
+//   covers (a labelled-snore minute counts even without a summary row); the summary adds labelAddedMin / labelRemovedMin
 ```
 
 ## experiments/ (2026-11-04)

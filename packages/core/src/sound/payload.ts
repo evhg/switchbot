@@ -9,6 +9,7 @@
 import type { Ms } from '../types.ts';
 import { OFF_AFTER_WAKE_MIN } from '../control/quiet.ts';
 import { addDays, ictDate } from '../sim/time.ts';
+import type { SoundLabel, SoundLabelWho } from './labels.ts';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -31,6 +32,11 @@ export const LISTEN_GRACE_MS = 5 * MIN;
 export const SOUND_CLIPS_PER_NIGHT = 40;
 /** At most this many speech clips per night (sleep talk, only with sound_sleeptalk on), on top of SOUND_CLIPS_PER_NIGHT. */
 export const SOUND_SPEECH_CLIPS_PER_NIGHT = 20;
+/** Which clip allowance an event uses: speech (sleep talk, 20), uncertain (borderline, sound_uncertain_clips) or other (40). */
+export function clipAllowance(e: { kind: SoundKind | string; label: string | null | undefined; uncertain?: boolean | null }): 'speech' | 'uncertain' | 'other' {
+  if (isSpeechEvent(e)) return 'speech';
+  return e.uncertain === true ? 'uncertain' : 'other';
+}
 /** Clip length the Mac may cut: ~10 s for ordinary moments, the whole speech run (pre-roll 2 s) up to 30 s for speech. */
 export const SOUND_CLIP_MAX_S = 10;
 export const SPEECH_CLIP_MAX_S = 30;
@@ -78,6 +84,15 @@ export interface SoundEvent {
   transcript?: string | null;
   /** Language the transcriber detected ("en", "nl", "th"; ≤ 10 chars), or null. */
   transcriptLang?: string | null;
+  /**
+   * A borderline sound the Mac was unsure about (migration 0030), sent so the household can label it. Its clip comes
+   * from the night's borderline allowance (household_settings.sound_uncertain_clips), not the 40.
+   */
+  uncertain?: boolean;
+  /** The household's label (sound_labels, migration 0030), when read back for the app; it beats the detector. */
+  humanLabel?: SoundLabel | null;
+  /** Who snored, for humanLabel 'snore' ('a' | 'b' | 'both' | 'unknown'), or null. */
+  labelWho?: SoundLabelWho | null;
 }
 
 export interface SoundPayloadError {
@@ -282,6 +297,7 @@ export function parseSoundEvent(raw: unknown, now: Ms): SoundEvent | string {
     wantClip: raw.wantClip === true,
     transcript: normalizeTranscript(raw.transcript),
     transcriptLang: normalizeTranscriptLang(raw.transcriptLang ?? raw.transcript_lang),
+    uncertain: raw.uncertain === true,
   };
 }
 
@@ -390,8 +406,18 @@ export function soundMinuteRow(m: SoundMinute, camera = SOUND_CAMERA_DEFAULT, ni
   };
 }
 
-/** snake_case insert row for public.sound_events (clip_path is reserved later, by the function). */
-export function soundEventRow(e: SoundEvent, camera = SOUND_CAMERA_DEFAULT, nightDate = soundNightDate(e.ts)): Record<string, unknown> {
+/**
+ * snake_case insert row for public.sound_events (clip_path is reserved later, by the function).
+ * opts.uncertainColumn: migration 0030 is applied, so every row carries `uncertain` (true/false). A bulk upsert lists
+ * the union of all rows' keys, and a row missing a listed key is sent as NULL, which the NOT NULL column refuses;
+ * so once the column exists the key must be on every row of a batch, not only on the borderline ones.
+ */
+export function soundEventRow(
+  e: SoundEvent,
+  camera = SOUND_CAMERA_DEFAULT,
+  nightDate = soundNightDate(e.ts),
+  opts: { uncertainColumn?: boolean } = {},
+): Record<string, unknown> {
   return {
     camera,
     ts: new Date(e.ts).toISOString(),
@@ -403,6 +429,8 @@ export function soundEventRow(e: SoundEvent, camera = SOUND_CAMERA_DEFAULT, nigh
     score: e.score,
     // Only when present, so a row without one stays insertable before migration 0029.
     ...(e.transcript ? { transcript: e.transcript, transcript_lang: e.transcriptLang ?? null } : {}),
+    // From migration 0030 on: on every row (see above). Before it: never (no such column).
+    ...(opts.uncertainColumn ? { uncertain: e.uncertain === true } : {}),
   };
 }
 
@@ -446,6 +474,7 @@ export function soundEventFromRow(r: {
   hidden?: boolean | null;
   transcript?: string | null;
   transcript_lang?: string | null;
+  uncertain?: boolean | null;
 }): SoundEvent & { id?: number; clipPath: string | null; hidden: boolean } {
   return {
     ...(r.id !== undefined ? { id: r.id } : {}),
@@ -458,6 +487,7 @@ export function soundEventFromRow(r: {
     wantClip: false,
     transcript: r.transcript ?? null,
     transcriptLang: r.transcript_lang ?? null,
+    uncertain: r.uncertain === true,
     clipPath: r.clip_path ?? null,
     hidden: r.hidden === true,
   };
