@@ -4,8 +4,10 @@
  * (migration 0024, written by the night-sound Edge Function from the Mac's night listener) and the household's sound
  * settings in household_settings.
  *
- *   useSoundSettings(enabled, nonce)    sound_mode ('auto' | 'off'), sound_paused_until, sound_clips, live_video
- *   setSoundSettings / pauseSoundUntil / setLiveVideo   the writers' RPCs; each returns an error message or null
+ *   useSoundSettings(enabled, nonce)    sound_mode ('auto' | 'off'), sound_paused_until, sound_clips, live_video,
+ *                                       sound_sleeptalk (migration 0029)
+ *   setSoundSettings / pauseSoundUntil / setLiveVideo / setSoundSleepTalk   the writers' RPCs; each returns an error
+ *                                       message or null
  *   useRecentSounds(enabled, nonce)     the last 60 minutes + the newest events, refreshed every 60 s (Live tab)
  *   useNewestSoundMinute(enabled)       ts of the newest sound_minutes row (the Mac listener's status)
  *   useNightSounds(night)               one night's minutes and events (night_date = the morning's date); sample
@@ -13,12 +15,16 @@
  *   signClipUrls(paths)                 1-hour signed URLs for clips in the private 'night-sounds' bucket
  *   cathWakeStarts(stages)              starts of Cath's awakenings after sleep onset (the final wake-up excluded)
  *
- * The audio itself never leaves the Mac except for short clips of notable moments (never speech). Summaries and
- * the "does snoring wake Cath?" math live in @sleep-lab/core (src/sound): nightSoundSummary, wakeTriggers.
+ * The audio itself never leaves the Mac except for short clips of notable moments; talking only while "Save sleep talk"
+ * is on (then with the Mac's transcript; clips where both were awake are removed the next morning, migration 0029).
+ * Summaries and the "does snoring wake Cath?" math live in @sleep-lab/core (src/sound): nightSoundSummary, wakeTriggers.
+ *   sleepTalkEvents(events)             the night's sleep talk: speech events not judged a conversation, with a clip or
+ *                                       a transcript
  */
 import { useEffect, useState } from 'react';
 import {
   awakeningStarts,
+  isSpeechEvent,
   SNORE_MIN_S,
   SOUND_CLIPS_PER_NIGHT,
   SOUND_KINDS,
@@ -46,6 +52,10 @@ export interface SoundEvent extends CoreSoundEvent {
   id: string;
   /** Object name in the 'night-sounds' bucket; null when no clip was kept (or it aged out after 14 days). */
   clipPath: string | null;
+  /** Speech only: null = not judged yet, true = someone was asleep (sleep talk), false = both awake (conversation). */
+  sleepTalk?: boolean | null;
+  /** 'a' | 'b' when only that person was asleep: probably the one talking. */
+  talkerHint?: string | null;
   sample?: boolean;
 }
 
@@ -54,6 +64,8 @@ export interface SoundSettings {
   pausedUntil: number | null;
   clips: boolean;
   liveVideo: boolean;
+  /** "Save sleep talk" (sound_sleeptalk, migration 0029); null before the migration. */
+  sleepTalk: boolean | null;
 }
 
 /** The listener counts as "listening" when its newest minute is this recent. */
@@ -106,15 +118,36 @@ export function toSoundEvent(r: Row): SoundEvent {
     peakDb: numOrNull(r.peak_db),
     score: numOrNull(r.score),
     wantClip: false,
-    clipPath: str(r.clip_path),
+    // A conversation (sleep_talk false) keeps clip_path until the morning judge removes its object: never played.
+    clipPath: r.sleep_talk === false ? null : str(r.clip_path),
+    transcript: str(r.transcript),
+    transcriptLang: str(r.transcript_lang),
+    sleepTalk: typeof r.sleep_talk === 'boolean' ? r.sleep_talk : null,
+    talkerHint: str(r.talker_hint),
   };
 }
 
 const MINUTE_COLS = 'ts,db_avg,db_max,db_floor,snore_s,snore_prob,speech_s,cough_s,classes,n';
-const EVENT_COLS = 'id,ts,duration_s,kind,label,peak_db,score,clip_path';
+// '*': the sleep-talk columns (migration 0029) are read when they exist, without breaking before it.
+const EVENT_COLS = '*';
+
+/**
+ * The night's sleep talk, oldest first: speech events (by kind or label) not judged a conversation (sleep_talk false),
+ * that kept a clip or a transcript.
+ */
+export function sleepTalkEvents(events: readonly SoundEvent[]): SoundEvent[] {
+  return events.filter((e) => isSpeechEvent(e) && e.sleepTalk !== false && (!!e.clipPath || !!e.transcript)).sort((a, b) => a.ts - b.ts);
+}
+
+/** "probably Cath" from talker_hint (null when unknown). */
+export function talkerWords(hint: string | null | undefined, names: Readonly<Record<string, string>>): string | null {
+  const n = hint ? names[hint] : undefined;
+  return n ? `probably ${n}` : null;
+}
 
 /** Plain words for an event: "Snoring", "Loud: Door", "Cough", "Talking", or the class name. */
-export function eventWords(e: Pick<SoundEvent, 'kind' | 'label'>): string {
+export function eventWords(e: Pick<SoundEvent, 'kind' | 'label'> & { sleepTalk?: boolean | null }): string {
+  if (e.sleepTalk === true) return 'Sleep talk';
   if (e.kind === 'snore') return 'Snoring';
   if (e.kind === 'cough') return 'Cough';
   if (e.kind === 'speech') return 'Talking';
@@ -135,7 +168,7 @@ export function useSoundSettings(enabled: boolean, nonce = 0): { settings: Sound
     let alive = true;
     supabaseClient()
       .from('household_settings')
-      .select('sound_mode,sound_paused_until,sound_clips,live_video')
+      .select('*')
       .eq('id', 1)
       .maybeSingle()
       .then(({ data, error }) => {
@@ -149,6 +182,7 @@ export function useSoundSettings(enabled: boolean, nonce = 0): { settings: Sound
             pausedUntil: until ? Date.parse(until) : null,
             clips: d.sound_clips !== false,
             liveVideo: d.live_video === true,
+            sleepTalk: typeof d.sound_sleeptalk === 'boolean' ? d.sound_sleeptalk : null,
           },
           error: null,
         });
@@ -170,6 +204,12 @@ export const setSoundSettings = (mode: SoundMode | null, clips: boolean | null) 
 /** Pause until an instant; null resumes. */
 export const pauseSoundUntil = (until: number | null) => rpc('pause_sound_until', { p_until: until === null ? null : new Date(until).toISOString() });
 export const setLiveVideo = (on: boolean) => rpc('set_live_video', { p_on: on });
+/** "Save sleep talk" (migration 0029). */
+export async function setSoundSleepTalk(on: boolean): Promise<string | null> {
+  const { error } = await supabaseClient().rpc('set_sound_sleeptalk', { p_on: on });
+  if (!error) return null;
+  return /set_sound_sleeptalk|sound_sleeptalk/i.test(error.message) ? 'Sleep talk isn’t on the server yet (migration 0029).' : errText(error.message);
+}
 
 /**
  * When "Pause tonight" ends: the 12:00 ICT after the coming (or ongoing) night's listening window. `offMin` is the
@@ -421,5 +461,33 @@ export function sampleNightSounds(n: NightSoundsInput): { minutes: SoundMinute[]
     const classes: Record<string, number> = snoreS ? { Snoring: snoreS, Breathing: Math.round(r() * 10) } : { Silence: 50, 'White noise': 8 };
     minutes.push({ ts: t, dbAvg, dbMax, dbFloor: floor, snoreS, snoreProb: Math.min(1, snoreS / 60 + r() * 0.1), speechS: 0, coughS, classes, n: 61 });
   }
+  // Sleep talk: two short mumbles in the snorer's sleep (one with a guess at who), no audio in the simulator.
+  const asleepAt = minutes.filter((m) => {
+    const st = stageAt(m.ts);
+    return st === 'light' || st === 'rem';
+  });
+  const lines = ['No, the blue one… put it with the others.', 'Wacht even, ik kom zo.', 'Mm. Tomorrow.', 'Did you lock the door?'];
+  for (const [i, frac] of [0.3, 0.75].entries()) {
+    const m = asleepAt[Math.floor(frac * asleepAt.length)];
+    if (!m) continue;
+    m.speechS = 6 + Math.round(r() * 8);
+    events.push({
+      id: `s${id++}`,
+      ts: m.ts + 12_000,
+      durationS: m.speechS,
+      kind: 'speech',
+      label: 'Speech',
+      peakDb: (m.dbMax ?? -50) + 2,
+      score: 0.7,
+      wantClip: false,
+      clipPath: null,
+      transcript: lines[Math.floor(r() * lines.length)]!,
+      transcriptLang: null,
+      sleepTalk: true,
+      talkerHint: i === 0 ? 'b' : null,
+      sample: true,
+    });
+  }
+  events.sort((a, b) => a.ts - b.ts);
   return { minutes, events };
 }

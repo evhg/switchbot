@@ -1057,3 +1057,88 @@ used the same token. Any device that acts for a person now gets its own token.
   before and after the migration, so the order does not matter). The others call the same RPCs as before. Then create
   a Night listener token for Erik in System › Presence › Other devices and paste it on the Mac
   (`~/sleep-lab-home/night-sound/token`, 0600); from then on the phone's token can be rotated freely.
+
+## Sleep talk (migration 0029)
+
+Added 2026-11-05 at Cath's request ("save clips of sleep talk, and send in the morning summary"); both household
+members agreed to the bedroom recording. Until now speech was never clipped. Now, with **"Save sleep talk"** on
+(`household_settings.sound_sleeptalk`, default true; it also needs `sound_clips` on), speech is clipped and transcribed
+on the Mac. Talking while both of us were awake (a conversation) is removed the next morning.
+
+- **Schema** (`0029_sleep_talk.sql`). `sound_events` gets these columns:
+  - `transcript` (≤ 2000 chars);
+  - `transcript_lang` (≤ 10);
+  - `sleep_talk` (null = not judged yet, true = someone asleep, false = both awake);
+  - `talker_hint` (`a` | `b`: the only person asleep at that moment);
+  - `judged_at`.
+
+  It also adds the partial index `sound_events_speech_unjudged`, and `household_settings.sound_sleeptalk` with
+  `set_sound_sleeptalk(p_on)` (owner/member; definer in `private`, invoker wrapper in `public`). The grants are
+  unchanged: members read, and only the service role writes the new columns.
+- **night-sound** (core `clipAllowed(e, now, { speech })`, `isSpeechEvent`, `applyTranscriptPolicy`):
+  - Speech events are kind `speech`, or carry a speech-class label (a `loud` event labelled `Shout` included).
+  - With sleep talk and clips on, they get upload URLs from a **separate allowance of 20 a night**
+    (`SOUND_SPEECH_CLIPS_PER_NIGHT`), on top of the 40. Each upload says `maxS: 30` for speech and 10 otherwise.
+  - Events may carry `transcript` (string, ≤ 2000, whitespace collapsed) and `transcriptLang` (≤ 10, e.g. `en`, `nl`,
+    `th`). These are stored only for speech events and only with sleep talk on; otherwise they are dropped before
+    anything is written.
+  - The GET answer adds `sleepTalk` and `speechClipsLeft`; the POST answer adds `sleepTalk`. All other privacy rules
+    stay: only inside the listen window, not while off or paused, no clip for events older than 10 min, 14-day
+    retention.
+  - Before 0029 the function reads `household_settings` with `select('*')`, so the missing column means "off" and
+    nothing breaks.
+- **Morning judge** (`_shared/sleeptalk.ts`, run by `nightly-report`):
+  - **Why nightly-report.** Its cron job runs every 15 min from 06:00 to 18:45 ICT (0017), after the morning health
+    syncs, and it already decides the morning push.
+  - **When it runs.** On every `{auto:true}` run it first judges the unjudged speech events of the night and of the
+    night before, each against both people's `sleep_sessions` for that night (`end_ts` in 18:00 → 14:00 ICT, the
+    same as `shouldRun`). Only speech events with a clip or a transcript are judged (one without either keeps nothing
+    to delete or show). They are read with that filter in SQL and in pages of 500, so a night full of snoring events
+    can never push speech events out of the read.
+  - **The verdict** (core `judgeSleepTalk`, pure):
+    - If anyone's sessions are missing, the event stays pending, until 13:00 ICT on the night's date
+      (`sleepTalkFinal`). From then on a person with no data counts as awake: privacy first.
+    - A person counts as asleep when a non-awake stage overlaps the event ± 1 min (`SLEEPTALK_TOLERANCE_MS`), or the
+      event falls inside a session that has no stage there.
+    - At least one person asleep → `sleep_talk = true`, and `talker_hint` = that person when exactly one was asleep
+      and both people's data is known.
+    - Otherwise it was a conversation: at once `sleep_talk = false` and `transcript`, `transcript_lang` and
+      `talker_hint` are set to null; the app never plays a `sleep_talk = false` clip. The clip object is removed
+      (`storage.from('night-sounds').remove()`, then `clip_path = null`) once the row is at least 2 h 30 min old
+      (`UPLOAD_GRACE_MS`): the signed upload URL night-sound handed the Mac lasts 2 h (re-issued for a re-sent batch up
+      to 10 min after the event), and removing the object before a late upload would leave that audio in the bucket
+      with nothing pointing at it. Every judge run does this removal step; a failed removal keeps `clip_path` and is
+      retried.
+  - The judge never blocks the report. Errors land in the response's `sleepTalk`.
+- **Morning push.**
+  - When the morning report push goes out (`shouldRun` push) and the night is fully judged, its body gets a second
+    line from core `sleepTalkLine`: `Sleep talk: 2 clips (01:12 Cath?, 03:40) — tap to listen. “first snippet ≤ 80
+    chars”`. The link is Today (`/?date=<night>`). The line is recorded in `alert_state` key `sleeptalk` (`data.night`).
+  - If the report went out before the judging finished (e.g. at wake + 4 h while a band hadn't synced), a separate
+    push **"Sleep talk from last night"** (tag `sleeptalk-<night>`, link `/?date=<night>#sounds`) follows once per
+    night, as soon as nothing is pending and there is sleep talk. The dedupe uses the same `alert_state` key.
+  - It counts the same moments Today › Sleep talk lists (speech with a clip or a transcript, not a conversation),
+    so the push never says more clips than the app shows.
+  - No sleep talk → no line and no push. With "Save sleep talk" off there is never a line or a sleep-talk push (the
+    judge still runs, so conversations recorded earlier are still removed).
+- **App.**
+  - Today › Snoring & noise: a "Sleep talk" list (time, "probably Cath/Erik", the transcript in quotes, the clip
+    player from a 1-h signed URL); unjudged ones carry a note. Empty state: "No sleep talk last night".
+  - Live › Latest moments: speech clips show who probably said it and the transcript.
+  - System › Camera: the "Save sleep talk" switch, with "Clips where you were both awake are deleted the next morning."
+  - The simulator adds two sample sleep-talk moments to each night.
+- **Mac**: `docs/mac-prompts/night-sound-sleeptalk.md`. The Mac:
+  - requests clips for speech;
+  - cuts the whole run (2 s pre-roll, ≤ 30 s);
+  - transcribes locally with mlx-whisper (`whisper-large-v3-turbo`, or small if slow; language auto-detect, input
+    gain as on the classifier path);
+  - posts `transcript` and `transcriptLang`.
+
+  Audio goes only to the signed upload URL. The server decides whether a speech clip is allowed.
+- **Tests**: `packages/core/test/sleeptalk.test.ts` (both asleep, one asleep, both awake, missing data, the push line,
+  speech clip / transcript rules); `supabase/functions/tests/night-sound.test.ts`.
+- **Deploy**:
+  1. Apply `0029_sleep_talk.sql`.
+  2. Redeploy `night-sound` and `nightly-report`. Both work before the migration too: speech stays unclipped, and the
+     judge reports an error and is skipped.
+  3. Then paste the Mac prompt.

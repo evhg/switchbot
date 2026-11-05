@@ -1,6 +1,6 @@
 import { listenDecision, type ListenInput, notListening, pausedText, soundWindow } from '../_shared/sound.ts';
 import { defaultSchedule, nightDateFor } from '../_shared/time.ts';
-import { clipAllowed, inWindow, LISTEN_GRACE_MS, parseSoundPayload, soundNightDate } from '../../../packages/core/src/sound/payload.ts';
+import { applyTranscriptPolicy, clipAllowed, inWindow, LISTEN_GRACE_MS, parseSoundPayload, soundNightDate } from '../../../packages/core/src/sound/payload.ts';
 
 function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error(msg);
@@ -13,7 +13,7 @@ const t = (s: string) => Date.parse(`${s}+07:00`);
 const { lightsOut, wake } = defaultSchedule('2026-11-04', '22:00', '08:30');
 const base = (now: number, o: Partial<ListenInput> = {}): ListenInput => ({
   now,
-  settings: { mode: 'auto', pausedUntil: null, clips: true },
+  settings: { mode: 'auto', pausedUntil: null, clips: true, sleepTalk: true },
   night: { date: '2026-11-04', lightsOut, wake, presenceOverride: null, tags: [] },
   awayWhy: null,
   latest: [],
@@ -33,11 +33,11 @@ Deno.test('listen window: lights-out − 15 min → wake + 30 min', () => {
 
 Deno.test('listen: off, paused, away, nobody home', () => {
   const now = t('2026-11-04T01:00:00');
-  eq(listenDecision(base(now, { settings: { mode: 'off', pausedUntil: null, clips: true } })).reason, 'Turned off in settings', 'off');
-  const paused = listenDecision(base(now, { settings: { mode: 'auto', pausedUntil: t('2026-11-04T12:00:00'), clips: true } }));
+  eq(listenDecision(base(now, { settings: { mode: 'off', pausedUntil: null, clips: true, sleepTalk: true } })).reason, 'Turned off in settings', 'off');
+  const paused = listenDecision(base(now, { settings: { mode: 'auto', pausedUntil: t('2026-11-04T12:00:00'), clips: true, sleepTalk: true } }));
   assert(!paused.listen, 'paused');
   eq(paused.reason, 'Paused until 12:00', 'paused reason');
-  assert(listenDecision(base(now, { settings: { mode: 'auto', pausedUntil: now - 1, clips: true } })).listen, 'pause over');
+  assert(listenDecision(base(now, { settings: { mode: 'auto', pausedUntil: now - 1, clips: true, sleepTalk: true } })).listen, 'pause over');
   eq(listenDecision(base(now, { awayWhy: 'away tonight (marked in the app)' })).reason, 'Away tonight', 'away');
   const latest = [
     { personId: 'a', name: 'Cath', state: 'away' as const, at: now - 3_600_000 },
@@ -51,8 +51,8 @@ Deno.test('listen: off, paused, away, nobody home', () => {
 Deno.test('pausedText and notListening', () => {
   const now = t('2026-11-03T23:00:00');
   eq(pausedText(t('2026-11-04T12:00:00'), now), 'Paused until tomorrow 12:00', 'tomorrow');
-  assert(notListening({ mode: 'auto', pausedUntil: now + 1, clips: true }, now), 'paused');
-  assert(!notListening({ mode: 'auto', pausedUntil: now - 1, clips: true }, now), 'not paused');
+  assert(notListening({ mode: 'auto', pausedUntil: now + 1, clips: true, sleepTalk: true }, now), 'paused');
+  assert(!notListening({ mode: 'auto', pausedUntil: now - 1, clips: true, sleepTalk: true }, now), 'not paused');
 });
 
 Deno.test('server-side window filter and night keying match the backend', () => {
@@ -81,4 +81,23 @@ Deno.test('clips: never for speech labels or re-sent (stale) events', () => {
   );
   const allowed = parsed.events.filter((e) => clipAllowed(e, now)).map((e) => e.index);
   if (JSON.stringify(allowed) !== '[0]') throw new Error(`clip guard: ${JSON.stringify(allowed)}`);
+});
+
+Deno.test('sleep talk: speech clips and transcripts only with sleep talk on', () => {
+  const now = Date.parse('2026-11-04T01:30:00+07:00');
+  const parsed = parseSoundPayload(
+    {
+      events: [
+        { ts: new Date(now - 60_000).toISOString(), kind: 'speech', label: 'Speech', wantClip: true, durationS: 12, transcript: 'the blue one', transcriptLang: 'en' },
+        { ts: new Date(now - 60_000).toISOString(), kind: 'snore', label: 'Snoring', wantClip: true, transcript: 'not kept' },
+      ],
+    },
+    now,
+  );
+  const on = parsed.events.map((e) => applyTranscriptPolicy(e, true));
+  eq(on[0]!.transcript, 'the blue one', 'speech transcript kept');
+  eq(on[1]!.transcript, null, 'non-speech transcript dropped');
+  eq(applyTranscriptPolicy(parsed.events[0]!, false).transcript, null, 'off: dropped');
+  eq(JSON.stringify(parsed.events.filter((e) => clipAllowed(e, now, { speech: true })).map((e) => e.index)), '[0,1]', 'on');
+  eq(JSON.stringify(parsed.events.filter((e) => clipAllowed(e, now, { speech: false })).map((e) => e.index)), '[1]', 'off');
 });

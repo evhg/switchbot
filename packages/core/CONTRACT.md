@@ -378,13 +378,35 @@ export function inWindow(ts, window, graceMs = 0): boolean    // from − grace 
 export const SPEECH_LABELS: string[]   // YAMNet voice classes (Speech, Conversation, Shout, Yell, Whispering, Laughter, …)
 export function isSpeechLabel(label): boolean
 export const CLIP_MAX_AGE_MS = 10 min
-export function clipAllowed({ ts, kind, label, wantClip }, now): boolean
-//   a clip is reserved only for wantClip, kind ≠ 'speech', label not a speech class, ts ≥ now − 10 min (a re-sent
-//   outbox batch no longer has its audio)
+export function isSpeechEvent({ kind, label }): boolean    // kind 'speech' or a speech-class label
+export function clipAllowed({ ts, kind, label, wantClip }, now, { speech? } = {}): boolean
+//   a clip is reserved only for wantClip and ts ≥ now − 10 min (a re-sent outbox batch no longer has its audio); a
+//   speech event (isSpeechEvent) only with opts.speech true ("Save sleep talk" on, migration 0029), else never
+export const SOUND_SPEECH_CLIPS_PER_NIGHT = 20 (separate from the 40), SOUND_CLIP_MAX_S = 10, SPEECH_CLIP_MAX_S = 30
+export const TRANSCRIPT_MAX = 2000, TRANSCRIPT_LANG_MAX = 10
+// SoundEvent also has transcript?: string | null, transcriptLang?: string | null (parsed from transcript / transcriptLang)
+export function normalizeTranscript(v): string | null       // whitespace collapsed, control chars removed, ≤ 2000; '' → null
+export function normalizeTranscriptLang(v): string | null   // 'en' | 'nl' | 'th' | 'zh-hant' …, lower-case, ≤ 10; else null
+export function applyTranscriptPolicy(e, sleepTalk): e       // transcript kept only for speech events with sleep talk on
+// soundEventRow adds transcript / transcript_lang only when a transcript is present; soundEventFromRow reads them back
 export function soundClipPath(nightDate, { ts, kind }): string // '<night>/<YYYYMMDDTHHMMSS[.mmm]Z>_<kind>.m4a' (bucket 'night-sounds')
 export function soundMinuteRow(m, camera?, nightDate?) / soundEventRow(e, camera?, nightDate?)   // snake_case insert rows
 export function soundMinuteFromRow(row): SoundMinute
 export function soundEventFromRow(row): SoundEvent & { id?; clipPath: string | null; hidden: boolean }
+// sound/sleeptalk.ts (migration 0029): the morning judge of speech events (nightly-report, _shared/sleeptalk.ts)
+export const SLEEPTALK_FINAL_HHMM = '13:00', SLEEPTALK_TOLERANCE_MS = 60 000, SLEEPTALK_SNIPPET_MAX = 80
+export interface SleepSessionLite { start; end; stages: StageSegment[] }
+export function personStateAt(sessions: SleepSessionLite[] | null, ts, durationS?, toleranceMs?): 'asleep' | 'awake' | 'unknown'
+//   asleep: a non-awake stage overlaps [ts − 1 min, ts + duration + 1 min], or ts is inside a session with no stage
+//   there; awake: outside every session or only 'awake' stages; unknown: sessions null (not synced)
+export function judgeSleepTalk({ ts, durationS?, people: { id, sessions | null }[], final }):
+  | { status: 'pending'; reason }                                   // someone unknown and not final
+  | { status: 'sleep_talk'; talkerHint: id | null; asleep: id[]; reason }  // ≥ 1 asleep; hint = the only one asleep (all known)
+  | { status: 'conversation'; reason }                              // nobody asleep (at final, unknown = awake)
+export function sleepTalkFinal(nightDate, now): boolean            // now ≥ 13:00 ICT on the night (wake) date
+export function transcriptSnippet(t, max = 80): string             // quoted “…”, cut at a word
+export function sleepTalkLine(items: { ts; talkerHint; transcript }[], names): string | null
+//   'Sleep talk: 2 clips (01:12 Cath?, 03:40) — tap to listen. “first snippet”' (ICT, oldest first, ≤ 4 times listed)
 // sound/summary.ts
 export function nightSoundSummary(minutes, events): { listenedMin; snoreMin /* snoreS ≥ 10 */; snorePct /* 0..100 */;
   loudEvents /* kind 'loud' */; longestSnoreRunMin /* consecutive minutes */; loudestDb /* max dbMax / peakDb */;

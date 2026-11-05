@@ -5,7 +5,8 @@
  *   sounds     (default) the night listener on Erik's Mac: listening status from the newest sound_minutes row
  *              (migration 0024; "Listening" when a minute arrived < 3 min ago), Pause tonight / Resume
  *              (pause_sound_until), the last 60 minutes as loudness + snoring, and the newest moments with clip
- *              players (signed URLs from the private 'night-sounds' bucket). The Mac only listens from lights-out to
+ *              players (signed URLs from the private 'night-sounds' bucket); speech clips with "Save sleep talk" on
+ *              show who probably said it and the transcript (migration 0029). The Mac only listens from lights-out to
  *              the aircon's off time (wake + 30 min) and the night-sound Edge Function decides that, not this page.
  *   player     only when household_settings.live_video is true (System › Camera › Show live video, default off):
  *              go2rtc's own player in an iframe, 3K (living_hd) or Low data (living); with the stream lock on, the
@@ -15,7 +16,9 @@
  *   camera     collapsed: what the SwitchBot app controls (its cloud API has no commands for this model).
  */
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { DEFAULT_PEOPLE } from '@sleep-lab/core';
 import { useAuth } from '@/lib/auth.tsx';
+import { useData } from '@/lib/data/context.tsx';
 import { hm, ictDate, MIN } from '@/lib/format.ts';
 import { isListening, isPaused, nextNoon, pauseSoundUntil, useClipUrls, useRecentSounds, useSoundSettings, type SoundSettings } from '@/lib/sound.ts';
 import { SoundChart } from '../charts/SoundChart.tsx';
@@ -125,6 +128,8 @@ function NightSounds({ live, canWrite, video }: { live: boolean; canWrite: boole
   const { settings, error: settingsError } = useSoundSettings(live, nonce);
   const { data, error } = useRecentSounds(live, nonce);
   const clips = useClipUrls(data?.events, live);
+  const { dataset, latest } = useData();
+  const names = Object.fromEntries(((dataset ?? latest)?.people ?? DEFAULT_PEOPLE).map((p) => [p.id, p.name]));
   const pc = usePlanClock();
   const plan = `from ${clock(pc.lightsOut - 15)} to ${clock(pc.wake + 30)}`;
   const [busy, setBusy] = useState(false);
@@ -200,9 +205,10 @@ function NightSounds({ live, canWrite, video }: { live: boolean; canWrite: boole
       )}
 
       <h3 className="label">Latest moments</h3>
-      {data === undefined ? <Skeleton h={120} r="lg" /> : <SoundMoments events={data.events} clips={clips} max={20} empty="No moments yet. Snoring, coughs and loud noises show up here, with a short clip when one was kept." />}
+      {data === undefined ? <Skeleton h={120} r="lg" /> : <SoundMoments events={data.events} clips={clips} names={names} max={20} empty="No moments yet. Snoring, coughs, loud noises and sleep talk show up here, with a short clip when one was kept." />}
       <p className={cx('cap', s.note)}>
-        Sound is analysed on the Mac; only loudness, snoring and the kind of sound are sent, plus about 10 s clips of loud moments (never talking), kept 14 days.
+        Sound is analysed on the Mac; only loudness, snoring and the kind of sound are sent, plus about 10 s clips of loud moments, kept 14 days.
+        {settings?.sleepTalk ? ' Talking is clipped too (up to 30 s, with what was said); if you were both awake, it’s deleted the next morning.' : ' Talking is never clipped.'}
         {!video && (
           <>
             {' '}

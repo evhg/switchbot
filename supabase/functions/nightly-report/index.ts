@@ -6,6 +6,11 @@
 // (every 15 min, 06:00-18:45 ICT, migration 0017), where shouldRun() decides whether anything is due.
 // Analysis only (backfills / re-runs, no report, no push): {analyzeOnly: true, date?} — default date = the night that
 // ended most recently — or {analyzeOnly: true, dates: [...]} (cron / service key only, ≤ 31 dates).
+// Sleep talk (migration 0029, _shared/sleeptalk.ts): every scheduled run first judges last night's speech events
+// against both people's synced sleep (conversations' clips are removed); the report push then carries a "Sleep talk: …"
+// line once the night is fully judged, and when the report went out before the judging, a separate "Sleep talk from
+// last night" push follows once (alert_state 'sleeptalk'). This function is the judge's home because its cron runs
+// every 15 min from 06:00 to 18:45 ICT, after the morning sleep syncs, and it already decides the morning push.
 import { buildRuleReport } from '../../../packages/core/src/metrics/report.ts';
 import { DEFAULT_PEOPLE } from '../../../packages/core/src/sim/people.ts';
 import type { Night, NightReport, Person } from '../../../packages/core/src/types.ts';
@@ -18,6 +23,7 @@ import { HttpError, json, readJson, serve } from '../_shared/http.ts';
 import { ensureNight, loadCurve, loadNight } from '../_shared/load.ts';
 import { appUrl, pushToAll } from '../_shared/push.ts';
 import type { NightRow } from '../_shared/rows.ts';
+import { judgeSleepTalkNights, type JudgeResult, markSleepTalkSent, sleepTalkFollowUp, sleepTalkForReport } from '../_shared/sleeptalk.ts';
 import { type Db, must, serviceClient } from '../_shared/supabase.ts';
 import { addDays, HOUR, ictAt, ictDate, MIN, nightWindow } from '../_shared/time.ts';
 
@@ -49,9 +55,20 @@ serve(async (req) => {
   let push = body.push !== false && caller === 'cron';
   if (caller !== 'cron' && body.push === true) push = true;
   let final = false;
-  if (caller === 'cron' && body.auto === true) {
+  const auto = caller === 'cron' && body.auto === true;
+  // Sleep talk: judge first, so a push sent in this run already knows. Never blocks the report (before 0029: skipped).
+  let sleepTalk: JudgeResult | { error: string } | null = null;
+  const names: Record<string, string> = Object.fromEntries(people.map((p) => [p.id, p.name]));
+  if (auto) {
+    sleepTalk = await judgeSleepTalkNights(db, date, now, personIds).catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
+  }
+  const followUp = () =>
+    auto && sleepTalk && !('error' in sleepTalk)
+      ? sleepTalkFollowUp(db, date, names).catch((e) => ({ sent: false, reason: `failed: ${e instanceof Error ? e.message : e}` }))
+      : Promise.resolve(null);
+  if (auto) {
     const due = await shouldRun(db, row, now);
-    if (!due.run) return json({ ok: true, date, skipped: due.reason });
+    if (!due.run) return json({ ok: true, date, skipped: due.reason, sleepTalk, sleepTalkPush: await followUp() });
     push = due.push;
     final = due.final;
   }
@@ -96,10 +113,14 @@ serve(async (req) => {
   }
 
   // A failed push never loses the report; pushed_at is set once a push was attempted, so cron doesn't re-push.
+  // The sleep-talk line rides along when the night is fully judged (scheduled runs only).
+  const talkLine = push && auto && sleepTalk && !('error' in sleepTalk) ? await sleepTalkForReport(db, date, names).catch(() => null) : null;
+  const pushBody = talkLine ? `${report.headline}\n${talkLine}` : report.headline;
   const pushed = push
-    ? await pushToAll(db, { title: 'Last night', body: report.headline, navigate: `${appUrl()}/?date=${report.date}`, tag: `report-${report.date}` }, 'report', { urgency: 'normal' })
+    ? await pushToAll(db, { title: 'Last night', body: pushBody, navigate: `${appUrl()}/?date=${report.date}`, tag: `report-${report.date}` }, 'report', { urgency: 'normal' })
       .catch((e) => ({ skipped: `push failed: ${e instanceof Error ? e.message : e}` }))
     : null;
+  if (pushed && talkLine) await markSleepTalkSent(db, date, 'Last night', pushBody);
   const up = await db.from('reports').upsert(
     {
       date,
@@ -115,7 +136,9 @@ serve(async (req) => {
     { onConflict: 'date' },
   );
   if (up.error) throw new Error(`reports: ${up.error.message}`);
-  return json({ ok: true, date, generatedBy: report.generatedBy, model, coachNote, headline: report.headline, insights: report.insights, dataQuality, push: pushed });
+  // Report already out earlier (or just now without the line): the separate sleep-talk push, once a night.
+  const sleepTalkPush = talkLine ? { sent: true, reason: 'in the report push' } : await followUp();
+  return json({ ok: true, date, generatedBy: report.generatedBy, model, coachNote, headline: report.headline, insights: report.insights, dataQuality, push: pushed, sleepTalk, sleepTalkPush });
 });
 
 /** After this the morning CO2 decay (wake → noon) is in, so a report generated later is final. */

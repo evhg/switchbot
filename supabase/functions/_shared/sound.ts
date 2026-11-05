@@ -6,7 +6,7 @@
 // tonight's listen window: lights-out − 15 min → the aircon's scheduled OFF at wake + 30 min (core listenWindow, the
 // same "off (wake + 30 min)" the controller schedules). Nights are keyed by their wake date (nightDateFor). Between
 // that OFF and 12:00 the reported window is the coming night's (its nights row, else the default schedule).
-import { inWindow, listenWindow, type ListenWindow, SOUND_CLIPS_PER_NIGHT } from '../../../packages/core/src/sound/payload.ts';
+import { inWindow, isSpeechEvent, listenWindow, type ListenWindow, SOUND_CLIPS_PER_NIGHT, SOUND_SPEECH_CLIPS_PER_NIGHT } from '../../../packages/core/src/sound/payload.ts';
 import type { Ms } from '../../../packages/core/src/types.ts';
 import { DEFAULT_WAKE_HHMM } from './load.ts';
 import { optEnv } from './env.ts';
@@ -22,6 +22,8 @@ export interface SoundSettings {
   mode: SoundMode;
   pausedUntil: Ms | null;
   clips: boolean;
+  /** "Save sleep talk" (sound_sleeptalk, migration 0029): speech clips and transcripts allowed. */
+  sleepTalk: boolean;
 }
 
 /** The night fields the decision needs (a nights row, or the default schedule). */
@@ -119,14 +121,17 @@ export async function soundNight(db: Db, date: string): Promise<SoundNight> {
 
 /** household_settings' sound columns. A read error throws (the caller answers 500 and the Mac retries). */
 export async function loadSoundSettings(db: Db): Promise<SoundSettings> {
-  const { data, error } = await db.from('household_settings').select('sound_mode,sound_paused_until,sound_clips').eq('id', 1).maybeSingle();
+  // select('*'): before migration 0029 there is no sound_sleeptalk column, and that must not break listening.
+  const { data, error } = await db.from('household_settings').select('*').eq('id', 1).maybeSingle();
   if (error) throw new Error(`household_settings: ${error.message}`);
-  const r = data as { sound_mode?: string; sound_paused_until?: string | null; sound_clips?: boolean } | null;
+  const r = data as { sound_mode?: string; sound_paused_until?: string | null; sound_clips?: boolean; sound_sleeptalk?: boolean } | null;
   return {
     // No row = the column defaults: auto, clips on.
     mode: r?.sound_mode === 'off' ? 'off' : 'auto',
     pausedUntil: r?.sound_paused_until ? Date.parse(r.sound_paused_until) : null,
     clips: r?.sound_clips !== false,
+    // Missing column (before 0029) = off: speech stays unclipped until the migration is applied.
+    sleepTalk: r?.sound_sleeptalk === true,
   };
 }
 
@@ -137,6 +142,9 @@ export interface CurrentListen extends ListenDecision {
   night: string;
   clips: boolean;
   clipsLeft: number;
+  /** Speech clips may be requested (clips and sleep talk on). */
+  sleepTalk: boolean;
+  speechClipsLeft: number;
   settings: SoundSettings;
 }
 
@@ -151,18 +159,41 @@ export async function currentListen(db: Db, now: Ms): Promise<CurrentListen> {
       console.error('presence', e instanceof Error ? e.message : String(e));
       return { latest: [] as LatestPresence[], people: [] as string[] };
     }),
-    clipsStored(db, night.date),
+    clipCounts(db, night.date),
   ]);
   const awayWhy = nightAway(night.presenceOverride, night.tags, awayPeriodFor(periods, night.date));
   const d = listenDecision({ now, settings, night, awayWhy, latest: presence.latest, people: presence.people });
-  return { ...d, night: night.date, clips: settings.clips, clipsLeft: Math.max(0, SOUND_CLIPS_PER_NIGHT - clipsUsed), settings };
+  return {
+    ...d,
+    night: night.date,
+    clips: settings.clips,
+    clipsLeft: Math.max(0, SOUND_CLIPS_PER_NIGHT - clipsUsed.other),
+    sleepTalk: settings.clips && settings.sleepTalk,
+    speechClipsLeft: settings.clips && settings.sleepTalk ? Math.max(0, SOUND_SPEECH_CLIPS_PER_NIGHT - clipsUsed.speech) : 0,
+    settings,
+  };
 }
 
-/** Clips reserved for a night (sound_events with clip_path set). */
+/**
+ * Clips reserved for a night (sound_events with clip_path set), split into speech (kind 'speech' or a speech-class
+ * label: the sleep-talk allowance) and the rest.
+ */
+export async function clipCounts(db: Db, nightDate: string): Promise<{ other: number; speech: number }> {
+  const { data, error } = await db.from('sound_events').select('kind,label').eq('night_date', nightDate).not('clip_path', 'is', null).limit(1000);
+  if (error) throw new Error(`sound_events clips: ${error.message}`);
+  let speech = 0;
+  let other = 0;
+  for (const r of (data ?? []) as { kind: string; label: string | null }[]) {
+    if (isSpeechEvent(r)) speech++;
+    else other++;
+  }
+  return { other, speech };
+}
+
+/** Clips reserved for a night (both allowances together). */
 export async function clipsStored(db: Db, nightDate: string): Promise<number> {
-  const { count, error } = await db.from('sound_events').select('id', { count: 'exact', head: true }).eq('night_date', nightDate).not('clip_path', 'is', null);
-  if (error) throw new Error(`sound_events count: ${error.message}`);
-  return count ?? 0;
+  const c = await clipCounts(db, nightDate);
+  return c.other + c.speech;
 }
 
 export const isoOrNull = (ms: Ms | null | undefined) => (ms === null || ms === undefined || !Number.isFinite(ms) ? null : iso(ms));

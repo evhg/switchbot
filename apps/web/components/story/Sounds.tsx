@@ -3,11 +3,14 @@
 // sound_events, migration 0024; lib/sound.ts): loudness and snoring per minute on the night's time axis (lights-out →
 // last up, as in The night), both hypnograms under it and Cath's wake-ups marked. One sentence answers "does the
 // snoring wake Cath?" (wakeTriggers in @sleep-lab/core: snoring or a loud moment within 2 min before a wake-up).
-// Clips of loud moments play inline (signed URLs from the private 'night-sounds' bucket, 1 h).
+// Clips of loud moments play inline (signed URLs from the private 'night-sounds' bucket, 1 h). "Sleep talk" lists the
+// night's talking in sleep (migration 0029: kept while "Save sleep talk" is on; talking while both were awake is
+// removed the next morning): time, "probably Cath/Erik" (talker_hint), the Mac's transcript in quotes and the clip.
 import { useMemo } from 'react';
 import { nightSoundSummary, wakeTriggers } from '@sleep-lab/core';
 import { dur, fmt, hm, MIN } from '@/lib/format.ts';
-import { cathWakeStarts, dbText, eventWords, useClipUrls, useNightSounds, type SoundEvent } from '@/lib/sound.ts';
+import { isSpeechEvent } from '@sleep-lab/core';
+import { cathWakeStarts, dbText, eventWords, sleepTalkEvents, talkerWords, useClipUrls, useNightSounds, type SoundEvent } from '@/lib/sound.ts';
 import { SoundChart, type WakeMark } from '../charts/SoundChart.tsx';
 import { Reveal } from '../motion.tsx';
 import { clock, usePlanClock } from '../system/model.ts';
@@ -20,21 +23,41 @@ import s from './story.module.css';
 const CATH = 'a';
 const LOOKBACK_MS = 2 * MIN;
 
-/** Notable moments, with an inline player when a clip was kept. */
-export function SoundMoments({ events, clips, max = 12, empty }: { events: readonly SoundEvent[]; clips: Record<string, string>; max?: number; empty?: string }) {
+/** Notable moments, with an inline player when a clip was kept (talking: who probably said it and the transcript). */
+export function SoundMoments({
+  events,
+  clips,
+  max = 12,
+  empty,
+  names = {},
+}: {
+  events: readonly SoundEvent[];
+  clips: Record<string, string>;
+  max?: number;
+  empty?: string;
+  names?: Readonly<Record<string, string>>;
+}) {
   if (!events.length) return empty ? <p className="sec">{empty}</p> : null;
   return (
     <EventList
       className={s.events}
       items={events.slice(0, max).map((e) => {
         const url = e.clipPath ? clips[e.clipPath] : undefined;
-        const facts = [e.durationS === null ? null : e.durationS >= 60 ? dur(e.durationS / 60) : `${Math.max(1, Math.round(e.durationS))} s`, e.peakDb !== null ? `peak ${dbText(e.peakDb)}` : null].filter(Boolean).join(' · ');
+        const speech = isSpeechEvent(e);
+        const facts = [
+          speech ? talkerWords(e.talkerHint, names) : null,
+          e.durationS === null ? null : e.durationS >= 60 ? dur(e.durationS / 60) : `${Math.max(1, Math.round(e.durationS))} s`,
+          !speech && e.peakDb !== null ? `peak ${dbText(e.peakDb)}` : null,
+        ]
+          .filter(Boolean)
+          .join(' · ');
         return {
           time: hm(e.ts),
           title: eventWords(e),
           detail: (
             <>
               {facts}
+              {speech && e.transcript && <span style={{ display: 'block', marginTop: 4, fontStyle: 'italic' }}>“{e.transcript}”</span>}
               {url && (
                 // eslint-disable-next-line jsx-a11y/media-has-caption
                 <audio controls preload="none" src={url} style={{ display: 'block', width: '100%', maxWidth: 320, height: 36, marginTop: 6 }} aria-label={`${eventWords(e)} at ${hm(e.ts)}`} />
@@ -82,10 +105,13 @@ export function Sounds({ model }: { model: StoryModel }) {
     return res.rows.filter((r) => r.heard).map((r) => ({ ts: r.wakeAt, snore: r.snore, loud: r.loud }));
   }, [minutes, events, wakeStarts]);
   const clipEvents = useMemo(
-    () => [...events].filter((e) => e.kind !== 'speech').sort((a, b) => (b.clipPath ? 1 : 0) - (a.clipPath ? 1 : 0) || (b.peakDb ?? -999) - (a.peakDb ?? -999)).slice(0, 8).sort((a, b) => a.ts - b.ts),
+    () => [...events].filter((e) => !isSpeechEvent(e)).sort((a, b) => (b.clipPath ? 1 : 0) - (a.clipPath ? 1 : 0) || (b.peakDb ?? -999) - (a.peakDb ?? -999)).slice(0, 8).sort((a, b) => a.ts - b.ts),
     [events],
   );
-  const clips = useClipUrls(clipEvents, real);
+  const talk = useMemo(() => sleepTalkEvents(events), [events]);
+  const clipped = useMemo(() => [...clipEvents, ...talk], [clipEvents, talk]);
+  const clips = useClipUrls(clipped, real);
+  const names = useMemo(() => Object.fromEntries(model.people.map((p) => [p.id, p.name])), [model.people]);
 
   const wakes: WakeMark[] = triggers.length ? triggers.map((t) => ({ ts: t.ts, noisy: t.snore || t.loud })) : wakeStarts.map((ts) => ({ ts, noisy: false }));
   const lanes = model.people.map((p) => ({ name: p.name, stages: p.night.sleep.stages }));
@@ -157,6 +183,11 @@ export function Sounds({ model }: { model: StoryModel }) {
         <Reveal delay={120}>
           <h3 className="label">Notable moments</h3>
           <SoundMoments events={clipEvents} clips={clips} empty="Nothing stood out." />
+        </Reveal>
+        <Reveal delay={140}>
+          <h3 className="label">Sleep talk</h3>
+          <SoundMoments events={talk} clips={clips} names={names} max={20} empty="No sleep talk last night." />
+          {talk.some((e) => e.sleepTalk == null) && <p className="sec">Some talking isn’t checked against your sleep yet. If you were both awake, it’s deleted this morning.</p>}
         </Reveal>
       </SceneCols>
     </Scene>

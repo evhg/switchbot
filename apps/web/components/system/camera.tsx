@@ -2,7 +2,8 @@
 /**
  * System › Camera (/settings/camera): the bedroom camera, which now listens at night (migration 0024).
  *
- * Night sounds: Listening (Auto / Off, set_sound_settings), "Save short clips of loud moments" (sound_clips), the Mac
+ * Night sounds: Listening (Auto / Off, set_sound_settings), "Save short clips of loud moments" (sound_clips), "Save
+ * sleep talk" (sound_sleeptalk, set_sound_sleeptalk, migration 0029), the Mac
  * listener's status (newest sound_minutes row) and a running pause (pause_sound_until). Video: "Show live video"
  * (household_settings.live_video, set_live_video, default off). While it is off, neither this page nor the Live tab
  * renders a player or fetches a camera ticket, and the stream address and lock below are hidden.
@@ -22,7 +23,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import { useAuth } from '@/lib/auth.tsx';
 import { functionsUrl, supabaseClient } from '@/lib/data/supabase.ts';
 import { hm } from '@/lib/format.ts';
-import { isListening, isPaused, pauseSoundUntil, setLiveVideo, setSoundSettings, useNewestSoundMinute, useSoundSettings, type SoundMode } from '@/lib/sound.ts';
+import { isListening, isPaused, pauseSoundUntil, setLiveVideo, setSoundSettings, setSoundSleepTalk, useNewestSoundMinute, useSoundSettings, type SoundMode } from '@/lib/sound.ts';
 import { systemHref, useChrome } from '../nav.tsx';
 import { ago } from './bands.tsx';
 import { clock, usePlanClock } from './model.ts';
@@ -343,7 +344,8 @@ function NightSoundsSettings({ live, canWrite }: { live: boolean; canWrite: bool
       footer={
         <>
           The Mac listens from {clock(pc.lightsOut - 15)} to {clock(pc.wake + 30)} (lights-out to the aircon going off), only when you’re home. It sends loudness and
-          snoring per minute; clips are about 10 s, never of talking, and are kept 14 days. {(msg ?? error ?? tsError) && <span className="sig">{msg ?? error ?? tsError}</span>}
+          snoring per minute; clips are about 10 s and are kept 14 days.{' '}
+          {settings?.sleepTalk === false ? 'Talking is never clipped.' : 'With sleep talk on, talking is clipped too (up to 30 s) and written down on the Mac.'} {(msg ?? error ?? tsError) && <span className="sig">{msg ?? error ?? tsError}</span>}
         </>
       }
     >
@@ -366,6 +368,22 @@ function NightSoundsSettings({ live, canWrite }: { live: boolean; canWrite: bool
         title="Save short clips of loud moments"
         sub="Snoring, coughs and loud noises, up to 40 a night"
         trailing={<Switch checked={settings?.clips ?? true} disabled={disabled} onChange={(v) => void run(() => setSoundSettings(null, v))} label={<span className="sr-only">Save short clips of loud moments</span>} />}
+      />
+      <Row
+        title="Save sleep talk"
+        sub={
+          settings?.sleepTalk === null
+            ? 'Not on the server yet (migration 0029)'
+            : `Clips of talking, up to 20 a night, with what was said. Clips where you were both awake are deleted the next morning.${settings && !settings.clips ? ' Needs short clips on.' : ''}`
+        }
+        trailing={
+          <Switch
+            checked={settings?.sleepTalk === true}
+            disabled={disabled || settings?.sleepTalk === null}
+            onChange={(v) => void run(() => setSoundSleepTalk(v))}
+            label={<span className="sr-only">Save sleep talk</span>}
+          />
+        }
       />
       {isPaused(settings, now) && (
         <Row

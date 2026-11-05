@@ -2,8 +2,10 @@
 // 0024): request validation and clamping, the listen window, and the snake_case rows.
 //
 // The Mac classifies the bedroom camera's audio locally (YAMNet AudioSet classes) and posts per-minute summaries and
-// discrete events only: no raw audio arrives here. Short clips of notable moments (never speech) are uploaded
-// separately through signed Storage URLs the function hands out.
+// discrete events only: no raw audio arrives here. Short clips of notable moments are uploaded separately through
+// signed Storage URLs the function hands out. Speech is clipped only while "Save sleep talk" is on
+// (household_settings.sound_sleeptalk, migration 0029): then speech events may carry a clip (≤ 30 s, ≤ 20 a night,
+// on top of the 40) and the Mac's local transcript; the morning judge (sleeptalk.ts) removes the ones where both were awake.
 import type { Ms } from '../types.ts';
 import { OFF_AFTER_WAKE_MIN } from '../control/quiet.ts';
 import { addDays, ictDate } from '../sim/time.ts';
@@ -27,6 +29,14 @@ export const LISTEN_BEFORE_LIGHTS_OUT_MIN = 15;
 export const LISTEN_GRACE_MS = 5 * MIN;
 /** At most this many stored clips per night. */
 export const SOUND_CLIPS_PER_NIGHT = 40;
+/** At most this many speech clips per night (sleep talk, only with sound_sleeptalk on), on top of SOUND_CLIPS_PER_NIGHT. */
+export const SOUND_SPEECH_CLIPS_PER_NIGHT = 20;
+/** Clip length the Mac may cut: ~10 s for ordinary moments, the whole speech run (pre-roll 2 s) up to 30 s for speech. */
+export const SOUND_CLIP_MAX_S = 10;
+export const SPEECH_CLIP_MAX_S = 30;
+/** Transcript of a speech clip (made on the Mac): at most this many characters; its language code at most 10. */
+export const TRANSCRIPT_MAX = 2000;
+export const TRANSCRIPT_LANG_MAX = 10;
 /** A minute counts as snoring when the Mac classified at least this many of its seconds as snoring. */
 export const SNORE_MIN_S = 10;
 /** A loud moment: this many dB above the room's quiet floor. */
@@ -64,6 +74,10 @@ export interface SoundEvent {
   peakDb: number | null;
   score: number | null;
   wantClip: boolean;
+  /** Local transcript of a speech clip (≤ 2000 chars), or null. Kept only for speech events with sleep talk on. */
+  transcript?: string | null;
+  /** Language the transcriber detected ("en", "nl", "th"; ≤ 10 chars), or null. */
+  transcriptLang?: string | null;
 }
 
 export interface SoundPayloadError {
@@ -156,12 +170,47 @@ export function isSpeechLabel(label: string | null | undefined): boolean {
 /** A clip is only made for a fresh event (a re-sent outbox batch no longer has its audio). */
 export const CLIP_MAX_AGE_MS = 10 * MIN;
 
+/** A speech event: kind 'speech' or a speech/voice class label (a raised voice reported as 'loud' included). */
+export function isSpeechEvent(e: { kind: SoundKind | string; label: string | null | undefined }): boolean {
+  return e.kind === 'speech' || isSpeechLabel(e.label);
+}
+
 /**
- * May the server reserve a clip for this event? Only when the Mac asked, the event is not speech (by kind or by label)
- * and it is at most CLIP_MAX_AGE_MS old.
+ * May the server reserve a clip for this event? Only when the Mac asked and it is at most CLIP_MAX_AGE_MS old; a
+ * speech event (by kind or by label) only when `opts.speech` is true ("Save sleep talk" on; it then counts against
+ * SOUND_SPEECH_CLIPS_PER_NIGHT). Without opts speech is never clipped.
  */
-export function clipAllowed(e: { ts: Ms; kind: SoundKind; label: string | null; wantClip: boolean }, now: Ms): boolean {
-  return e.wantClip && e.kind !== 'speech' && !isSpeechLabel(e.label) && now - e.ts <= CLIP_MAX_AGE_MS;
+export function clipAllowed(e: { ts: Ms; kind: SoundKind; label: string | null; wantClip: boolean }, now: Ms, opts: { speech?: boolean } = {}): boolean {
+  if (!e.wantClip || now - e.ts > CLIP_MAX_AGE_MS) return false;
+  return isSpeechEvent(e) ? opts.speech === true : true;
+}
+
+/** A transcript as stored: trimmed, whitespace collapsed, control characters removed, ≤ TRANSCRIPT_MAX; null when empty or not a string. */
+export function normalizeTranscript(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  // eslint-disable-next-line no-control-regex
+  const s = v.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!s) return null;
+  return [...s].slice(0, TRANSCRIPT_MAX).join('').trim();
+}
+
+/** A language code as stored: lower-case letters, digits and '-' (e.g. 'en', 'nl', 'th', 'zh-hant'), ≤ 10; else null. */
+export function normalizeTranscriptLang(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const s = v.trim().toLowerCase();
+  return s && s.length <= TRANSCRIPT_LANG_MAX && /^[a-z]{2,3}(-[a-z0-9]{1,6})?$/.test(s) ? s : null;
+}
+
+/**
+ * The transcript rule: kept only when "Save sleep talk" is on and the event is speech; otherwise both fields are
+ * dropped (null).
+ */
+export function applyTranscriptPolicy<E extends { kind: SoundKind; label: string | null; transcript?: string | null; transcriptLang?: string | null }>(
+  e: E,
+  sleepTalk: boolean,
+): E {
+  if (sleepTalk && isSpeechEvent(e) && e.transcript) return e;
+  return { ...e, transcript: null, transcriptLang: null };
 }
 
 /** ISO 8601 with Z or an offset, or epoch ms. */
@@ -231,6 +280,8 @@ export function parseSoundEvent(raw: unknown, now: Ms): SoundEvent | string {
     peakDb: db(raw.peakDb ?? raw.peak_db),
     score: unit(raw.score),
     wantClip: raw.wantClip === true,
+    transcript: normalizeTranscript(raw.transcript),
+    transcriptLang: normalizeTranscriptLang(raw.transcriptLang ?? raw.transcript_lang),
   };
 }
 
@@ -350,6 +401,8 @@ export function soundEventRow(e: SoundEvent, camera = SOUND_CAMERA_DEFAULT, nigh
     label: e.label,
     peak_db: e.peakDb,
     score: e.score,
+    // Only when present, so a row without one stays insertable before migration 0029.
+    ...(e.transcript ? { transcript: e.transcript, transcript_lang: e.transcriptLang ?? null } : {}),
   };
 }
 
@@ -391,6 +444,8 @@ export function soundEventFromRow(r: {
   score?: number | null;
   clip_path?: string | null;
   hidden?: boolean | null;
+  transcript?: string | null;
+  transcript_lang?: string | null;
 }): SoundEvent & { id?: number; clipPath: string | null; hidden: boolean } {
   return {
     ...(r.id !== undefined ? { id: r.id } : {}),
@@ -401,6 +456,8 @@ export function soundEventFromRow(r: {
     peakDb: r.peak_db ?? null,
     score: r.score ?? null,
     wantClip: false,
+    transcript: r.transcript ?? null,
+    transcriptLang: r.transcript_lang ?? null,
     clipPath: r.clip_path ?? null,
     hidden: r.hidden === true,
   };
