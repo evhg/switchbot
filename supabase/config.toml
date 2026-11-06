@@ -103,3 +103,6 @@ verify_jwt = false
 # Phone alerts: Fitbit battery, a band not syncing, the night listener stopped; cron or an owner/member's JWT (0026).
 [functions.alerts]
 verify_jwt = false
+
+[functions.clip-url]
+verify_jwt = false
