@@ -3,7 +3,10 @@
  * Where everyone is (Map, System › Location): reads public.locations (migration 0023, written by the owntracks Edge
  * Function from each iPhone's OwnTracks app) and the household's location settings in household_settings.
  *
- *   useLocationSettings(enabled, nonce)   home point + radius, the Google Maps browser key, camera_ticket_required
+ *   useLocationSettings(enabled, nonce)   home point + radius, the Google Maps browser key, camera_ticket_required,
+ *                                         presence_people (whose phones decide home / away; migration 0031)
+ *   reportsSelf / leaderOf / phonesLabel  presence_people helpers: Cath "follows Erik's phone" when it is {b}
+ *   trailPoints(fixes)                    a track for drawing: GPS jitter merged, rough fixes (> 100 m) left out
  *   useLatestFixes(enabled, nonce)        each person's newest fix (null = none yet); undefined while loading
  *   fetchTracks(from, to)                 both people's fixes in [from, to], acc ≤ 500 m or unknown, oldest first,
  *                                         each with its last fix before `from` as an anchor; paged past PostgREST's
@@ -14,7 +17,7 @@
  * Track math (positionAt, trackUpTo, togetherSpans, haversineM) lives in @sleep-lab/core (src/location).
  */
 import { useEffect, useState } from 'react';
-import type { TrackPoint } from '@sleep-lab/core';
+import { haversineM, type TrackPoint } from '@sleep-lab/core';
 import { functionsUrl, supabaseClient, supabaseConfigured } from './data/supabase.ts';
 import { HOUR, MIN } from './format.ts';
 
@@ -48,6 +51,10 @@ export interface LocationSettings {
   /** household_settings.maps_browser_key: a browser key restricted to this site's referrer. */
   mapsKey: string | null;
   cameraTicketRequired: boolean;
+  /** household_settings.presence_people (migration 0031): the people whose phones decide home / away. The others
+   *  follow them (public.presence_latest, 0032): Cath and Erik are always together, only Erik's phone reports.
+   *  null = everyone reports for themselves (also before the migration). */
+  presencePeople: string[] | null;
 }
 
 export interface Fix extends TrackPoint {
@@ -87,10 +94,22 @@ function toSettings(r: Row | null): LocationSettings {
     home: lat !== null && lon !== null ? { lat, lon, radiusM: numOrNull(r?.home_radius_m) ?? 150 } : null,
     mapsKey: str(r?.maps_browser_key),
     cameraTicketRequired: r?.camera_ticket_required === true,
+    presencePeople: Array.isArray(r?.presence_people) && r.presence_people.length ? (r.presence_people as unknown[]).map(String) : null,
   };
 }
 
-const EMPTY: LocationSettings = { home: null, mapsKey: null, cameraTicketRequired: false };
+const EMPTY: LocationSettings = { home: null, mapsKey: null, cameraTicketRequired: false, presencePeople: null };
+
+/** Does this person's own phone decide their home / away (and show them on the Map)? */
+export const reportsSelf = (id: string, presencePeople: readonly string[] | null | undefined) => !presencePeople?.length || presencePeople.includes(id);
+/** Whose phone this person follows (the first of presence_people), or null when they report for themselves. */
+export const leaderOf = (id: string, presencePeople: readonly string[] | null | undefined): string | null =>
+  reportsSelf(id, presencePeople) ? null : (presencePeople?.[0] ?? null);
+/** "Erik’s phone" / "Erik’s and Cath’s phones" for presence_people. */
+export function phonesLabel(ids: readonly string[], nameOf: (id: string) => string): string {
+  const ns = ids.map((id) => `${nameOf(id)}’s`);
+  return ns.length <= 1 ? `${ns[0] ?? 'the'} phone` : `${ns.slice(0, -1).join(', ')} and ${ns.at(-1)} phones`;
+}
 
 /** household_settings' location columns; undefined while loading. Not a member: the empty settings. */
 export function useLocationSettings(enabled: boolean, nonce = 0): { settings: LocationSettings | undefined; error: string | null } {
@@ -100,7 +119,8 @@ export function useLocationSettings(enabled: boolean, nonce = 0): { settings: Lo
     let alive = true;
     supabaseClient()
       .from('household_settings')
-      .select('home_lat,home_lon,home_radius_m,maps_browser_key,camera_ticket_required')
+      // '*' so a database without one of the newer columns (presence_people, 0031) still loads.
+      .select('*')
       .eq('id', 1)
       .maybeSingle()
       .then(({ data, error }) => {
@@ -113,6 +133,28 @@ export function useLocationSettings(enabled: boolean, nonce = 0): { settings: Lo
     };
   }, [enabled, nonce]);
   return res;
+}
+
+/** Trail drawing: fixes rougher than this are left out of the line (the marker still uses them). */
+export const TRAIL_MAX_ACC_M = 100;
+/** Trail drawing: a fix closer than max(its accuracy, this) to the previous kept one is GPS jitter, not a move. */
+export const TRAIL_MIN_STEP_M = 25;
+
+/**
+ * A track for drawing (oldest first in, oldest first out): fixes with acc > TRAIL_MAX_ACC_M are dropped, and a fix
+ * within max(acc, TRAIL_MIN_STEP_M) of the previous kept fix is merged into it (its time is kept, the position is not),
+ * so a phone lying still at home is one point, not a little polygon of jitter. The last fix always moves the tip when
+ * it is a real step; otherwise the cluster's first point stands for it.
+ */
+export function trailPoints<T extends TrackPoint>(track: readonly T[]): T[] {
+  const out: T[] = [];
+  for (const f of track) {
+    if (f.accM != null && f.accM > TRAIL_MAX_ACC_M) continue;
+    const prev = out.at(-1);
+    if (prev && haversineM(prev, f) < Math.max(f.accM ?? 0, prev.accM ?? 0, TRAIL_MIN_STEP_M)) continue;
+    out.push(f);
+  }
+  return out;
 }
 
 const FIX_COLS = 'person_id,ts,lat,lon,acc_m,batt,conn,ssid';

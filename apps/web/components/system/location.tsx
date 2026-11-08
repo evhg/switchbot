@@ -2,7 +2,8 @@
 /**
  * System › Location (/settings/location): everything the Map needs.
  *
- *   Phones       each person's newest fix in public.locations (migration 0023): "Sending" (< 2 h), "Quiet", "Not set up"
+ *   Phones       each person's newest fix in public.locations (migration 0023): "Sending" (< 2 h), "Quiet", "Not set up";
+ *                people outside household_settings.presence_people (0031) "Follow Erik's phone" instead (no OwnTracks)
  *   OwnTracks    setup steps for the iPhone app (HTTP mode → the owntracks Edge Function, Basic auth with the same
  *                presence token as the Shortcut and the Mac)
  *   Home         household_settings.home_lat / home_lon / home_radius_m, set from this device's position
@@ -20,6 +21,9 @@ import {
   HOME_RADII,
   SENDING_MS,
   distLabel,
+  leaderOf,
+  phonesLabel,
+  reportsSelf,
   owntracksUrl,
   setHomeLocation,
   setMapsKey,
@@ -47,11 +51,16 @@ export function useLocationSummary(): ReactNode {
   const auth = useAuth();
   const live = auth.status === 'signed-in' && !!auth.probe?.member;
   const { fixes } = useLatestFixes(live);
+  const { settings } = useLocationSettings(live);
   if (!live) return 'Not set up';
-  if (fixes === undefined) return <Skeleton w={52} h={14} r="text" inline />;
+  if (fixes === undefined || settings === undefined) return <Skeleton w={52} h={14} r="text" inline />;
   const now = Date.now();
-  const all = Object.values(fixes).filter(Boolean).length;
-  const sending = Object.values(fixes).filter((f) => f && now - f.ts < SENDING_MS).length;
+  // Only the phones that report count (presence_people): a follower's old fix isn't a phone gone quiet.
+  const own = Object.entries(fixes)
+    .filter(([id]) => reportsSelf(id, settings.presencePeople))
+    .map(([, f]) => f);
+  const all = own.filter(Boolean).length;
+  const sending = own.filter((f) => f && now - f.ts < SENDING_MS).length;
   return all ? `${sending} of ${all} sending` : 'Not set up';
 }
 
@@ -74,12 +83,21 @@ export function LocationPage() {
   const { fixes, error: fixError } = useLatestFixes(live, nonce);
   const url = owntracksUrl();
   const now = Date.now();
+  const pp = settings?.presencePeople ?? null;
+  const reporters = (['a', 'b'] as const).filter((id) => reportsSelf(id, pp));
+  const limited = reporters.length < 2;
+  const phones = phonesLabel(reporters, nameOf);
+  const followers = (['a', 'b'] as const).filter((id) => !reportsSelf(id, pp)).map(nameOf).join(' and ');
 
   return (
     <div className={cx(s.sub, s.col, s.drill)}>
       <PageHeader
         title="Location"
-        lede="Each iPhone runs OwnTracks, which sends its position here. The Map shows where you both are, and arriving or leaving home sets Presence by itself."
+        lede={
+          limited
+            ? `${phones.replace(/^./, (c) => c.toUpperCase())} runs OwnTracks, which sends its position here. The Map shows where you are, and arriving or leaving home sets Presence by itself, for you both: ${followers} follows ${phones}.`
+            : 'Each iPhone runs OwnTracks, which sends its position here. The Map shows where you both are, and arriving or leaving home sets Presence by itself.'
+        }
         className={s.header}
       />
 
@@ -90,6 +108,16 @@ export function LocationPage() {
           (['a', 'b'] as const).map((id) => {
             const f = fixes?.[id];
             const st = fixStatus(f, now);
+            const leader = leaderOf(id, pp);
+            if (leader)
+              return (
+                <Row
+                  key={id}
+                  title={`${nameOf(id)}’s iPhone`}
+                  sub={`Follows ${nameOf(leader)}’s phone: always together, so no OwnTracks needed here`}
+                  value={<Status tone="ok">Follows {nameOf(leader)}</Status>}
+                />
+              );
             return (
               <Row
                 key={id}
@@ -111,10 +139,14 @@ export function LocationPage() {
       </Group>
       {(error || fixError) && <p className={cx('sec', s.alert)}>{error ?? fixError}</p>}
 
-      <Group label="Set up OwnTracks on each iPhone (about 3 minutes)">
+      <Group label={limited ? `Set up OwnTracks on ${phones} (about 3 minutes)` : 'Set up OwnTracks on each iPhone (about 3 minutes)'}>
         <li className={s.bare}>
           <div className={s.howtoBox}>
-            <p className="sec">Each person does this on their own iPhone, with their own presence token.</p>
+            <p className="sec">
+              {limited
+                ? `Only ${phones} needs it, with its own presence token: ${followers} follows ${phones}.`
+                : 'Each person does this on their own iPhone, with their own presence token.'}
+            </p>
             <h3 className={s.howtoH}>1 · Install and connect</h3>
             <Steps
               items={[
@@ -151,7 +183,10 @@ export function LocationPage() {
                 <>
                   iOS Settings › <b>OwnTracks</b> › <b>Location</b>: <b>Always</b>, and <b>Precise Location</b> on. Background App Refresh on.
                 </>,
-                <>Back in OwnTracks, tap the upload button once. The phone above turns to <b>Sending</b>, and the other person appears on your OwnTracks map.</>,
+                <>
+                  Back in OwnTracks, tap the upload button once. The phone above turns to <b>Sending</b>
+                  {limited ? '.' : ', and the other person appears on your OwnTracks map.'}
+                </>,
               ]}
             />
             <p className="sec">

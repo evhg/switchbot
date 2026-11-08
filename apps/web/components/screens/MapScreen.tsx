@@ -11,6 +11,10 @@
  *              tracks drawn faint; the scrubber shows when they were together (togetherSpans). Space plays/pauses,
  *              arrow keys step 5 min (Shift: 1 h). Reduced motion: starts paused.
  *
+ * Whose phone reports (household_settings.presence_people, migration 0031): a person who follows another phone (Cath
+ * follows Erik's) gets no marker or track of their own, and "Together" is shown only when two phones report. A fix
+ * older than STALE_FIX_MS isn't drawn as a current position. Trails are drawn from trailPoints (GPS jitter merged).
+ *
  * Map objects live in refs and are moved imperatively (components/map/layers.ts); per frame React only sees nothing,
  * the clock label is written straight to the DOM about 10 times a second. Google Maps when a key is saved in
  * System › Location, otherwise a simple SVG view. Signed out or in Simulated mode: a sample day in central Bangkok.
@@ -29,6 +33,10 @@ import {
   connLabel,
   distLabel,
   fetchTracks,
+  leaderOf,
+  phonesLabel,
+  reportsSelf,
+  trailPoints,
   sampleTracks,
   useLatestFixes,
   useLocationSettings,
@@ -47,12 +55,16 @@ const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).jo
 type View = 'now' | 'timelapse';
 /** A gap longer than this in a track: the marker greys out and "together" isn't claimed across it. */
 const MAX_GAP_MS = 30 * MIN;
+/** A newest fix older than this isn't drawn on the Now map (the card says when it was last seen). */
+const STALE_FIX_MS = DAY;
 
 interface Ctx {
   real: boolean;
   home: Home | null;
   mapsKey: string | null;
   nameOf: (id: string) => string;
+  /** household_settings.presence_people; null = everyone's phone reports. */
+  presencePeople: string[] | null;
 }
 
 const initial = (name: string, id: string) => (name.trim()[0] ?? id).toUpperCase();
@@ -73,13 +85,22 @@ export function MapScreen() {
   );
   const [view, setView] = useState<View>('now');
   const waiting = auth.status === 'loading' || (auth.status === 'signed-in' && !auth.settled) || settings === undefined;
-  const ctx: Ctx = { real, home: real ? (settings?.home ?? null) : SAMPLE_HOME, mapsKey: real ? (settings?.mapsKey ?? null) : null, nameOf };
+  const presencePeople = real ? (settings?.presencePeople ?? null) : null;
+  const ctx: Ctx = { real, home: real ? (settings?.home ?? null) : SAMPLE_HOME, mapsKey: real ? (settings?.mapsKey ?? null) : null, nameOf, presencePeople };
+  const reporters = PERSON_IDS.filter((id) => reportsSelf(id, presencePeople));
+  const followers = PERSON_IDS.filter((id) => !reportsSelf(id, presencePeople));
 
   return (
     <div className={cx('content', s.page)}>
       <PageHeader
         title="Map"
-        lede={real ? 'Where you both are, from the OwnTracks app on each iPhone.' : 'A sample day in Bangkok. Sign in as a household member to see your own tracks.'}
+        lede={
+          !real
+            ? 'A sample day in Bangkok. Sign in as a household member to see your own tracks.'
+            : followers.length
+              ? `Where you are, from the OwnTracks app on ${phonesLabel(reporters, nameOf)} (${followers.map(nameOf).join(' and ')} follows it).`
+              : 'Where you both are, from the OwnTracks app on each iPhone.'
+        }
         actions={
           <Segmented<View>
             label="Map view"
@@ -125,7 +146,7 @@ function useVisibleTick(ms: number): number {
   return n;
 }
 
-function NowView({ real, home, mapsKey, nameOf }: Ctx) {
+function NowView({ real, home, mapsKey, nameOf, presencePeople }: Ctx) {
   const tick = useVisibleTick(60_000);
   const { fixes, error } = useLatestFixes(real, tick);
   const [layer, setLayer] = useState<MapLayer | null>(null);
@@ -136,16 +157,22 @@ function NowView({ real, home, mapsKey, nameOf }: Ctx) {
     layer.setHome(home);
     const pts: LatLon[] = [];
     for (const id of PERSON_IDS) {
-      const f = fixes[id];
-      layer.setMarker(id, f ? { lat: f.lat, lon: f.lon, accM: f.accM, label: initial(nameOf(id), id), stale: Date.now() - f.ts > 6 * HOUR } : null);
-      if (f) pts.push(f);
+      // A follower's own (old) fix and anything older than a day aren't drawn as where someone is now.
+      const f = reportsSelf(id, presencePeople) ? fixes[id] : null;
+      const shown = f && Date.now() - f.ts <= STALE_FIX_MS ? f : null;
+      layer.setMarker(id, shown ? { lat: shown.lat, lon: shown.lon, accM: shown.accM, label: initial(nameOf(id), id), stale: Date.now() - shown.ts > 6 * HOUR } : null);
+      if (shown) pts.push(shown);
     }
     if (home && pts.length < 2) pts.push(home);
     layer.fit(pts);
-  }, [layer, fixes, home, nameOf]);
+  }, [layer, fixes, home, nameOf, presencePeople]);
 
-  const a = fixes?.a ?? null;
-  const b = fixes?.b ?? null;
+  const fresh = (id: string) => {
+    const f = reportsSelf(id, presencePeople) ? (fixes?.[id] ?? null) : null;
+    return f && now - f.ts <= STALE_FIX_MS ? f : null;
+  };
+  const a = fresh('a');
+  const b = fresh('b');
   const together = a && b ? togetherLine(a, b) : null;
 
   return (
@@ -159,7 +186,9 @@ function NowView({ real, home, mapsKey, nameOf }: Ctx) {
       )}
       <div className={s.cards}>
         {PERSON_IDS.map((id) => {
-          const f = fixes?.[id];
+          const leader = leaderOf(id, presencePeople);
+          const f = leader ? (fixes?.[leader] ?? null) : fixes?.[id];
+          const old = !leader && f && now - f.ts > STALE_FIX_MS;
           return (
             <section key={id} className={cx('card', s.person)} data-person={id}>
               <header className={s.personH}>
@@ -170,9 +199,27 @@ function NowView({ real, home, mapsKey, nameOf }: Ctx) {
               </header>
               {fixes === undefined ? (
                 <Skeleton w={160} h={14} r="text" />
+              ) : leader ? (
+                <>
+                  <p className="sec">
+                    Always with {nameOf(leader)}: follows {nameOf(leader)}’s phone.
+                  </p>
+                  {f && (
+                    <dl className={s.kv}>
+                      <div>
+                        <dt>Where</dt>
+                        <dd>{placeLabel(f, home)}</dd>
+                      </div>
+                    </dl>
+                  )}
+                </>
               ) : !f ? (
                 <p className="sec">
                   No location yet. Set up OwnTracks in <a href={systemHref('location')}>System › Location</a>.
+                </p>
+              ) : old ? (
+                <p className="sec">
+                  Last seen {ago(f.ts, now)}: too old to show on the map. Check OwnTracks in <a href={systemHref('location')}>System › Location</a>.
                 </p>
               ) : (
                 <dl className={s.kv}>
@@ -263,7 +310,7 @@ function rangeBounds(r: Range, now: number): { from: number; to: number } {
   }
 }
 
-function TimelapseView({ real, home, mapsKey, nameOf }: Ctx) {
+function TimelapseView({ real, home, mapsKey, nameOf, presencePeople }: Ctx) {
   const [range, setRange] = useState<Range>({ preset: 'today' });
   const [loadedAt, setLoadedAt] = useState(() => Date.now());
   const { from, to } = useMemo(() => rangeBounds(range, loadedAt), [range, loadedAt]);
@@ -313,7 +360,10 @@ function TimelapseView({ real, home, mapsKey, nameOf }: Ctx) {
       .then((r) => {
         if (!alive) return;
         setTrimmed(r.trimmed);
-        setTracks(r.tracks);
+        // Only the phones that report, and no anchor from long before the range (a fix days old isn't "where they were").
+        const own: Record<string, Fix[]> = {};
+        for (const [id, tr] of Object.entries(r.tracks)) if (reportsSelf(id, presencePeople)) own[id] = tr.filter((f) => f.ts >= from - STALE_FIX_MS);
+        setTracks(own);
       })
       .catch((e: unknown) => {
         if (!alive) return;
@@ -323,19 +373,32 @@ function TimelapseView({ real, home, mapsKey, nameOf }: Ctx) {
     return () => {
       alive = false;
     };
-  }, [real, from, to]);
+  }, [real, from, to, presencePeople]);
   tracksRef.current = tracks;
+  // What the lines are drawn from: jitter merged, rough fixes left out (the markers still follow every fix).
+  const lines = useMemo(() => {
+    if (!tracks) return null;
+    const out: Record<string, Fix[]> = {};
+    for (const [id, tr] of Object.entries(tracks)) out[id] = trailPoints(tr);
+    return out;
+  }, [tracks]);
+  const linesRef = useRef<Record<string, Fix[]> | null>(null);
+  linesRef.current = lines;
 
+  const reporters = PERSON_IDS.filter((id) => reportsSelf(id, presencePeople));
+  const followers = PERSON_IDS.filter((id) => !reportsSelf(id, presencePeople));
+  /** "Together" needs two phones; with one reporting it would only ever read 0 min. */
+  const bothReport = reporters.length >= 2;
   const total = tracks ? PERSON_IDS.reduce((n, id) => n + (tracks[id]?.length ?? 0), 0) : 0;
   // Clipped to the range: the tracks start with each person's last fix before it.
   const spans = useMemo(
     () =>
-      tracks
+      tracks && bothReport
         ? togetherSpans(tracks.a ?? [], tracks.b ?? [], { maxGapMs: MAX_GAP_MS, withinM: TOGETHER_M })
             .map((x) => ({ from: Math.max(from, x.from), to: Math.min(to, x.to) }))
             .filter((x) => x.to > x.from)
         : [],
-    [tracks, from, to],
+    [tracks, from, to, bothReport],
   );
   const togetherMs = spans.reduce((n, x) => n + (x.to - x.from), 0);
 
@@ -343,12 +406,13 @@ function TimelapseView({ real, home, mapsKey, nameOf }: Ctx) {
   const render = useCallback((t: number, forceLabel = false) => {
     const l = layerRef.current;
     const tr = tracksRef.current;
+    const ln = linesRef.current;
     if (l && tr) {
       const trails: Record<string, ReturnType<typeof trackUpTo>> = {};
       const pts: LatLon[] = [];
       for (const id of PERSON_IDS) {
         const track = tr[id] ?? [];
-        trails[id] = trackUpTo(track, t);
+        trails[id] = trackUpTo(ln?.[id] ?? [], t);
         const p = positionAt(track, t, MAX_GAP_MS);
         l.setMarker(id, p ? { lat: p.lat, lon: p.lon, label: initial(nameRef.current(id), id), stale: p.stale } : null);
         if (p) pts.push(p);
@@ -378,7 +442,7 @@ function TimelapseView({ real, home, mapsKey, nameOf }: Ctx) {
     tRef.current = boundsRef.current.from;
     if (layer) {
       layer.setHome(home);
-      layer.setTracks(tracks);
+      layer.setTracks(lines ?? {});
       const pts: LatLon[] = [];
       for (const id of PERSON_IDS) {
         const tr = tracks[id] ?? [];
@@ -392,7 +456,7 @@ function TimelapseView({ real, home, mapsKey, nameOf }: Ctx) {
     render(tRef.current, true);
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     setPlay(!reduce && total > 0);
-  }, [tracks, layer, home, render, setPlay, total]);
+  }, [tracks, lines, layer, home, render, setPlay, total]);
 
   // The clock: runs only while playing.
   useEffect(() => {
@@ -488,7 +552,7 @@ function TimelapseView({ real, home, mapsKey, nameOf }: Ctx) {
             <b>No locations in this range</b>
           </Status>
           <p className="sec">
-            Locations arrive from the OwnTracks app on each iPhone. Set it up in <a href={systemHref('location')}>System › Location</a> (about 3 minutes); for
+            Locations arrive from the OwnTracks app on {followers.length ? phonesLabel(reporters, nameOf) : 'each iPhone'}. Set it up in <a href={systemHref('location')}>System › Location</a> (about 3 minutes); for
             detailed trails choose the “Move” monitoring mode.
           </p>
         </div>
@@ -538,9 +602,15 @@ function TimelapseView({ real, home, mapsKey, nameOf }: Ctx) {
           </div>
           <div className={s.scrubFoot}>
             <span className="cap num">{hm(from)}</span>
-            <span className={cx('cap', s.legend)}>
-              <i className={s.legendBand} aria-hidden /> Together {togetherMs >= HOUR ? `${(togetherMs / HOUR).toFixed(1)} h` : `${Math.round(togetherMs / MIN)} min`}
-            </span>
+            {bothReport ? (
+              <span className={cx('cap', s.legend)}>
+                <i className={s.legendBand} aria-hidden /> Together {togetherMs >= HOUR ? `${(togetherMs / HOUR).toFixed(1)} h` : `${Math.round(togetherMs / MIN)} min`}
+              </span>
+            ) : (
+              <span className={cx('cap', s.legend)}>
+                {followers.map(nameOf).join(' and ')} follows {phonesLabel(reporters, nameOf)}
+              </span>
+            )}
             <span className="cap num">{to >= Date.now() - MIN ? 'now' : hm(to)}</span>
           </div>
           <div className={s.followRow}>

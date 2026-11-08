@@ -1,11 +1,14 @@
 'use client';
 /**
  * Tonight and presence (decided 2026-10-29, 2026-10-30): bedtime 22:00 every day, asleep by ~23:00 and wake 08:30
- * (both editable), and the 21:30 pre-cool when the household is home: home by default, except away dates (e.g. Bangkok),
- * "Away tonight", or both phones saying "away". `TonightBlock` sits on top of System › Tonight's plan with the live /
- * dry-run switch and the away dates; `PresencePage` (System › Presence) explains the iPhone Shortcuts setup and
- * creates/rotates each person's token, plus per-device tokens under "Other devices" (lib/device-tokens.ts, migration
- * 0028). Data and rules: lib/tonight.ts.
+ * (both editable), and the pre-cool (its start comes from tonight's curve) when the household is home: home by default,
+ * except away dates (e.g. Bangkok), "Away tonight", or the reporting phones saying "away". Whose phones report is
+ * household_settings.presence_people (migration 0031; {b}: Erik's phone decides for both, Cath follows it).
+ * `TonightBlock` sits on top of System › Tonight's plan with the live / dry-run switch and the away dates;
+ * `PresencePage` (System › Presence) explains how it decides, points to OwnTracks (System › Location) as the setup,
+ * keeps the old iOS Shortcuts automations as a collapsed alternative, and creates/rotates each reporting person's
+ * token, plus per-device tokens under "Other devices" (lib/device-tokens.ts, migration 0028). Data and rules:
+ * lib/tonight.ts.
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { DEFAULT_PEOPLE } from '@sleep-lab/core';
@@ -15,6 +18,7 @@ import { supabaseConfigured } from '@/lib/data/supabase.ts';
 import { dayLabel, hm, MIN } from '@/lib/format.ts';
 import { awayLabel, hhmm, parseHhmm, presenceUrl, rotatePresenceToken, usePresenceTokens, validSleepOnset, type Override, type Tonight } from '@/lib/tonight.ts';
 import { useBandSync } from '@/lib/bands.ts';
+import { FALLBACK_NAMES, leaderOf, phonesLabel, reportsSelf, useLocationSettings } from '@/lib/location.ts';
 import {
   createDeviceToken,
   DEFAULT_DEVICE_LABEL,
@@ -29,11 +33,34 @@ import {
   type DeviceToken,
 } from '@/lib/device-tokens.ts';
 import { systemHref, useChrome } from '../nav.tsx';
-import { Button, Group, Input, PageHeader, Row, Segmented, Skeleton, Status, Switch } from '../ui.tsx';
+import { Button, Disclosure, Group, Input, PageHeader, Row, Segmented, Skeleton, Status, Switch } from '../ui.tsx';
 import { ago, BandPresenceGroup } from './bands.tsx';
 import s from './system.module.css';
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ');
+
+/** A person's display name ("You" in the dataset falls back to Cath / Erik). */
+const displayName = (people: readonly { id: string; name: string }[], id: string) => {
+  const n = people.find((p) => p.id === id)?.name?.trim();
+  return n && n.toLowerCase() !== 'you' ? n : (FALLBACK_NAMES[id] ?? id);
+};
+
+/** household_settings.presence_people with names: who reports, who follows, "Erik’s phone". */
+function usePresenceSetup(live: boolean, people: readonly { id: string; name: string }[]) {
+  const { settings } = useLocationSettings(live);
+  const pp = live ? (settings?.presencePeople ?? null) : null;
+  const nameOf = (id: string) => displayName(people, id);
+  const followers = pp ? people.filter((p) => !reportsSelf(p.id, pp)) : [];
+  return {
+    pp,
+    nameOf,
+    /** Some people follow others' phones (presence_people set and not everyone). */
+    limited: followers.length > 0,
+    followers,
+    phones: pp ? phonesLabel(pp, nameOf) : 'the phones',
+    follows: (id: string) => leaderOf(id, pp),
+  };
+}
 
 const STATE_LABEL = { home: 'Home', away: 'Away', unknown: 'Unknown' } as const;
 type Choice = 'auto' | 'home' | 'away';
@@ -77,6 +104,8 @@ export function TonightBlock({ t, asleepNote }: { t: Tonight; asleepNote?: strin
   const offAt = hhmm(t.wakeMin + 30);
   const locked = !ready || (t.live && !t.canWrite);
   const writable = t.live && t.canWrite;
+  const { dataset, latest } = useData();
+  const ps = usePresenceSetup(t.live, (dataset ?? latest)?.people ?? DEFAULT_PEOPLE);
 
   return (
     <section aria-label="Tonight">
@@ -160,7 +189,11 @@ export function TonightBlock({ t, asleepNote }: { t: Tonight; asleepNote?: strin
         )}
         <Row
           title="Home by default"
-          sub={t.defaultPresence === 'home' ? 'Pre-cool every night unless away dates, “Away tonight” or both phones say away' : 'Pre-cool only after a phone says home, or “Home tonight”'}
+          sub={
+            t.defaultPresence === 'home'
+              ? `Pre-cool every night unless away dates, “Away tonight” or ${ps.limited ? `${ps.phones} says` : 'every phone says'} away`
+              : `Pre-cool only after ${ps.limited ? ps.phones : 'a phone'} says home, or “Home tonight”`
+          }
           trailing={<Switch checked={t.defaultPresence === 'home'} disabled={!writable} onChange={(v) => run(t.setDefaultPresence(v ? 'home' : 'unknown'))} label={<span className="sr-only">Home by default</span>} />}
         />
         <Row
@@ -177,7 +210,11 @@ export function TonightBlock({ t, asleepNote }: { t: Tonight; asleepNote?: strin
           value={t.acLive === null ? undefined : <Status tone={t.acLive ? 'on' : 'off'}>{t.acLive ? 'Live' : 'Dry-run'}</Status>}
           trailing={<Switch checked={t.acLive === true} disabled={!writable || t.acLive === null} onChange={(v) => run(t.setAcLive(v))} label={<span className="sr-only">Aircon control live</span>} />}
         />
-        <Row title="Presence on your iPhones" sub="Arrive / leave home automations" href={systemHref('presence')} />
+        <Row
+          title="Presence"
+          sub={ps.limited ? `${ps.phones} (OwnTracks) decides home / away for you both` : 'Who is home, from OwnTracks on the iPhones'}
+          href={systemHref('presence')}
+        />
       </Group>
       <AwayDates t={t} onMsg={setMsg} />
     </section>
@@ -313,6 +350,8 @@ export function PresencePage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const url = supabaseConfigured() ? presenceUrl() : 'https://<project>.supabase.co/functions/v1/presence';
+  const ps = usePresenceSetup(live, people);
+  const followerNames = ps.followers.map((p) => ps.nameOf(p.id)).join(' and ');
 
   const rotate = async (personId: string) => {
     setBusy(personId);
@@ -328,30 +367,83 @@ export function PresencePage() {
     <div className={cx(s.sub, s.col, s.drill)}>
       <PageHeader
         title="Presence"
-        lede="The household counts as home every night, except on away dates. Each iPhone can also tell the app when its owner arrives home or leaves, so the 21:30 pre-cool doesn’t cool an empty room."
+        lede={
+          ps.limited
+            ? `The household counts as home every night, except on away dates. ${ps.phones} also tells the app when you arrive home or leave, so the pre-cool doesn’t cool an empty room. ${followerNames} ${ps.followers.length === 1 ? 'is' : 'are'} always with ${ps.pp!.map(ps.nameOf).join(' and ')}, so ${ps.followers.length === 1 ? 'she follows' : 'they follow'} ${ps.phones}.`
+            : 'The household counts as home every night, except on away dates. Each iPhone can also tell the app when its owner arrives home or leaves, so the pre-cool doesn’t cool an empty room.'
+        }
         className={s.header}
       />
 
-      <Group label="How it decides" footer="Your location never leaves the phone: the app only receives “home” or “away” and the time.">
-        <Row title="Home by default, no signal needed" sub="Switch “Home by default” off in Tonight’s plan to wait for a phone instead" value="Pre-cool at 21:30" />
+      <Group
+        label="How it decides"
+        footer="OwnTracks sends the phone’s position (for the Map) and the app works out home or away from it; the Shortcut sends only “home” or “away” and the time."
+      >
+        <Row title="Home by default, no signal needed" sub="Switch “Home by default” off in Tonight’s plan to wait for a phone instead. Pre-cool starts before lights out, at the time tonight’s curve sets" value="Pre-cool" />
         <Row title="Away dates (e.g. Bangkok)" sub="Planned in Tonight’s plan; the aircon stays off those nights" value="Off" />
-        <Row title="Both phones said “away” in the last 12 h" sub="Starts later if someone arrives before 01:00" value="Waits" />
-        <Row title="Someone’s latest signal is “home”" value="Pre-cool at 21:30" />
+        {ps.limited ? (
+          <>
+            <Row title={`${ps.followers.map((p) => ps.nameOf(p.id)).join(' and ')} follows ${ps.phones}`} sub={`Always together: ${ps.phones} decides home / away for you both`} value="Follows" />
+            <Row title={`${ps.phones.replace(/^./, (c) => c.toUpperCase())} said “away” in the last 12 h`} sub="Counts as everyone away. Starts later if you arrive before 01:00" value="Waits" />
+            <Row title={`The latest signal from ${ps.phones} is “home”`} value="Pre-cool" />
+          </>
+        ) : (
+          <>
+            <Row title="Every phone said “away” in the last 12 h" sub="Starts later if someone arrives before 01:00" value="Waits" />
+            <Row title="Someone’s latest signal is “home”" value="Pre-cool" />
+          </>
+        )}
         <Row title="Without “Home by default”" sub="No signal: no pre-cool. A “home” older than 48 h counts only with rising bedroom CO₂" value="Waits" />
         <Row title="Pre-cool started by a phone signal" sub="A notification lets you switch to “Away tonight”" value="Notifies" />
         <Row title="“Home tonight” / “Away tonight”" sub="One tap in Tonight’s plan, wins over the phones" value="Override" />
       </Group>
 
+      <Group label="Set up" footer="OwnTracks runs in the background and reports arriving and leaving home by itself; it also draws the Map.">
+        <Row
+          title="OwnTracks (recommended)"
+          sub={ps.limited ? `On ${ps.phones} only · System › Location` : 'On each iPhone · System › Location'}
+          value="Location"
+          href={systemHref('location')}
+        />
+      </Group>
+
       {people.map((p) => {
         const tok = tokens?.find((x) => x.personId === p.id);
         const fresh = shown?.personId === p.id ? shown.token : null;
+        const leader = ps.follows(p.id);
+        const label = p.name.trim().toLowerCase() === 'you' ? 'Your iPhone' : `${p.name}’s iPhone`;
+        if (leader) {
+          // Follows another phone: no token needed; creating one stays possible, as a secondary action.
+          return (
+            <Group key={p.id} label={label} footer={fresh ? 'Shown once. After you leave this page only a fingerprint of it is kept.' : undefined}>
+              <Row
+                title={`Follows ${ps.nameOf(leader)}’s phone`}
+                sub={`${ps.nameOf(p.id)} is always with ${ps.nameOf(leader)}: no token or OwnTracks needed on this phone.${tok ? ` A token exists (${tok.lastUsedAt ? `last signal ${hm(tok.lastUsedAt)}` : 'no signal yet'}); its signals don’t decide home / away.` : ''}`}
+                value={<Status tone="ok">Follows {ps.nameOf(leader)}</Status>}
+              />
+              {fresh && (
+                <li className={s.reveal}>
+                  <CopyField label="URL" value={url} />
+                  <CopyField label="Header X-Presence-Token" value={fresh} />
+                </li>
+              )}
+              {mayRotate(p.id) && (
+                <li className={s.btnLi}>
+                  <Button variant="text" size="sm" disabled={busy !== null} onClick={() => rotate(p.id)}>
+                    {busy === p.id ? 'Creating…' : tok ? 'Rotate token' : 'Create a token anyway'}
+                  </Button>
+                </li>
+              )}
+            </Group>
+          );
+        }
         return (
           <Group
             key={p.id}
-            label={p.name.trim().toLowerCase() === 'you' ? 'Your iPhone' : `${p.name}’s iPhone`}
+            label={label}
             footer={
               fresh
-                ? 'Shown once. Paste it into the Shortcut now; after you leave this page only a fingerprint of it is kept. Rotating makes a new token and the old one stops working.'
+                ? 'Shown once. Paste it into OwnTracks (Password) now; after you leave this page only a fingerprint of it is kept. Rotating makes a new token and the old one stops working.'
                 : undefined
             }
           >
@@ -366,7 +458,7 @@ export function PresencePage() {
                     ? 'Loading…'
                     : tok
                       ? `Created ${dayLabel(new Date(tok.createdAt + 7 * 60 * MIN).toISOString().slice(0, 10))} · ${tok.lastUsedAt ? `last signal ${hm(tok.lastUsedAt)}` : 'no signal yet'}`
-                      : 'Not created yet'
+                      : 'Not created yet: OwnTracks uses it as its password'
               }
               value={<Status tone={tok?.lastUsedAt ? 'on' : 'off'}>{tok ? (tok.lastUsedAt ? 'Working' : 'Waiting') : 'Not set up'}</Status>}
             />
@@ -391,38 +483,39 @@ export function PresencePage() {
 
       <BandPresenceGroup people={people} bands={bands} live={live} />
 
-      <Group label="Set up on each iPhone (about 3 minutes)">
-        <li className={s.bare}>
-          <div className={s.howtoBox}>
-            <p className="sec">Each person does this on their own phone, with their own token. Two automations: one for arriving, one for leaving.</p>
-            <h3 className={s.howtoH}>1 · When I arrive home</h3>
-            <Steps
-              items={[
-                <>Open <b>Shortcuts</b> › <b>Automation</b> › <b>+</b> › <b>Personal Automation</b> (on iOS 17+: <b>New Automation</b>).</>,
-                <>Choose <b>Arrive</b>, set <b>Location</b> to your home, and pick <b>Run Immediately</b> (turn off “Notify When Run”).</>,
-                <>Add the action <b>Get Contents of URL</b>. URL: <span className="code">{url}</span></>,
-                <>Tap ›, set <b>Method</b> to <b>POST</b>. Under <b>Headers</b> add <span className="code">Content-Type</span> = <span className="code">application/json</span> and <span className="code">X-Presence-Token</span> = your token.</>,
-                <>Set <b>Request Body</b> to <b>JSON</b> and add a text field <span className="code">state</span> = <span className="code">home</span>. Tap <b>Done</b>.</>,
-              ]}
-            />
-            <h3 className={s.howtoH}>2 · When I leave home</h3>
-            <Steps
-              items={[
-                <>Same again with <b>Leave</b> instead of Arrive, <b>Run Immediately</b>.</>,
-                <>Same URL and headers; body <span className="code">state</span> = <span className="code">away</span>.</>,
-              ]}
-            />
-            <h3 className={s.howtoH}>3 · Check it</h3>
-            <Steps
-              items={[
-                <>In the automation, tap the play button once. The token row above turns to <b>Working</b> and Tonight’s plan shows you as home.</>,
-                <>Location Services must be on for Shortcuts (Settings › Privacy › Location Services › Shortcuts › While Using).</>,
-              ]}
-            />
-          </div>
-        </li>
-      </Group>
-      <p className="cap">Lost phone or shared the token by mistake? Rotate it here: the old token stops working at once.</p>
+      <Disclosure title="Alternative: iOS Shortcuts" count="Arrive / leave automations">
+        <div className={s.howtoBox}>
+          <p className="sec">
+            The older way, without OwnTracks: two Shortcuts automations, one for arriving and one for leaving.{' '}
+            {ps.limited ? `Only on ${ps.phones}, with its token (${followerNames} follows it).` : 'Each person does this on their own phone, with their own token.'}
+          </p>
+          <h3 className={s.howtoH}>1 · When I arrive home</h3>
+          <Steps
+            items={[
+              <>Open <b>Shortcuts</b> › <b>Automation</b> › <b>+</b> › <b>Personal Automation</b> (on iOS 17+: <b>New Automation</b>).</>,
+              <>Choose <b>Arrive</b>, set <b>Location</b> to your home, and pick <b>Run Immediately</b> (turn off “Notify When Run”).</>,
+              <>Add the action <b>Get Contents of URL</b>. URL: <span className="code">{url}</span></>,
+              <>Tap ›, set <b>Method</b> to <b>POST</b>. Under <b>Headers</b> add <span className="code">Content-Type</span> = <span className="code">application/json</span> and <span className="code">X-Presence-Token</span> = your token.</>,
+              <>Set <b>Request Body</b> to <b>JSON</b> and add a text field <span className="code">state</span> = <span className="code">home</span>. Tap <b>Done</b>.</>,
+            ]}
+          />
+          <h3 className={s.howtoH}>2 · When I leave home</h3>
+          <Steps
+            items={[
+              <>Same again with <b>Leave</b> instead of Arrive, <b>Run Immediately</b>.</>,
+              <>Same URL and headers; body <span className="code">state</span> = <span className="code">away</span>.</>,
+            ]}
+          />
+          <h3 className={s.howtoH}>3 · Check it</h3>
+          <Steps
+            items={[
+              <>In the automation, tap the play button once. The token row above turns to <b>Working</b> and Tonight’s plan shows you as home.</>,
+              <>Location Services must be on for Shortcuts (Settings › Privacy › Location Services › Shortcuts › While Using).</>,
+            ]}
+          />
+        </div>
+      </Disclosure>
+      <p className="cap">Lost phone or shared the token by mistake? Rotate it here: the old token stops working at once. Then paste the new one into OwnTracks (and any Shortcut or Mac that uses it).</p>
     </div>
   );
 }
