@@ -3,14 +3,14 @@
 // whose primary action opens System › Tonight's plan, tonight's tags, the plan chart (plan in signal, last night
 // in grey) and last night's aircon log as a disclosure (open on wide desktops).
 import { useEffect, useState } from 'react';
-import type { Night, RoomNightMetrics, TagKey, TemperatureCurve } from '@sleep-lab/core';
-import { addDays, fmt, hm, ictDate, ictHour, MIN } from '@/lib/format.ts';
+import type { Night, RoomNightMetrics, TemperatureCurve } from '@sleep-lab/core';
+import { fmt, hm, ictDate, MIN } from '@/lib/format.ts';
 import { usePref } from '@/lib/prefs.ts';
 import { PlanChart } from '../charts/PlanChart.tsx';
 import { Reveal } from '../motion.tsx';
 import { systemHref } from '../nav.tsx';
 import { AdviceCard, Button, Chip, Chips, Disclosure, Group, Row, Status } from '../ui.tsx';
-import { TAGS, aircon, clock, planTimes, usePlanClock, type PlanClock } from '../system/model.ts';
+import { TAGS, aircon, clock, planTimes, usePlanClock, useTonightTags, type PlanClock } from '../system/model.ts';
 import { acReason } from './model.ts';
 import { Scene, SceneCols, SceneText, VisHead } from './parts.tsx';
 import s from './story.module.css';
@@ -62,7 +62,7 @@ function LiveTonight({ pc }: { pc: PlanClock }) {
   return (
     <Group className={s.liveTonight}>
       <Row title="Pre-cool" sub={t.precool.text.replace(/^Pre-cool /, '').replace(/^./, (c) => c.toUpperCase())} value={<Status tone={t.precool.tone === 'alert' ? 'alert' : t.precool.tone === 'on' ? 'on' : 'off'}>{t.precool.tone === 'on' ? 'On' : t.precool.tone === 'alert' ? 'Waiting' : 'Off'}</Status>} />
-      <Row title="Who’s home" sub={t.status.text} value={t.status.state === 'home' ? 'Home' : t.status.state === 'away' ? 'Away' : 'Unknown'} href={systemHref('presence')} />
+      <Row title="Who’s home" sub={t.status.text} value={t.status.state === 'home' ? 'Home' : t.status.state === 'away' ? 'Away' : 'Unknown'} href={systemHref('plan')} />
       <Row title="Aircon control" value={t.acLive === null ? '–' : <Status tone={t.acLive ? 'on' : 'off'}>{t.acLive ? 'Live' : 'Dry-run'}</Status>} sub={t.acLive ? 'Real commands to the aircon' : t.acLive === false ? 'Logged only, nothing sent' : undefined} />
       <Row title="Schedule" value={<span className="num">{clock(pc.lightsOut)} · asleep {clock(pc.sleepOnset)} · up {clock(pc.wake)}</span>} />
     </Group>
@@ -97,17 +97,10 @@ export function Tonight({
   const allAc = [...night.ac].sort((a, b) => a.ts - b.ts);
   const wide = useWide();
   const [armedFor, setArmedFor] = usePref<string>('armedFor', '');
-  const [tagStore, setTagStore] = usePref<Record<string, TagKey[]>>('tags', {});
-  const now = Date.now();
-  const today = ictDate(now);
-  const tonight = ictHour(now) >= 12 ? addDays(today, 1) : today;
+  const tonightTags = useTonightTags();
+  const { tags, toggle } = tonightTags;
+  const today = ictDate(Date.now());
   const armed = armedFor === today;
-  const tags = tagStore[tonight] ?? [];
-  const toggle = (k: TagKey) =>
-    setTagStore((st) => {
-      const cur = st[tonight] ?? [];
-      return { ...st, [tonight]: cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k] };
-    });
   // Tonight's times come from the same selector and lights-out anchor as System › Tonight's plan.
   const pc = pcLive;
   const times = planTimes(plan, pc.lightsOut, pc.wake);
@@ -125,7 +118,7 @@ export function Tonight({
                       <Button variant="primary" href={systemHref('plan')}>
                         Edit tonight’s plan
                       </Button>
-                      <Button variant="text" href={systemHref('presence')}>
+                      <Button variant="text" href={systemHref('plan')}>
                         Home or away
                       </Button>
                     </div>
@@ -155,12 +148,15 @@ export function Tonight({
             <h3 className="label">Tags for tonight</h3>
             <Chips label="Tags for tonight">
               {TAGS.map((t) => (
-                <Chip key={t.key} selected={tags.includes(t.key)} onClick={() => toggle(t.key)}>
+                <Chip key={t.key} selected={tags.includes(t.key)} disabled={tonightTags.loading || (tonightTags.live && !tonightTags.canWrite)} onClick={() => toggle(t.key)}>
                   {t.label}
                 </Chip>
               ))}
             </Chips>
-            <p className="cap">Tags become filters and experiment arms in the Lab.</p>
+            <p className="cap">
+              Tags become filters and experiment arms in the Lab.{' '}
+              {tonightTags.error ? <span className="sig">{tonightTags.error}</span> : tonightTags.live ? 'Saved for the household.' : 'Saved on this device.'}
+            </p>
           </Reveal>
           <Reveal delay={120}>
             <Disclosure key={wide ? 'open' : 'closed'} title="Last night’s aircon log" count={manualLast ? 'By hand' : `${allAc.length} command${allAc.length === 1 ? '' : 's'}`} defaultOpen={wide} className={s.log}>

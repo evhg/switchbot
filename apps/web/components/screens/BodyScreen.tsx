@@ -432,7 +432,7 @@ export function BodyScreen() {
                 <b>{fmt(m.respRate ?? NaN, 1)} breaths a minute</b> last night{Number.isFinite(respSum.typical) ? `, typical ${fmt(respSum.typical, 1)}` : ''}.
               </p>
               {trendSheet(rows((x) => x.respRate), 'Breathing', '/min', 1)}
-              <p className={s.note}>A whole-night average. Rates per sleep stage arrive once the respiratory-rate parser lands.</p>
+              <p className={s.note}>A whole-night average from the band.</p>
             </>
           )}
           {open === 'rhr' && (

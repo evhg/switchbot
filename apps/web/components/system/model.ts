@@ -4,12 +4,11 @@
  * static copy (tags, setup steps, devices), the stores kept on this device, and the selectors that turn the dataset
  * into plan clock times, "last night on this plan", nights with complete data and CO₂ drift alerts.
  */
-import { useEffect, useState } from 'react';
 import { DEFAULT_CURVE, DEFAULT_PEOPLE, DEFAULT_REMOTE, planAcSchedule, withQuiet, type CurvePhaseName, type TagKey, type TemperatureCurve } from '@sleep-lab/core';
 import { useData } from '@/lib/data/context.tsx';
 import { onsetAfterLightsOut, useTonight, type Tonight } from '@/lib/tonight.ts';
 import type { Dataset } from '@/lib/data/types.ts';
-import { addDays, ictDate, ictHour, MIN } from '@/lib/format.ts';
+import { MIN } from '@/lib/format.ts';
 import { usePref } from '@/lib/prefs.ts';
 
 // ───────────────────────────── static copy ─────────────────────────────
@@ -26,7 +25,7 @@ export const TAGS: readonly { key: TagKey; label: string }[] = [
 ];
 export const tagLabel = (k: TagKey) => TAGS.find((t) => t.key === k)?.label ?? k;
 
-/** Install order and key steps (docs/SETUP.md), ticked off on unboxing day. */
+/** How the devices were set up (docs/SETUP.md): a reference, with a tick per part. */
 export const SETUP: readonly { id: string; title: string; steps: readonly string[] }[] = [
   { id: 'app', title: 'SwitchBot app and account', steps: ['Install the SwitchBot app, region Thailand / Asia', 'Allow Bluetooth, Local Network, Notifications', 'Use 2.4 GHz Wi-Fi (or iPhone hotspot with Maximize Compatibility)'] },
   { id: 'hub', title: 'Hub Mini', steps: ['Line of sight to the AC receiver module', 'Note model W0202203 (Matter) or W0202200', 'Pair, then let it update firmware', 'Indicator Light → OFF'] },
@@ -36,16 +35,17 @@ export const SETUP: readonly { id: string; title: string; steps: readonly string
   { id: 'cam', title: 'Pan/Tilt Cam Plus 3K', steps: ['Update firmware first (RTSP needs 2025 firmware)', 'Night Vision Auto · indicator off or taped', 'Create a Camera Account for RTSP'] },
   { id: 'dark', title: 'Darkness audit', steps: ['Lights off, eyes adapted 10 min', 'Tape AC receiver LEDs (not the IR window), chargers, router'] },
 ];
-/** Optional groups: shown with "can wait". */
-export const SETUP_LATER = new Set(['cam']);
-
-export type DeviceState = 'Not linked' | 'Open loop' | 'Later';
-export const DEVICES: readonly { name: string; detail: string; state: DeviceState }[] = [
-  { name: 'Hub Mini', detail: 'IR to the aircon, gateway for the meter', state: 'Not linked' },
-  { name: 'Meter Pro CO2', detail: 'USB-C power · CO₂ every minute · battery n/a', state: 'Not linked' },
-  { name: 'Aircon (Toshiba Carrier)', detail: 'Remote profile setAll (assumed)', state: 'Open loop' },
-  { name: 'Fitbit Air × 2', detail: 'Google Health paired devices: last sync, battery', state: 'Not linked' },
-];
+/**
+ * The four devices on System › Data & devices. Whether each is linked, and how fresh it is, comes from the backend
+ * (devices, readings, ac_state / ac_commands, band_sync): see DataPage.
+ */
+export const DEVICES = [
+  { id: 'hub', name: 'Hub Mini', detail: 'IR to the aircon, gateway for the meter' },
+  { id: 'meter', name: 'Meter Pro CO2', detail: 'USB-C power · CO₂ every minute' },
+  { id: 'ac', name: 'Aircon (Toshiba Carrier)', detail: 'Infrared commands through the Hub Mini (no feedback from the unit)' },
+  { id: 'bands', name: 'Fitbit Air × 2', detail: 'Through Google Health' },
+] as const;
+export type DeviceId = (typeof DEVICES)[number]['id'];
 export const CAMERA_LATER: readonly string[] = [
   'Sound-based movement and restlessness, from the same audio',
 ];
@@ -279,25 +279,10 @@ export function driftAlerts(ds: Dataset | null): DriftAlert[] {
     .reverse();
 }
 
-// ───────────────────────────── stores (this device) ─────────────────────────────
+// ───────────────────────────── stores ─────────────────────────────
 
-/** The night tags apply to: from noon on, the night ending tomorrow morning. */
-export const tonightDate = (now = Date.now()) => (ictHour(now) >= 12 ? addDays(ictDate(now), 1) : ictDate(now));
-
-/** Tonight's tags. `night` is null until mounted (the date depends on the clock, so it is never prerendered). */
-export function useTonightTags(): [TagKey[], (k: TagKey) => void, string | null] {
-  const [store, setStore] = usePref<Record<string, TagKey[]>>('tags', {});
-  const [night, setNight] = useState<string | null>(null);
-  useEffect(() => setNight(tonightDate()), []);
-  const tags = night ? store[night] ?? [] : [];
-  const toggle = (k: TagKey) =>
-    night &&
-    setStore((st) => {
-      const cur = st[night] ?? [];
-      return { ...st, [night]: cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k] };
-    });
-  return [tags, toggle, night];
-}
+/** Tonight's tags: the household's nights row when signed in, else this device (lib/night-tags.ts). */
+export { useTonightTags } from '@/lib/night-tags.ts';
 
 export function useSetupProgress() {
   const [done, setDone] = usePref<Record<string, boolean>>('setup', {});
@@ -305,6 +290,7 @@ export function useSetupProgress() {
   return { done, setDone, count, total: SETUP.length };
 }
 
+/** Outdoor CO₂ checks: saved on this device (public.calibrations has none yet; the backend doesn't write them). */
 export interface Calibration {
   date: string;
   ppm: number;
@@ -312,6 +298,7 @@ export interface Calibration {
 }
 export const useCalibrations = () => usePref<Calibration[]>('calibrations', []);
 
+/** The last morning-report choice on this device; the push subscription itself (lib/push.ts) wins when known. */
 export const useMorningReport = () => usePref<boolean>('morningReport', false);
 
 export const isDefaultCurve = (c: TemperatureCurve) => c === DEFAULT_CURVE;

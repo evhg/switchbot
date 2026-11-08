@@ -7,10 +7,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_CURVE, MANUAL_COMFORT_TARGET_C, SLEEP_AIR_WEIGHTS, SLEEP_SCORE_WEIGHTS, type PersonNightMetrics } from '@sleep-lab/core';
 import { personColor, personName, useData, useNightDetail, useNightInfo, useSelectedNight, withNames } from '@/lib/data/context.tsx';
-import { curveById, fetchNightCurveId } from '@/lib/data/supabase.ts';
-import { tonightDate } from '@/lib/tonight.ts';
+import { curveById } from '@/lib/data/supabase.ts';
 import { experimentLine, useExperiments } from '@/lib/experiments.ts';
-import { usePlannedCurve } from '@/lib/curve-store.ts';
+import { useTonightCurve } from '@/lib/curve-store.ts';
 import { dayLabel, dur, fmt, hm, ictDate as ictDateOf, ictMidnight as ictMidnightOf, tidyReport } from '@/lib/format.ts';
 import { clock, planTimes } from '../system/model.ts';
 import { EVENT_LABEL, EventGlyph, NightStrip } from '../charts/NightStrip.tsx';
@@ -113,19 +112,9 @@ export function TodayScreen() {
   const sel = useSelectedNight();
   const { detail: rawDetail } = useNightDetail(date);
   const info = useNightInfo(date);
-  const [localPlan] = usePlannedCurve();
   const live = sourceKind === 'supabase';
   // Real household: tonight's plan is the curve on tonight's nights row (the backend's default when there is none yet).
-  const [tonightCurve, setTonightCurve] = useState<string | null>(null);
-  useEffect(() => {
-    if (!live) return;
-    let alive = true;
-    fetchNightCurveId(tonightDate()).then((id) => alive && setTonightCurve(id), () => undefined);
-    return () => {
-      alive = false;
-    };
-  }, [live]);
-  const plan = live ? curveById(tonightCurve, latest?.curves) : localPlan;
+  const { curve: plan } = useTonightCurve();
   const [sheet, setSheet] = useState<SheetKind>(null);
   const experiments = useExperiments();
   const dataset = latest;

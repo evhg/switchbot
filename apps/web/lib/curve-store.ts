@@ -1,6 +1,10 @@
 'use client';
 import { DEFAULT_CURVE, type CurvePhase, type TemperatureCurve } from '@sleep-lab/core';
+import { useEffect, useMemo, useState } from 'react';
+import { useData } from './data/context.tsx';
+import { curveById, fetchNightCurveId } from './data/supabase.ts';
 import { usePref } from './prefs.ts';
+import { tonightDate } from './tonight.ts';
 
 export const PHASE_LABEL: Record<CurvePhase['name'], string> = {
   precool: 'Pre-cool',
@@ -39,4 +43,39 @@ export function usePlannedCurve(): [TemperatureCurve, (c: TemperatureCurve) => v
   const [stored, setStored] = usePref<TemperatureCurve | null>('curve', null);
   const curve = valid(stored) ? stored : DEFAULT_CURVE;
   return [curve, (c) => setStored(sanitizeCurve({ ...c, id: 'custom', name: 'My curve' })), () => setStored(null)];
+}
+
+export interface TonightCurve {
+  /** The curve tonight runs: the household's (nights.curve_id) on real data, else this device's planned curve. */
+  curve: TemperatureCurve;
+  /** Real data: tonight's curve comes from the backend and edits here are a preview only. */
+  live: boolean;
+  /** Real data and the nights row hasn't been read yet. */
+  loading: boolean;
+}
+
+/**
+ * Tonight's plan, the same way Today tells it: on real data the curve on tonight's nights row (the backend's default
+ * when there is no row yet), resolved against the household's curves; otherwise the curve planned on this device.
+ * There is no RPC to store a custom curve, so on real data the editor's changes stay a preview on this device.
+ */
+export function useTonightCurve(): TonightCurve {
+  const { latest, dataset, sourceKind } = useData();
+  const [local] = usePlannedCurve();
+  const live = sourceKind === 'supabase';
+  const [id, setId] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!live) return setId(undefined);
+    let alive = true;
+    fetchNightCurveId(tonightDate()).then(
+      (x) => alive && setId(x),
+      () => alive && setId(null),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [live]);
+  const curves = (latest ?? dataset)?.curves;
+  const real = useMemo(() => curveById(id ?? null, curves), [id, curves]);
+  return live ? { curve: real, live, loading: id === undefined } : { curve: local, live, loading: false };
 }

@@ -19,7 +19,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNod
 import type { PersonNightMetrics, RoomNightMetrics, TagKey } from '@sleep-lab/core';
 import { personColor, personName, useData, useNightDetail, useSelectedNight } from '@/lib/data/context.tsx';
 import { synchrony } from '@/lib/analysis.ts';
-import { usePlannedCurve } from '@/lib/curve-store.ts';
+import { useTonightCurve } from '@/lib/curve-store.ts';
 import { fmt, hm, shortDate, shortDay } from '@/lib/format.ts';
 import { linearFit, loess, mean, meanCI, pearson, range, sd, welch } from '@/lib/stats.ts';
 import { lowerYou } from '../story/model.ts';
@@ -27,6 +27,7 @@ import { CompromiseAxis, CorrMatrix, IntervalPlot, MirroredHypnogram, TrendScatt
 import s from '../charts/lab.module.css';
 import { Icon } from '../icons.tsx';
 import { ExperimentsPanel } from '../lab/Experiments.tsx';
+import { systemHref } from '../nav.tsx';
 import { EventList, MoreAnalysis, OnThisPage, PageHeader, Section, Segmented, Sheet, Skeleton } from '../ui.tsx';
 
 type RoomKey = 'earlyTemp' | 'co2Mean' | 'rhMean' | 'ach';
@@ -168,7 +169,8 @@ export function LabScreen() {
   const { dataset, progress, date } = useData();
   const sel = useSelectedNight();
   const { detail } = useNightDetail(date);
-  const [plan] = usePlannedCurve();
+  // Tonight's curve: the household's on real data (nights.curve_id), else the one planned on this device.
+  const { curve: plan } = useTonightCurve();
   const [xKey, setX] = useState<RoomKey>('earlyTemp');
   const [yKey, setY] = useState<OutKey>('deepMin');
   const [lag, setLag] = useState<Lag>('same');
@@ -344,7 +346,7 @@ export function LabScreen() {
       {header(
         <>
           What actually helps, tested on your own nights. {included} of {total} nights have complete data; {total - included} {total - included === 1 ? 'is' : 'are'} left out{leftOut ? `: ${leftOut}` : ''}.{' '}
-          <Link className="link" href="/settings/data">
+          <Link className="link" href={systemHref('data')}>
             Data & devices
           </Link>
         </>,
@@ -514,7 +516,7 @@ export function LabScreen() {
         <MoreAnalysis
           items={[
             { label: 'Everything × everything', value: `${corr.strong} of ${corr.pairs} pairs look linked`, onClick: () => setMatrixOpen(true) },
-            { label: 'Nights left out', value: `${total - included} of ${total}`, href: '/settings/data' },
+            { label: 'Nights left out', value: `${total - included} of ${total}`, href: systemHref('data') },
           ]}
         />
       </div>

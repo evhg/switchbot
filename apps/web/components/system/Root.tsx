@@ -8,7 +8,9 @@ import { useMemo, type ReactNode } from 'react';
 import type { TemperatureCurve } from '@sleep-lab/core';
 import { useAuth } from '@/lib/auth.tsx';
 import { useData } from '@/lib/data/context.tsx';
-import { usePlannedCurve } from '@/lib/curve-store.ts';
+import { useTonightCurve } from '@/lib/curve-store.ts';
+import { useBandSync } from '@/lib/bands.ts';
+import { useHealthLinks, usePushSubscribed } from '@/lib/system-status.ts';
 import { fmt } from '@/lib/format.ts';
 import { useTheme } from '@/lib/theme.tsx';
 import { linePath, scale } from '../charts/common.tsx';
@@ -55,10 +57,13 @@ const MODE: Record<string, string> = { auto: 'Auto', light: 'Light', dark: 'Dark
 export function SystemRoot() {
   const { dataset, latest, sourceKind, mode: dataMode } = useData();
   const { mode } = useTheme();
-  const [curve] = usePlannedCurve();
+  const { curve } = useTonightCurve();
   const pc = usePlanClock();
-  const [tags] = useTonightTags();
-  const [morning] = useMorningReport();
+  const { tags } = useTonightTags();
+  const [morningPref] = useMorningReport();
+  // The device's push subscription wins over the stored choice (a cleared browser has none).
+  const subscribed = usePushSubscribed();
+  const morning = subscribed === undefined ? morningPref : subscribed === true;
   const setup = useSetupProgress();
   const presence = usePresenceSummary();
   const camera = useCameraSummary();
@@ -66,10 +71,27 @@ export function SystemRoot() {
   const alerts = useAlertsSummary();
   const auth = useAuth();
   const who = useAccountName();
+  const member = auth.status === 'signed-in' && Boolean(auth.probe?.member);
+  const { bands } = useBandSync(member);
+  const links = useHealthLinks(member);
   const drift = useMemo(() => (dataset ? driftAlerts(dataset).length : null), [dataset]);
   const people = (dataset ?? latest)?.people;
   const ph = curve.phases;
   const times = planTimes(curve, pc.lightsOut, pc.wake);
+  const healthIds = new Set([...Object.entries(links ?? {}).filter(([, v]) => v).map(([k]) => k), ...Object.values(bands ?? {}).filter((b) => b.lastSyncOk).map((b) => b.personId)]);
+  const healthErr = Object.values(bands ?? {}).some((b) => b.lastSyncOk === false);
+  const total = people?.length ?? 2;
+  const health: ReactNode = !member
+    ? 'Not connected'
+    : bands === null && links === null
+      ? <Skeleton w={52} h={14} r="text" inline />
+      : healthErr
+        ? <span className="sig">Sync errors</span>
+        : healthIds.size === 0
+          ? 'Not connected'
+          : healthIds.size >= total
+            ? 'Connected'
+            : `${healthIds.size} of ${total} connected`;
 
   const values: Record<SystemSlug, ReactNode> = {
     plan: `${fmt(Math.min(...ph.map((p) => p.targetC)), 1)}° coolest`,
@@ -80,7 +102,7 @@ export function SystemRoot() {
     morning: morning ? 'On' : 'Off',
     alerts,
     data: sourceKind === 'sim' ? (dataMode === 'sim' ? 'Simulated' : 'Simulated for now') : 'Real data',
-    health: 'Not connected',
+    health,
     camera,
     co2: drift === null ? <Skeleton w={52} h={14} r="text" inline /> : drift ? <span className="sig">{drift === 1 ? '1 alert' : `${drift} alerts`}</span> : 'No alerts',
     setup: `${setup.count} of ${setup.total}`,
@@ -132,7 +154,7 @@ export function SystemRoot() {
           );
         })}
       </nav>
-      <p className={`cap ${s.rootFoot}`}>Settings are stored on this device.</p>
+      <p className={`cap ${s.rootFoot}`}>Most settings are shared with the household. Only appearance, names, the quiet-mode preview and setup ticks are kept on this device.</p>
     </div>
   );
 }

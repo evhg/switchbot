@@ -7,18 +7,20 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { useRouter } from 'next/navigation';
-import { DEFAULT_PEOPLE, anchorCurve, resolveCurve } from '@sleep-lab/core';
+import { DEFAULT_PEOPLE, anchorCurve, resolveCurve, type TemperatureCurve } from '@sleep-lab/core';
 import { MAX_NAME_LENGTH, useData, useLive, type DataMode } from '@/lib/data/context.tsx';
 import { SIM_NIGHTS, SIM_SEED } from '@/lib/data/sim.ts';
 import { hasRealData, useAuth } from '@/lib/auth.tsx';
 import { supabaseClient, supabaseConfigured, supabaseUserEmail } from '@/lib/data/supabase.ts';
-import { usePlannedCurve } from '@/lib/curve-store.ts';
-import { startGoogleConnect, useBandSync, useOAuthResult, useSyncNow } from '@/lib/bands.ts';
+import { sanitizeCurve, usePlannedCurve, useTonightCurve } from '@/lib/curve-store.ts';
+import { startGoogleConnect, useBandSync, useOAuthResult, useSyncNow, type BandSync } from '@/lib/bands.ts';
+import { useBackendStatus, useHealthLinks } from '@/lib/system-status.ts';
 import { onsetAfterLightsOut } from '@/lib/tonight.ts';
 import { dayLabel, fmt, hm, ictDate, MIN, shortDate } from '@/lib/format.ts';
 import { disablePush, enablePush, pushSubscribed, pushSupported, resolveVapidKey } from '@/lib/push.ts';
 import { isNightHour, useTheme, type ResolvedTheme, type ThemeMode } from '@/lib/theme.tsx';
 import { NotMember, OnboardingSteps } from '../account/Onboarding.tsx';
+import { SetPassword } from '../account/SetPassword.tsx';
 import { CurveEditor } from '../CurveEditor.tsx';
 import { Icon } from '../icons.tsx';
 import { withViewTransition } from '../motion.tsx';
@@ -27,9 +29,9 @@ import { Button, Chip, Chips, Field, Group, Input, PageHeader, PersonField, Read
 import {
   CAMERA_LATER,
   DEVICES,
+  type DeviceId,
   NIGHT_MODE_HOURS,
   SETUP,
-  SETUP_LATER,
   TAGS,
   TIME_ZONE,
   aircon,
@@ -51,6 +53,7 @@ import { AlertsPage } from './alerts.tsx';
 import { CameraPage } from './camera.tsx';
 import { LocationPage } from './location.tsx';
 import { PresencePage, TonightBlock } from './presence.tsx';
+import pkg from '../../package.json';
 import s from './system.module.css';
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ');
@@ -72,7 +75,12 @@ const Skel = ({ w = 72 }: { w?: number }) => <Skeleton w={w} h={14} r="text" inl
 
 export function PlanPage({ back = true }: { back?: boolean }) {
   const { latest, dataset } = useData();
-  const [curve, setCurve, resetCurve] = usePlannedCurve();
+  const [localCurve, setCurve, resetCurve] = usePlannedCurve();
+  const tonightCurve = useTonightCurve();
+  // Real data: tonight runs the household's curve. Edits are a preview on this device (no RPC stores a custom curve).
+  const [preview, setPreview] = useState<TemperatureCurve | null>(null);
+  const live = tonightCurve.live;
+  const curve = live ? preview ?? tonightCurve.curve : localCurve;
   const pc = usePlanClock();
   const ph = curve.phases;
   const times = planTimes(curve, pc.lightsOut, pc.wake);
@@ -127,18 +135,30 @@ export function PlanPage({ back = true }: { back?: boolean }) {
           </div>
           <CurveEditor
             curve={shown}
-            onChange={(c) => setCurve(anchorCurve(c, curve, onsetOffset))}
-            onReset={resetCurve}
+            onChange={(c) => {
+              const next = anchorCurve(c, curve, onsetOffset);
+              if (live) setPreview(sanitizeCurve({ ...next, id: 'preview', name: `${tonightCurve.curve.name} (preview)` }));
+              else setCurve(next);
+            }}
+            onReset={live ? () => setPreview(null) : resetCurve}
             lightsOut={pc.lightsOut}
             actual={actual}
             sleepOnset={{ offsetMin: onsetOffset, anchored }}
-            isDefault={isDefaultCurve(curve)}
+            isDefault={live ? preview === null : isDefaultCurve(curve)}
+            {...(live
+              ? {
+                  saveNote: preview
+                    ? `Preview on this device only. Tonight’s aircon still runs ${tonightCurve.curve.name}.`
+                    : `Tonight runs ${tonightCurve.loading ? '…' : tonightCurve.curve.name}. Changes here are a preview on this device and don’t change the aircon.`,
+                  resetLabel: 'Back to tonight’s plan',
+                }
+              : {})}
           />
         </div>
 
         <aside className={s.planAside} aria-label="Tonight in detail">
           <section className={s.asideBlock}>
-            <h2 className={s.asideH}>What the aircon will do tonight</h2>
+            <h2 className={s.asideH}>{live && preview ? 'With your preview (not sent to the aircon)' : 'What the aircon will do tonight'}</h2>
             <div className={s.quiet}>
               <p className={s.quietLine}>
                 <Icon name="bell" size={18} />
@@ -219,12 +239,12 @@ export function PlanPage({ back = true }: { back?: boolean }) {
 // ───────────────────────────────────────── Tonight's tags ─────────────────────────────────────────
 
 export function TagsPage() {
-  const [tags, toggle, night] = useTonightTags();
+  const { tags, toggle, night, live, canWrite, loading, error } = useTonightTags();
   return (
     <SubPage title="Tonight’s tags" lede={<>For the night ending {night ? dayLabel(night) : <Skel w={140} />}. One tap each evening.</>}>
       <Chips label="Tonight's tags">
         {TAGS.map((t) => (
-          <Chip key={t.key} selected={tags.includes(t.key)} onClick={() => toggle(t.key)}>
+          <Chip key={t.key} selected={tags.includes(t.key)} disabled={loading || (live && !canWrite)} onClick={() => toggle(t.key)}>
             {t.label}
           </Chip>
         ))}
@@ -232,7 +252,15 @@ export function TagsPage() {
       <p className={cx('sec', s.after)}>
         {tags.length ? `${tags.length} tagged tonight.` : 'Nothing tagged yet tonight.'} Tags become filters and experiment arms in the Lab.
       </p>
-      <p className="cap">Stored on this phone until the backend is connected.</p>
+      <p className="cap">
+        {error ? (
+          <span className="sig">{error}</span>
+        ) : live ? (
+          canWrite ? 'Saved to tonight’s night for the whole household.' : 'Your household role is read-only.'
+        ) : (
+          'Saved on this device. Sign in to share them with the household.'
+        )}
+      </p>
     </SubPage>
   );
 }
@@ -285,6 +313,7 @@ function Account() {
     );
   const p = auth.probe;
   return (
+    <>
     <Group
       label="Account"
       footer={auth.settled && !p?.member ? 'This account isn’t in the household yet, so it can’t read any data.' : 'Signing out only affects this device. The app falls back to the simulator.'}
@@ -306,11 +335,17 @@ function Account() {
         }}
       />
     </Group>
+    <div className={s.block}>
+      <h3 className="label group-label">Password</h3>
+      <SetPassword email={auth.email} />
+      <p className="group-foot">Set or change the password for {auth.email ?? 'this account'}, so signing in needs no email code.</p>
+    </div>
+    </>
   );
 }
 
 export function GeneralPage() {
-  const { dataset, latest, names, sourcePeople, setPersonName } = useData();
+  const { dataset, latest, names, sourcePeople, setPersonName, sourceKind } = useData();
   const shown = (dataset ?? latest)?.people;
   const people = shown?.length ? shown : DEFAULT_PEOPLE;
   return (
@@ -320,7 +355,14 @@ export function GeneralPage() {
           <Appearance />
         </li>
       </Group>
-      <Group label="People" footer="Names are stored on this device. Leave one empty to use the default.">
+      <Group
+        label="People"
+        footer={
+          sourceKind === 'supabase'
+            ? 'Names come from the household. A name changed here applies on this device only; leave it empty to use the household’s name.'
+            : 'Names are stored on this device. Leave one empty to use the default.'
+        }
+      >
         {people.map((p, i) => {
           const fallback = (sourcePeople ?? DEFAULT_PEOPLE).find((d) => d.id === p.id)?.name ?? p.id;
           return (
@@ -411,11 +453,25 @@ export function MorningPage() {
 
 // ───────────────────────────────────────── Data & devices ─────────────────────────────────────────
 
-function Freshness() {
-  const live = useLive(24);
-  const { sourceKind, status } = useData();
+type Live = ReturnType<typeof useLive>;
+
+/** "Cath today 14:05 · Erik 3 min ago": each person's newest band_sync run. */
+function bandSyncLine(people: readonly { id: string; name: string }[], bands: Record<string, BandSync> | null): string | null {
+  if (!bands) return null;
+  const parts = people.flatMap((p) => {
+    const b = bands[p.id];
+    if (!b?.lastSyncAt) return [];
+    return [`${p.name} ${ago(b.lastSyncAt)}${b.lastSyncOk === false ? ' (errors)' : ''}`];
+  });
+  return parts.length ? parts.join(' · ') : null;
+}
+
+function Freshness({ live, bands, member }: { live: Live; bands: Record<string, BandSync> | null; member: boolean }) {
+  const { sourceKind, status, dataset, latest } = useData();
+  const configured = useAuth().configured;
+  const people = (dataset ?? latest)?.people ?? DEFAULT_PEOPLE;
   const lagSec = live.reading ? Math.max(0, (live.now - live.reading.ts) / 1000) : NaN;
-  const ago = !Number.isFinite(lagSec) ? '' : lagSec < 90 ? `${fmt(lagSec)} s ago` : `${fmt(lagSec / 60)} min ago`;
+  const ago_ = !Number.isFinite(lagSec) ? '' : lagSec < 90 ? `${fmt(lagSec)} s ago` : `${fmt(lagSec / 60)} min ago`;
   const gaps = useMemo(() => {
     const h = live.history;
     if (h.length < 2) return null;
@@ -423,13 +479,71 @@ function Freshness() {
     for (let i = 1; i < h.length; i++) if (h[i]!.ts - h[i - 1]!.ts > 5 * MIN) n++;
     return n;
   }, [live.history]);
+  const synced = bandSyncLine(people, bands);
   return (
     <Group label="Freshness">
-      <Row title="Last room reading" sub={sourceKind === 'sim' ? 'Simulated' : undefined} value={live.reading ? <span className="num">{`${hm(live.reading.ts)} · ${ago}`}</span> : sourceKind === 'supabase' && status !== 'loading' ? 'None yet' : <Skel />} />
+      <Row title="Last room reading" sub={sourceKind === 'sim' ? 'Simulated' : undefined} value={live.reading ? <span className="num">{`${hm(live.reading.ts)} · ${ago_}`}</span> : sourceKind === 'supabase' && status !== 'loading' ? 'None yet' : <Skel />} />
       <Row title="Gaps in the last 24 h" value={gaps === null ? '–' : gaps === 0 ? 'None' : `${gaps}`} />
-      <Row title="Google Health last sync" value={<Status tone="off">Not linked</Status>} />
+      <Row
+        title="Google Health last sync"
+        sub={member && synced ? synced : undefined}
+        value={!member ? <Status tone="off">{configured ? 'Sign in to see' : 'Not linked'}</Status> : bands === null ? <Skel /> : synced ? <Status tone={Object.values(bands).some((b) => b.lastSyncOk === false) ? 'alert' : 'on'}>Syncing</Status> : <Status tone="off">Not linked</Status>}
+      />
     </Group>
   );
+}
+
+/** One row per device: linked or not, from the backend, with how fresh it is. */
+function Devices({ live, bands, member, backend }: { live: Live; bands: Record<string, BandSync> | null; member: boolean; backend: ReturnType<typeof useBackendStatus> }) {
+  const auth = useAuth();
+  const { sourceKind, dataset, latest } = useData();
+  const people = (dataset ?? latest)?.people ?? DEFAULT_PEOPLE;
+  const kinds = new Set((auth.probe?.devices ?? []).map((d) => d.kind));
+  const reading = sourceKind === 'supabase' && live.reading ? live.reading.ts : null;
+  const ac = backend.ac;
+  const synced = bandSyncLine(people, bands);
+  const bandsOk = bands ? people.filter((p) => bands[p.id]?.lastSyncOk).length : 0;
+  const linked = deviceLinks(kinds, ac?.linked ?? false, bandsOk);
+  const off = <Status tone="off">Not linked</Status>;
+  const loading = member && !auth.settled;
+  const lastCmd = ac?.last
+    ? `Last command ${ago(ac.last.ts)}: ${ac.last.power ? `${ac.last.setpointC ?? '–'}°` : 'off'}${ac.last.dryRun ? ' (dry run)' : ac.last.ok === false ? ' (not sent)' : ''}`
+    : null;
+  const detail = (id: DeviceId, base: string) => {
+    if (!member) return base;
+    if (id === 'hub' || id === 'meter') return reading ? `${base} · newest reading ${ago(reading)}` : base;
+    if (id === 'ac') return lastCmd ? `${base} · ${lastCmd}` : base;
+    return synced ? `${base} · last sync ${synced}` : base;
+  };
+  return (
+    <Group label="Devices" footer={member ? undefined : 'Sign in as a household member to see which devices are linked.'}>
+      {DEVICES.map((d) => (
+        <Row
+          key={d.id}
+          title={d.name}
+          sub={detail(d.id, d.detail)}
+          value={
+            loading ? (
+              <Skel />
+            ) : !linked[d.id] ? (
+              off
+            ) : d.id === 'ac' ? (
+              <Status tone="on">Linked · commands only</Status>
+            ) : d.id === 'bands' ? (
+              <Status tone={bandsOk === people.length ? 'on' : 'alert'}>{bandsOk === people.length ? 'Linked' : `${bandsOk} of ${people.length} linked`}</Status>
+            ) : (
+              <Status tone="on">Linked</Status>
+            )
+          }
+        />
+      ))}
+    </Group>
+  );
+}
+
+/** Which of the four devices the backend knows: hub and meter from public.devices, the aircon from ac_state, the bands from band_sync. */
+function deviceLinks(kinds: ReadonlySet<string>, acLinked: boolean, bandsOk: number): Record<DeviceId, boolean> {
+  return { hub: kinds.has('hub'), meter: kinds.has('meter'), ac: acLinked || kinds.has('ac'), bands: bandsOk > 0 };
 }
 
 const MODE_COPY: Record<DataMode, string> = {
@@ -515,19 +629,26 @@ function NextSteps() {
 export function DataPage() {
   const { dataset, sourceKind, source, status } = useData();
   const auth = useAuth();
+  const member = auth.status === 'signed-in' && Boolean(auth.probe?.member);
+  const live = useLive(24);
+  const { bands } = useBandSync(member);
+  const backend = useBackendStatus(member);
   const none = status === 'ready' && !!dataset && dataset.nights.length === 0;
-  const linked = (auth.probe?.devices ?? []).filter((d) => d.kind !== 'sim').length;
+  const kinds = new Set((auth.probe?.devices ?? []).map((d) => d.kind));
+  const bandsOk = bands ? Object.values(bands).filter((b) => b.lastSyncOk).length : 0;
+  const links = deviceLinks(kinds, backend.ac?.linked ?? false, bandsOk);
+  const linked = member ? Object.values(links).filter(Boolean).length : 0;
   const nc = nightCounts(dataset);
   const left = nc ? [nc.sick && `${nc.sick} sick`, nc.away && `${nc.away} away`, nc.gaps && `${nc.gaps} with sensor gaps`].filter(Boolean).join(' · ') : '';
   return (
-    <SubPage title="Data & devices" lede="Where the nights come from. The simulator stands in until the sensors arrive.">
+    <SubPage title="Data & devices" lede="Where the nights come from: the bedroom’s hub, meter and aircon, and both bands through Google Health.">
       {/* One answer to "is anything connected?" before any detail. */}
       <div className={cx('card', s.dataSummary)}>
         <Status tone={sourceKind === 'sim' ? 'sim' : 'on'}>
           <b>{sourceKind === 'sim' ? 'Showing simulated data' : `Showing real data · ${source.label}`}</b>
         </Status>
         <p className="sec">
-          {Math.min(linked, DEVICES.length)} of {DEVICES.length} devices linked.
+          {member ? `${linked} of ${DEVICES.length} devices linked.` : 'Sign in to see which devices are linked.'}
           {sourceKind === 'sim' ? ` Every reading below comes from the simulator (seed ${SIM_SEED}), not from your bedroom.` : ''}
         </p>
       </div>
@@ -538,12 +659,8 @@ export function DataPage() {
         <Row title="With complete data" sub="The Lab uses only these" value={nc ? <span className="num">{nc.complete}</span> : none ? <span className="num">0</span> : <Skel w={40} />} />
         {nc && left && <Row title="Left out" value={left} />}
       </Group>
-      <Freshness />
-      <Group label="Devices">
-        {DEVICES.map((d) => (
-          <Row key={d.name} title={d.name} sub={d.detail} value={<Status tone={d.state === 'Open loop' ? 'on' : 'off'}>{d.state === 'Open loop' ? 'Open loop (commands only)' : d.state}</Status>} />
-        ))}
-      </Group>
+      <Freshness live={live} bands={bands} member={member} />
+      <Devices live={live} bands={bands} member={member} backend={backend} />
       <Group label="Camera" footer="The Mac at home listens to the bedroom camera at night: snoring and noise per minute, with short clips. The video is off. Ideas for later are listed below.">
         <Row title="Pan/Tilt Cam Plus 3K" sub="Night sounds through the Mac" value="Camera" href={systemHref('camera')} />
         {CAMERA_LATER.map((x) => (
@@ -557,26 +674,6 @@ export function DataPage() {
 // ───────────────────────────────────────── Google Health ─────────────────────────────────────────
 
 const HEALTH_READS = ['Sleep stages', 'Heart rate and resting heart rate', 'Heart-rate variability', 'Blood oxygen', 'Breathing rate', 'Skin temperature', 'Steps'];
-
-/** people.google_health_user_id is set by the OAuth callback; members may read it. */
-function useHealthLinks(enabled: boolean, nonce = 0): Record<string, boolean> | null {
-  const [links, setLinks] = useState<Record<string, boolean> | null>(null);
-  useEffect(() => {
-    if (!enabled) return setLinks(null);
-    let alive = true;
-    supabaseClient()
-      .from('people')
-      .select('id,google_health_user_id')
-      .then(({ data }) => {
-        if (!alive || !data) return;
-        setLinks(Object.fromEntries((data as { id: string; google_health_user_id: string | null }[]).map((r) => [r.id, Boolean(r.google_health_user_id)])));
-      });
-    return () => {
-      alive = false;
-    };
-  }, [enabled, nonce]);
-  return links;
-}
 
 /**
  * Google consent starts at the google-oauth Edge Function: the app POSTs /google-oauth/start with the signed-in
@@ -749,7 +846,7 @@ export function Co2Page() {
           <Button type="submit">Log check</Button>
         </div>
       </form>
-      <Group label="History">
+      <Group label="History" footer="Outdoor checks are saved on this device. The drift alerts come from the meter’s own night readings.">
         {log.length ? (
           log.map((x) => <Row key={x.key} title={x.alert ? <span className="sig">{x.title}</span> : x.title} sub={x.sub} value={shortDate(x.date)} />)
         ) : (
@@ -765,7 +862,7 @@ export function Co2Page() {
 export function SetupPage() {
   const { done, setDone, count, total } = useSetupProgress();
   return (
-    <SubPage title="Setup guide" lede="Install order for unboxing day. Tick each part as you finish it.">
+    <SubPage title="Setup guide" lede="Reference: how the devices were set up. The ticks are kept on this device.">
       <div className={s.progress}>
         <div className={s.meter} role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={count} aria-label="Setup progress">
           <i style={{ transform: `scaleX(${count / total})` }} />
@@ -794,7 +891,7 @@ export function SetupPage() {
                       {g.title}
                     </b>
                     <span>
-                      {g.steps.length} steps{SETUP_LATER.has(g.id) ? ' · can wait' : ''}
+                      {g.steps.length} steps
                     </span>
                   </span>
                   <svg className={s.chev} width={18} height={18} viewBox="0 0 24 24" aria-hidden>
@@ -817,6 +914,8 @@ export function SetupPage() {
 
 // ───────────────────────────────────────── Diagnostics ─────────────────────────────────────────
 
+const APP_VERSION = pkg.version;
+
 const builtAt = () => {
   const t = Number(process.env.NEXT_PUBLIC_BUILD_ID);
   return Number.isFinite(t) && t > 0 ? `${shortDate(ictDate(t))}, ${hm(t)}` : '–';
@@ -824,8 +923,11 @@ const builtAt = () => {
 
 export function DiagnosticsPage() {
   const { dataset, sourceKind } = useData();
+  const auth = useAuth();
   const [user, setUser] = useState<string | null | undefined>(undefined);
   const ready = supabaseConfigured();
+  const member = auth.status === 'signed-in' && Boolean(auth.probe?.member);
+  const backend = useBackendStatus(member);
   useEffect(() => {
     let alive = true;
     supabaseUserEmail().then((u) => alive && setUser(u), () => alive && setUser(null));
@@ -833,27 +935,52 @@ export function DiagnosticsPage() {
       alive = false;
     };
   }, []);
+  const q = backend.quota;
+  const wh = backend.newestWebhook;
+  const po = backend.newestPoll;
+  const lagMin = wh !== null && po !== null ? Math.round((po - wh) / MIN) : null;
+  const pending = member && backend.loading;
   return (
     <SubPage title="Diagnostics" lede="For troubleshooting. Nothing here needs changing day to day.">
       <Group label="Data">
         <Row title="Source" value={sourceKind === 'sim' ? 'Simulator' : 'Supabase (real data)'} />
         {sourceKind === 'sim' && <Row title="Seed / window" value={<span className="num">{`${SIM_SEED} / ${SIM_NIGHTS} nights`}</span>} />}
         <Row title="Metrics computed in" value={dataset ? <span className="num">{`${fmt(dataset.computeMs)} ms${dataset.cached ? ' · cached' : ''}`}</span> : <Skel />} />
-        <Row title="App version" value={<span className="num">{`0.1.0 · built ${builtAt()}`}</span>} />
+        <Row title="App version" value={<span className="num">{`${APP_VERSION} · built ${builtAt()}`}</span>} />
       </Group>
-      <Group label="SwitchBot" footer="Budget 5,000 of the 10,000 daily limit. Polling every minute costs about 1,440 calls a day; the rest leaves room for aircon commands and retries without risking an hours-long lockout.">
-        <Row title="Calls today" value={<span className="num">– of 5,000</span>} />
-        <Row title="Webhook vs poll lag" value={<Status>Not linked</Status>} />
+      <Group label="SwitchBot" footer="Budget 5,000 of the 10,000 daily limit (UTC day). Polling every minute costs about 1,440 calls a day; the rest leaves room for aircon commands and retries without risking an hours-long lockout.">
+        <Row
+          title="Calls today"
+          sub={q?.remaining != null ? `SwitchBot reports ${fmt(q.remaining)} left of its own limit` : undefined}
+          value={pending ? <Skel /> : <span className="num">{`${q ? fmt(q.used) : member ? '0' : '–'} of 5,000`}</span>}
+        />
+        <Row
+          title="Webhook vs poll lag"
+          sub={wh !== null || po !== null ? `Webhook ${wh !== null ? ago(wh) : 'never'} · poll ${po !== null ? ago(po) : 'never'}` : undefined}
+          value={
+            pending ? (
+              <Skel />
+            ) : !member ? (
+              <Status>{ready ? 'Sign in to see' : 'Not linked'}</Status>
+            ) : lagMin === null ? (
+              <Status tone="off">{wh === null && po === null ? 'No readings yet' : wh === null ? 'No webhook yet' : 'No poll yet'}</Status>
+            ) : (
+              <span className="num">{lagMin === 0 ? 'Same minute' : lagMin > 0 ? `Webhook ${lagMin} min behind` : `Poll ${-lagMin} min behind`}</span>
+            )
+          }
+        />
       </Group>
       <Group label="Supabase">
         <Row title="Configured" value={ready ? 'Yes' : 'No'} />
         <Row title="Signed in" value={!ready ? '–' : user === undefined ? <Skel /> : user ?? 'No'} />
       </Group>
-      <div className={s.block}>
-        <p className="sec measure-text">
-          To read real data, set <span className="code ink">NEXT_PUBLIC_SUPABASE_URL</span> and <span className="code ink">NEXT_PUBLIC_SUPABASE_ANON_KEY</span> in the deployment’s environment, then redeploy.
-        </p>
-      </div>
+      {!ready && (
+        <div className={s.block}>
+          <p className="sec measure-text">
+            To read real data, set <span className="code ink">NEXT_PUBLIC_SUPABASE_URL</span> and <span className="code ink">NEXT_PUBLIC_SUPABASE_ANON_KEY</span> in the deployment’s environment, then redeploy.
+          </p>
+        </div>
+      )}
     </SubPage>
   );
 }

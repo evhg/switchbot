@@ -62,9 +62,13 @@ export interface CurveEditorProps {
   sleepOnset?: { offsetMin: number; anchored: readonly PhaseName[] };
   /** Disables "Reset to default". Default: `curve === DEFAULT_CURVE`. */
   isDefault?: boolean;
+  /** Where edits go. Default "Saved on this phone"; on real data, that edits are a preview only. */
+  saveNote?: string;
+  /** Label of the reset button. Default "Reset to default". */
+  resetLabel?: string;
 }
 
-export function CurveEditor({ curve, onChange, onReset, lightsOut, actual, sleepOnset, isDefault }: CurveEditorProps) {
+export function CurveEditor({ curve, onChange, onReset, lightsOut, actual, sleepOnset, isDefault, saveNote = 'Saved on this phone', resetLabel = 'Reset to default' }: CurveEditorProps) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [draft, setDraft] = useState<TemperatureCurve | null>(null);
   const [drag, setDrag] = useState<number | null>(null);
@@ -347,9 +351,9 @@ export function CurveEditor({ curve, onChange, onReset, lightsOut, actual, sleep
           <Switch checked={Boolean(sp.ramp)} disabled={last} onChange={(v) => update(sel, { ramp: v })} label={<span className="sr-only">Glide from {PHASE_NAME[sp.name]} into the next phase</span>} />
         </div>
         <div className={s.foot}>
-          <span className="cap">Saved on this phone</span>
+          <span className="cap">{saveNote}</span>
           <Button variant="text" icon="refresh" onClick={onReset} disabled={isDefault ?? curve === DEFAULT_CURVE}>
-            Reset to default
+            {resetLabel}
           </Button>
         </div>
       </section>

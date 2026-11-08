@@ -236,7 +236,7 @@ export function SignIn() {
         </div>
         <h2 className={`label ${s.after}`}>Password</h2>
         <p className={s.note} style={{ marginBottom: 'var(--sp-5)' }}>
-          Set one so the next sign-in needs no email code. You can change it later in System › General.
+          Set one so the next sign-in needs no email code. You can change it later in System › General › Password.
         </p>
         <SetPassword email={auth.email} />
       </div>

@@ -163,7 +163,7 @@ export function Drivers({
                   </li>
                 ))}
               </ul>
-              <p className="cap">Rule-based report. The written summary arrives with the nightly job.</p>
+              {!report && <p className="cap">Rule-based report. The written summary arrives with the nightly job.</p>}
             </Disclosure>
           </Reveal>
         )}
