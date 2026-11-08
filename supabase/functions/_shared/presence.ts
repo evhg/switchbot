@@ -225,19 +225,24 @@ export async function loadLatestPresence(db: Db): Promise<LatestPresence[]> {
 
 /** Latest presence per person plus every person id of the household. */
 export async function loadPresence(db: Db): Promise<{ latest: LatestPresence[]; people: string[] }> {
-  const [ev, ppl] = await Promise.all([
+  const [ev, ppl, hs] = await Promise.all([
     db.from('presence_latest').select('person_id,state,at'),
     db.from('people').select('id,name'),
+    // Migration 0031: the people whose phones decide home/away (NULL = everyone). Read with '*' so a database before
+    // 0031 still works.
+    db.from('household_settings').select('*').eq('id', 1).maybeSingle(),
   ]);
   if (ev.error) throw new Error(`presence_latest: ${ev.error.message}`);
+  const only = (hs.data as { presence_people?: string[] | null } | null)?.presence_people;
+  const counts = (id: string) => !only?.length || only.includes(id);
   const nameOf = new Map(((ppl.data ?? []) as { id: string; name: string }[]).map((p) => [p.id, p.name]));
-  const latest = ((ev.data ?? []) as { person_id: string; state: PresenceState; at: string }[]).map((r) => ({
+  const latest = ((ev.data ?? []) as { person_id: string; state: PresenceState; at: string }[]).filter((r) => counts(r.person_id)).map((r) => ({
     personId: r.person_id,
     name: nameOf.get(r.person_id) ?? r.person_id,
     state: r.state,
     at: Date.parse(r.at),
   }));
-  return { latest, people: [...nameOf.keys()] };
+  return { latest, people: [...nameOf.keys()].filter(counts) };
 }
 
 /** Stores the gate's decision on the night (only when it changed), for the app's "Pre-cool …" line. */
