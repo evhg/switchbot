@@ -14,6 +14,36 @@ import { probeBackend, supabaseClient, supabaseConfigured, supabaseSignOut, type
 
 export type AuthStatus = 'off' | 'loading' | 'signed-out' | 'signed-in';
 
+let lastSaved: string | null = null;
+/** Stores the current refresh token in the year-long HttpOnly backup cookie (app/api/session). Best effort. */
+function saveSessionBackup(refreshToken: string): void {
+  if (refreshToken === lastSaved) return;
+  lastSaved = refreshToken;
+  void fetch('/api/session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+    keepalive: true,
+  }).catch(() => {
+    lastSaved = null;
+  });
+}
+
+/** Restores a session from the backup cookie when localStorage has none; null when there is no usable backup. */
+async function restoreSessionBackup(): Promise<Session | null> {
+  try {
+    const r = await fetch('/api/session', { cache: 'no-store' });
+    if (!r.ok) return null;
+    const t = (await r.json()) as { access_token?: string; refresh_token?: string };
+    if (!t.access_token || !t.refresh_token) return null;
+    lastSaved = t.refresh_token;
+    const { data, error } = await supabaseClient().auth.setSession({ access_token: t.access_token, refresh_token: t.refresh_token });
+    return error ? null : data.session;
+  } catch {
+    return null;
+  }
+}
+
 interface AuthCtx {
   configured: boolean;
   status: AuthStatus;
@@ -44,15 +74,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let alive = true;
     c.auth
       .getSession()
-      .then(({ data }) => {
+      .then(async ({ data }) => {
+        // Safari empties localStorage after ~7 days away (and the home-screen app has its own): restore the session
+        // from the year-long backup cookie (app/api/session) before showing "signed out".
+        const restored = data.session ?? (await restoreSessionBackup());
         if (!alive) return;
-        setSession(data.session);
-        setStatus(data.session ? 'signed-in' : 'signed-out');
+        setSession(restored);
+        setStatus(restored ? 'signed-in' : 'signed-out');
       })
       .catch(() => alive && setStatus('signed-out'));
-    const { data: sub } = c.auth.onAuthStateChange((_event, s) => {
+    const { data: sub } = c.auth.onAuthStateChange((event, s) => {
       setSession(s);
       setStatus(s ? 'signed-in' : 'signed-out');
+      // Keep the backup on the newest refresh token (they rotate on every refresh).
+      if (s?.refresh_token && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION')) saveSessionBackup(s.refresh_token);
     });
     return () => {
       alive = false;
@@ -77,6 +112,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [userId, nonce]);
 
   const signOut = useCallback(async () => {
+    await fetch('/api/session', { method: 'DELETE' }).catch(() => undefined);
     await supabaseSignOut();
     setSession(null);
     setStatus('signed-out');
