@@ -46,7 +46,7 @@ export const EXPERIMENT_TEMPLATES: readonly ExperimentTemplate[] = [
       { key: STEADY_19_5_QUIET_V1.id, label: 'Steady 19.5 °C', curve_id: STEADY_19_5_QUIET_V1.id },
     ],
     primaryOutcome: 'sleep_score',
-    description: 'Sleep Lab picks the aircon plan each night. Is a one-degree warmer night better? Both send their last command at lights-out: no beep while you sleep.',
+    description: 'Jarvis picks the aircon plan each night. Is a one-degree warmer night better? Both send their last command at lights-out: no beep while you sleep.',
   },
   {
     slug: 'no-screens',

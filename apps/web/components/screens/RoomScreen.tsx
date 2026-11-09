@@ -416,7 +416,7 @@ export function RoomScreen() {
                 { label: 'Missed', value: missed ? fmt(missed) : 'None', alert: missed > 0 },
                 n.ac.length || dataset?.source !== 'supabase'
                   ? { label: 'Aircon ran', value: dur(runtime), sub: Number.isFinite(rt7) ? `7-night median ${dur(rt7)}` : undefined }
-                  : { label: 'Aircon ran', value: 'Not logged', sub: 'run by hand, so Sleep Lab has no record' },
+                  : { label: 'Aircon ran', value: 'Not logged', sub: 'run by hand, so Jarvis has no record' },
                 n.manual
                   ? { label: 'Outside the band', value: dur(nightMin - sel.room.minutesTempInTarget), sub: `more than 0.75° from ${MANUAL_COMFORT_TARGET_C}°` }
                   : { label: 'Off the curve', value: dur(nightMin - sel.room.minutesTempInTarget), sub: 'more than 0.75° from the plan' },

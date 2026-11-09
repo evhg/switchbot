@@ -172,7 +172,7 @@ export function Onboarding() {
         title="No nights yet"
         lede={
           <>
-            You’re signed in{auth.email ? <> as <span className={s.who}>{auth.email}</span></> : ''}. Sleep Lab fills in by itself once the bedroom sensor and the bands start reporting.{' '}
+            You’re signed in{auth.email ? <> as <span className={s.who}>{auth.email}</span></> : ''}. Jarvis fills in by itself once the bedroom sensor and the bands start reporting.{' '}
             {left ? `${left} of ${steps.length} things left to set up.` : 'Everything is linked: the first night appears the morning after.'}
           </>
         }

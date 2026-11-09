@@ -2,9 +2,9 @@ import type { MetadataRoute } from 'next';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Sleep Lab',
-    short_name: 'Sleep Lab',
-    description: 'Bedroom air, aircon curve and sleep reports for two.',
+    name: 'Jarvis',
+    short_name: 'Jarvis',
+    description: 'Our personal health scientist and villa manager: sleep, air, aircon, food and steps for two.',
     start_url: '/',
     scope: '/',
     display: 'standalone',

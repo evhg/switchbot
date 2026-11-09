@@ -90,7 +90,7 @@ serve(async (req) => {
     const users = recipients(kind, person ?? null, memberRows);
     o.push = await pushToAll(
       db,
-      { title: d.title ?? 'Sleep Lab', body: d.body ?? '', navigate: `${appUrl()}/settings/alerts`, tag: alertKey(kind, person) },
+      { title: d.title ?? 'Jarvis', body: d.body ?? '', navigate: `${appUrl()}/settings/alerts`, tag: alertKey(kind, person) },
       `alert-${kind}${person ? `-${person}` : ''}`,
       { userIds: users, urgency: 'normal', ttlSec: 6 * 3600 },
     );

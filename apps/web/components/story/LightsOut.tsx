@@ -127,7 +127,7 @@ export function LightsOut({ model }: { model: StoryModel }) {
     cmd
       ? `The aircon started ${minsBefore} minutes before lights out${target !== null ? `, aiming for ${deg(target)}` : ''}.`
       : manual
-        ? 'Sleep Lab sent no aircon commands this night: the aircon was run by hand.'
+        ? 'Jarvis sent no aircon commands this night: the aircon was run by hand.'
         : 'There was no pre-cool before lights out.',
     noData && gapBefore ? `${gapWords(gapBefore)[0]!.toUpperCase()}${gapWords(gapBefore).slice(1)}.` : '',
     !noData && Number.isFinite(drop) && Math.abs(drop) >= 0.3 ? `The room went from ${deg(startTemp)} to ${deg(endTemp)}.` : '',

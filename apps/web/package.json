@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "13.3.0",
     "@sleep-lab/core": "0.1.0",
     "@supabase/supabase-js": "2.118.0",
     "next": "15.5.28",

@@ -93,7 +93,7 @@ export function ExperimentsPanel({ names }: { names: Record<string, string> }) {
         </p>
       )}
 
-      {running.length === 0 && <p className={s.note}>No experiment is running. Pick one below: Sleep Lab alternates the options over nights in random pairs, then tells you which one helped.</p>}
+      {running.length === 0 && <p className={s.note}>No experiment is running. Pick one below: Jarvis alternates the options over nights in random pairs, then tells you which one helped.</p>}
       {running.map((e) => (
         <RunningExperiment key={e.id} exp={e} st={st} names={names} act={act} />
       ))}
@@ -108,7 +108,7 @@ export function ExperimentsPanel({ names }: { names: Record<string, string> }) {
                 <button type="button" className={s.tpl} disabled={busy || !st.canWrite} onClick={() => setStartTpl(t)}>
                   <b>{t.title}</b>
                   <span>{t.description}</span>
-                  <em>{busy ? `Waits for the running ${t.kind === 'auto' ? 'aircon' : 'household'} test` : t.kind === 'auto' ? 'Sleep Lab runs it' : 'You do it, with a 20:30 reminder'}</em>
+                  <em>{busy ? `Waits for the running ${t.kind === 'auto' ? 'aircon' : 'household'} test` : t.kind === 'auto' ? 'Jarvis runs it' : 'You do it, with a 20:30 reminder'}</em>
                 </button>
               </li>
             );
@@ -170,7 +170,7 @@ function RunningExperiment({ exp, st, names, act }: { exp: Experiment; st: Exper
       <div className={s.expHead}>
         <h3 className={s.expTitle}>{exp.title}</h3>
         <span className={s.kind}>
-          <Status tone={toneOf(a.status)}>{STATUS_WORDS[a.status]}</Status> · {auto ? (exp.autopilot ? 'Autopilot, aircon' : 'Aircon, Sleep Lab runs it') : 'You do it'} · since {nightText(exp.startedOn)}
+          <Status tone={toneOf(a.status)}>{STATUS_WORDS[a.status]}</Status> · {auto ? (exp.autopilot ? 'Autopilot, aircon' : 'Aircon, Jarvis runs it') : 'You do it'} · since {nightText(exp.startedOn)}
         </span>
       </div>
 
@@ -180,7 +180,7 @@ function RunningExperiment({ exp, st, names, act }: { exp: Experiment; st: Exper
           {tonightArm ? armWords(exp, tonightArm) : hourIct >= 12 && hourIct < 20.25 ? 'Drawn at 20:15' : 'Not drawn yet'}
           {tonight && <small>{tonight.source === 'pinned' ? 'pinned by hand' : 'random draw'}</small>}
         </p>
-        <p className={s.cap}>{auto ? 'Sleep Lab sets tonight’s aircon plan before the pre-cool. Nothing to do.' : 'At 20:30 you both get a phone reminder, and the night is tagged by itself.'}</p>
+        <p className={s.cap}>{auto ? 'Jarvis sets tonight’s aircon plan before the pre-cool. Nothing to do.' : 'At 20:30 you both get a phone reminder, and the night is tagged by itself.'}</p>
         {st.canWrite && (
           <div className={s.pinRow}>
             <span className={s.cap}>Pin tonight:</span>

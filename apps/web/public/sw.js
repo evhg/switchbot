@@ -57,11 +57,11 @@ self.addEventListener('push', (event) => {
   try {
     data = event.data ? event.data.json() : {};
   } catch {
-    data = { notification: { title: 'Sleep Lab', body: event.data ? event.data.text() : '' } };
+    data = { notification: { title: 'Jarvis', body: event.data ? event.data.text() : '' } };
   }
   const n = data.notification || {};
   event.waitUntil(
-    self.registration.showNotification(n.title || 'Sleep Lab', { body: n.body || '', tag: n.tag, icon: '/icon-192.png', data: { url: n.navigate || '/' } }),
+    self.registration.showNotification(n.title || 'Jarvis', { body: n.body || '', tag: n.tag, icon: '/icon-192.png', data: { url: n.navigate || '/' } }),
   );
 });
 

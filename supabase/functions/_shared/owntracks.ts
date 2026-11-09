@@ -13,7 +13,7 @@ export const OWNTRACKS_MAX_BODY = 256 * 1024;
 export const PRESENCE_MAX_AGE_MS = 60 * MIN;
 /** Other people appear on the phone as friends when their latest fix is at most this old. */
 export const FRIEND_MAX_AGE_MS = 7 * DAY;
-export const BASIC_REALM = 'Sleep Lab';
+export const BASIC_REALM = 'Jarvis';
 
 /**
  * The request body as text, read in chunks and abandoned (null) as soon as it passes `max` bytes, so a chunked upload

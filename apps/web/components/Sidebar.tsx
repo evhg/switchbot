@@ -18,7 +18,7 @@ export function Brand() {
   return (
     <span className="brand">
       <i aria-hidden />
-      Sleep Lab
+      Jarvis
     </span>
   );
 }
@@ -140,7 +140,7 @@ export function Sidebar() {
   };
   return (
     <aside className="sidebar">
-      <Link href="/" className="brand-link" onClick={go('/')} aria-label="Sleep Lab, Today">
+      <Link href="/" className="brand-link" onClick={go('/')} aria-label="Jarvis, Today">
         <Brand />
       </Link>
       <NightPicker />

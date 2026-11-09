@@ -69,7 +69,7 @@ function pageName(path: string): string {
   if (sub) return sub.label;
   if (path === '/signin') return 'Sign in';
   if (path === '/privacy') return 'Privacy';
-  return TABS[activeTab(path)]?.label ?? 'Sleep Lab';
+  return TABS[activeTab(path)]?.label ?? 'Jarvis';
 }
 
 function TopBar() {
@@ -88,7 +88,7 @@ function TopBar() {
         <>
           <div className="topbar-t">
             <b className="topbar-date">
-              {n.title || 'Sleep Lab'}
+              {n.title || 'Jarvis'}
               <NightDateInput />
             </b>
             <span>{title ?? pageName(path)}</span>

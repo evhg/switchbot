@@ -21,6 +21,7 @@ import { disablePush, enablePush, pushSubscribed, pushSupported, resolveVapidKey
 import { isNightHour, useTheme, type ResolvedTheme, type ThemeMode } from '@/lib/theme.tsx';
 import { NotMember, OnboardingSteps } from '../account/Onboarding.tsx';
 import { SetPassword } from '../account/SetPassword.tsx';
+import { Passkeys } from '../account/Passkeys.tsx';
 import { CurveEditor } from '../CurveEditor.tsx';
 import { Icon } from '../icons.tsx';
 import { withViewTransition } from '../motion.tsx';
@@ -336,6 +337,11 @@ function Account() {
       />
     </Group>
     <div className={s.block}>
+      <h3 className="label group-label">Face ID</h3>
+      <Passkeys />
+      <p className="group-foot">A passkey signs you in with Face ID inside the app. iCloud Keychain syncs it to your other Apple devices.</p>
+    </div>
+    <div className={s.block}>
       <h3 className="label group-label">Password</h3>
       <SetPassword email={auth.email} />
       <p className="group-foot">Set or change the password for {auth.email ?? 'this account'}, so signing in needs no email code.</p>
@@ -431,7 +437,7 @@ export function MorningPage() {
     : !member
       ? 'Sign in as a household member to get the report on this device.'
       : !pushSupported()
-        ? 'This browser can’t receive push. On iPhone, add Sleep Lab to the Home Screen and open it from there.'
+        ? 'This browser can’t receive push. On iPhone, add Jarvis to the Home Screen and open it from there.'
         : key === null
           ? 'Checking whether notifications are ready…'
           : !key

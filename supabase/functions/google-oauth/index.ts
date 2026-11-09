@@ -19,7 +19,7 @@ import { escapeHtml, html, HttpError, json, readJson, serve } from '../_shared/h
 import { type Db, serviceClient } from '../_shared/supabase.ts';
 
 const STATE_TTL_MS = 15 * 60_000;
-const DEFAULT_APP_URL = 'https://sleep.cathnivore.com';
+const DEFAULT_APP_URL = 'https://jarvis.cathnivore.com';
 
 /** Health, Calendar and YouTube scopes plus 'openid email', so the callback learns which Google account consented. */
 const SCOPES = [...GOOGLE_HEALTH_SCOPES, ...GOOGLE_APP_SCOPES, 'openid', 'email'];

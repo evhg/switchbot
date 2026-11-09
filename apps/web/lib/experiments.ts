@@ -2,7 +2,7 @@
 /**
  * Lab › Experiments: planned A/B tests over nights (migration 0025, the experiments Edge Function).
  *
- *   public.experiments         one row per experiment: kind 'auto' (aircon curves Sleep Lab runs itself) or 'manual'
+ *   public.experiments         one row per experiment: kind 'auto' (aircon curves Jarvis runs itself) or 'manual'
  *                              (something the household does: door, earplugs …), 2–3 arms (the first is the control),
  *                              the primary outcome, status, seed, autopilot
  *   public.experiment_nights   one row per experiment and night (night_date = the morning's date): the arm, how it was

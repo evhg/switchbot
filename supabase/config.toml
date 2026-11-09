@@ -106,3 +106,7 @@ verify_jwt = false
 
 [functions.clip-url]
 verify_jwt = false
+
+# Passkey (Face ID) sign-in: login needs no session; register checks the access token itself (0033).
+[functions.passkey]
+verify_jwt = false

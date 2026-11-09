@@ -2,7 +2,7 @@
 // is stored as jsonb as-is: ExperimentArm in experiments.arms, NightOutcomes in experiment_nights.outcomes).
 import type { TagKey } from '../types.ts';
 
-/** 'auto': Sleep Lab switches the arm itself (aircon curve per night). 'manual': the household does it (door, earplugs …). */
+/** 'auto': Jarvis switches the arm itself (aircon curve per night). 'manual': the household does it (door, earplugs …). */
 export type ExperimentKind = 'auto' | 'manual';
 /** Stored status. The live verdict ('running' | 'leaning' | 'clear_winner' | 'no_difference') is ExperimentAnalysis.status. */
 export type ExperimentStatus = 'running' | 'finished' | 'stopped';

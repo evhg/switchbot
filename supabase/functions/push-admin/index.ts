@@ -34,7 +34,7 @@ serve(async (req) => {
     }
     case 'test': {
       const r = await pushToAll(db, {
-        title: typeof body.title === 'string' ? body.title.slice(0, 80) : 'Sleep Lab',
+        title: typeof body.title === 'string' ? body.title.slice(0, 80) : 'Jarvis',
         body: typeof body.body === 'string' ? body.body.slice(0, 200) : 'Test notification: Web Push works.',
         navigate: `${appUrl()}/`,
         tag: 'test',

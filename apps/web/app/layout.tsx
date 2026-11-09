@@ -16,10 +16,10 @@ const sans = localFont({
 });
 
 export const metadata: Metadata = {
-  title: 'Sleep Lab',
-  description: 'Bedroom air, aircon curve and sleep reports for two.',
-  applicationName: 'Sleep Lab',
-  appleWebApp: { capable: true, title: 'Sleep Lab', statusBarStyle: 'black-translucent' },
+  title: 'Jarvis',
+  description: 'Our personal health scientist and villa manager: sleep, air, aircon, food and steps for two.',
+  applicationName: 'Jarvis',
+  appleWebApp: { capable: true, title: 'Jarvis', statusBarStyle: 'black-translucent' },
   formatDetection: { telephone: false },
   icons: {
     icon: [{ url: '/icon.svg', type: 'image/svg+xml' }, { url: '/icon-192.png', sizes: '192x192', type: 'image/png' }],

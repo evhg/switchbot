@@ -87,7 +87,7 @@ export function buildRuleReport(night: Night, history: Night[], plan: Temperatur
     insights.push(`Mean CO₂ was ${fmtPpm(room.co2Mean)} ppm with a peak of ${fmtPpm(room.co2Max)} ppm.`);
   }
   if (manual && roomOk) {
-    insights.push(`The aircon was run by hand (Sleep Lab sent no commands), so temperature is scored against the steady ${MANUAL_COMFORT_TARGET_C} °C comfort target, not the stored plan.`);
+    insights.push(`The aircon was run by hand (Jarvis sent no commands), so temperature is scored against the steady ${MANUAL_COMFORT_TARGET_C} °C comfort target, not the stored plan.`);
   }
   if (room.achMorning === null && roomOk && room.achPlateau != null && room.achPlateauPpm != null) {
     const a = room.achPlateau.toFixed(2);

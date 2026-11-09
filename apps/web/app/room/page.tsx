@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { RoomScreen } from '@/components/screens/RoomScreen.tsx';
 
-export const metadata: Metadata = { title: 'Room · Sleep Lab' };
+export const metadata: Metadata = { title: 'Room · Jarvis' };
 
 export default function Page() {
   return <RoomScreen />;

@@ -1,6 +1,6 @@
 'use client';
 /**
- * System › Alerts (/settings/alerts): phone pushes from Sleep Lab (migration 0026, supabase/functions/alerts).
+ * System › Alerts (/settings/alerts): phone pushes from Jarvis (migration 0026, supabase/functions/alerts).
  *
  *   Alerts        on/off per kind (household_settings.alerts via set_alerts; owner / member)
  *   Batteries     each person's Fitbit: level now and time left from the drain rate ("83 %, ~5 days left")
@@ -69,7 +69,7 @@ function DevicePush({ member }: { member: boolean }) {
   const why = !member
     ? 'Sign in as a household member to get alerts on this device.'
     : !pushSupported()
-      ? 'This browser can’t receive push. On iPhone, add Sleep Lab to the Home Screen and open it from there.'
+      ? 'This browser can’t receive push. On iPhone, add Jarvis to the Home Screen and open it from there.'
       : key === null
         ? 'Checking whether notifications are ready…'
         : !key
@@ -130,7 +130,7 @@ export function AlertsPage() {
 
   return (
     <div className={cx(s.sub, s.col, s.drill)}>
-      <PageHeader title="Alerts" lede="Sleep Lab sends a push to your phone when something needs a hand: a band to charge, a band that stopped syncing, or the night listener going quiet." className={s.header} />
+      <PageHeader title="Alerts" lede="Jarvis sends a push to your phone when something needs a hand: a band to charge, a band that stopped syncing, or the night listener going quiet." className={s.header} />
 
       <Group label="Alerts" footer={!live ? 'Sign in as a household member to change these.' : !canWrite ? 'Your household role is read-only.' : 'Battery and syncing alerts go to that person and the owner. The night listener alert goes to everyone.'}>
         {KINDS.map((k) => (

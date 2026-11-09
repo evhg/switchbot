@@ -1,8 +1,8 @@
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'Privacy · Sleep Lab',
-  description: 'How Sleep Lab handles your data.',
+  title: 'Privacy · Jarvis',
+  description: 'How Jarvis handles your data.',
 };
 
 const CONTACT = 'verspui@gmail.com';
@@ -19,7 +19,7 @@ export default function Page() {
       </header>
 
       <p>
-        Sleep Lab is a personal app run by Cath and Erik Verspui for their own bedroom. It is not a commercial service and
+        Jarvis is a personal app run by Cath and Erik Verspui for their own bedroom. It is not a commercial service and
         has no other users.
       </p>
 

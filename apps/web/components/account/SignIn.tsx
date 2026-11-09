@@ -1,6 +1,7 @@
 'use client';
 /**
  * Sign in (Supabase Auth), on one calm column. The whole app sits behind it (components/AccessGate.tsx):
+ *   passkey   "Sign in with Face ID" (lib/passkey.ts): stays in this tab / home-screen app, so it is the first choice
  *   google    "Continue with Google" (signInWithOAuth; returns here with #access_token)
  *   password  email + password (primary; the password is set once, signed in, from System › General › Account or here)
  *   email     email → "Send code" (signInWithOtp, shouldCreateUser: false, so only invited addresses get a code)
@@ -20,6 +21,8 @@ import { supabaseSignIn, supabaseSignInWithGoogle, supabaseSignInWithPassword, s
 import { useChrome } from '../nav.tsx';
 import { NotMember } from './Onboarding.tsx';
 import { SetPassword } from './SetPassword.tsx';
+import { Passkeys } from './Passkeys.tsx';
+import { passkeysSupported, signInWithPasskey } from '@/lib/passkey.ts';
 import { Button, Field, Group, Input, PageHeader, Row, Status } from '../ui.tsx';
 import s from './account.module.css';
 
@@ -33,7 +36,7 @@ function safeNext(v: string | null): string {
 
 /** Supabase's answer when the database refuses a new account (migration 0021: not on the allow-list). */
 const NOT_ALLOWED = /database error saving new user|not on the sleep lab allow-list/i;
-const NOT_ALLOWED_MSG = 'That account can’t sign in. Sleep Lab is private: use Cath’s or Erik’s Google account.';
+const NOT_ALLOWED_MSG = 'That account can’t sign in. Jarvis is private: use Cath’s or Erik’s Google account.';
 
 export function SignIn() {
   const router = useRouter();
@@ -54,9 +57,11 @@ export function SignIn() {
   const codeRef = useRef<HTMLInputElement>(null);
   /** Installed home-screen app: email links open in the browser, whose storage (and session) is separate. */
   const [standalone, setStandalone] = useState(false);
+  const [canPasskey, setCanPasskey] = useState(false);
 
   // Read the query and the magic-link hash once, before supabase-js consumes the hash.
   useEffect(() => {
+    setCanPasskey(passkeysSupported());
     setStandalone(window.matchMedia?.('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone === true);
     const q = new URLSearchParams(window.location.search);
     const h = new URLSearchParams(window.location.hash.replace(/^#/, ''));
@@ -151,6 +156,17 @@ export function SignIn() {
     }
   };
 
+  const signInFaceId = async () => {
+    setBusy(true);
+    setErr(null);
+    setLinkError(null);
+    const res = await signInWithPasskey();
+    setBusy(false);
+    if (res === 'cancelled') return;
+    if (res) return setLinkError(res);
+    pending.current = true;
+  };
+
   const signInPassword = async () => {
     const e = email.trim();
     if (!EMAIL_RE.test(e)) return setErr('Enter the email address you were invited with.');
@@ -195,7 +211,7 @@ export function SignIn() {
   if (!auth.configured) {
     return (
       <div className={s.col}>
-        <PageHeader className={s.header} title="Real data isn’t set up here" lede="This copy of Sleep Lab runs on the simulator only. Everything works; the nights are generated, not measured." />
+        <PageHeader className={s.header} title="Real data isn’t set up here" lede="This copy of Jarvis runs on the simulator only. Everything works; the nights are generated, not measured." />
         <Button variant="primary" href="/">
           Back to the simulated nights
         </Button>
@@ -234,6 +250,11 @@ export function SignIn() {
             Sign out
           </Button>
         </div>
+        <h2 className={`label ${s.after}`}>Face ID</h2>
+        <p className={s.note} style={{ marginBottom: 'var(--sp-5)' }}>
+          Set it up once on each device and you stay one tap from signed in: no Google pop-up, no email, in any tab or the home-screen app.
+        </p>
+        <Passkeys compact />
         <h2 className={`label ${s.after}`}>Password</h2>
         <p className={s.note} style={{ marginBottom: 'var(--sp-5)' }}>
           Set one so the next sign-in needs no email code. You can change it later in System › General › Password.
@@ -268,7 +289,7 @@ export function SignIn() {
         title={step === 'code' ? 'Check your email' : 'Sign in'}
         lede={
           step === 'password' ? (
-            'Sleep Lab is private to Cath and Erik: the bedroom, both bands’ sleep and the live camera.'
+            'Jarvis is private to Cath and Erik: the bedroom, both bands’ sleep and the live camera.'
           ) : step === 'email' ? (
             'We’ll email you a one-time code. Only invited addresses can sign in.'
           ) : (
@@ -282,7 +303,12 @@ export function SignIn() {
       {linkError && <p className={s.err} role="alert" style={{ marginBottom: 'var(--sp-5)' }}>{linkError}</p>}
       {step !== 'code' && (
         <div className={s.actions} style={{ marginBottom: 'var(--sp-8)' }}>
-          <Button variant="primary" block disabled={busy} onClick={() => void signInGoogle()}>
+          {canPasskey && (
+            <Button variant="primary" block disabled={busy} onClick={() => void signInFaceId()}>
+              Sign in with Face ID
+            </Button>
+          )}
+          <Button variant={canPasskey ? 'secondary' : 'primary'} block disabled={busy} onClick={() => void signInGoogle()}>
             Continue with Google
           </Button>
           <p className={s.note}>Or with the email address you were invited with:</p>

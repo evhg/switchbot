@@ -90,7 +90,7 @@ export function Tonight({
   const pcLive = usePlanClock();
   const copy =
     live && manualLast
-      ? { ...base, head: 'Tonight, Sleep Lab runs the aircon.', tip: `The night above ran by hand. ${planSentence(plan, pcLive)}` }
+      ? { ...base, head: 'Tonight, Jarvis runs the aircon.', tip: `The night above ran by hand. ${planSentence(plan, pcLive)}` }
       : live
         ? { ...base, tip: `${base.tip} ${planSentence(plan, pcLive)}` }
         : base;

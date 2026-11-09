@@ -513,7 +513,7 @@ export function nightSteps(model: StoryModel, co2Peak: number, peakAt: number, m
       const h = rh(t);
       const g = model.gaps.find((x) => x.start <= t + 2 * MIN && x.end > t);
       detail = !Number.isFinite(tc) && g ? sentence(gapWords(g)[0]!.toUpperCase() + gapWords(g).slice(1)) : `${room}${Number.isFinite(h) ? `, humidity ${fmt(h)}%` : ''}.`;
-      if (model.control === 'manual') detail += ' Aircon run by hand: Sleep Lab sent no commands.';
+      if (model.control === 'manual') detail += ' Aircon run by hand: Jarvis sent no commands.';
     } else if (m.kind === 'gap') {
       const g = model.gaps.find((x) => Math.abs(Math.max(model.lo, x.start) - t) <= 5 * MIN) ?? model.gaps.find((x) => x.start <= t && x.end > t);
       detail = g ? sentence(gapWords(g)[0]!.toUpperCase() + gapWords(g).slice(1)) : 'No readings here.';
