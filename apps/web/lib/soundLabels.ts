@@ -20,6 +20,10 @@ export type { SoundLabel, SoundLabelWho };
 export interface LabelEntry {
   label: SoundLabel;
   who: SoundLabelWho | null;
+  /** What it was (migration 0034): bird, alarm, noise, movement, other …; null = not said. */
+  category?: string | null;
+  /** Free description typed under the clip (migration 0034). */
+  note?: string | null;
 }
 
 export interface Labelling {
@@ -32,6 +36,8 @@ export interface Labelling {
   error: string | null;
   /** Sets (or changes) a label; resolves to an error message or null. */
   setLabel: (eventId: string, label: SoundLabel, who?: SoundLabelWho | null) => Promise<string | null>;
+  /** Sets what the sound was and/or a free description (a new label row counts as not snoring). */
+  setNote: (eventId: string, category: string | null, note: string | null) => Promise<string | null>;
 }
 
 const NOT_YET = 'Labels aren’t on the server yet (migration 0030).';
@@ -65,14 +71,14 @@ async function loadReal() {
   let error: string | null = null;
   // Paged past PostgREST's 1000-row limit (at most 5000 labels).
   for (let from = 0; from < 5000; from += 1000) {
-    const { data, error: e } = await supabaseClient().from('sound_labels').select('event_id,label,who').order('labelled_at', { ascending: false }).range(from, from + 999);
+    const { data, error: e } = await supabaseClient().from('sound_labels').select('event_id,label,who,category,note').order('labelled_at', { ascending: false }).range(from, from + 999);
     if (e) {
       error = e.message;
       break;
     }
-    for (const r of (data ?? []) as { event_id: number | string; label: SoundLabel; who: SoundLabelWho | null }[]) {
+    for (const r of (data ?? []) as { event_id: number | string; label: SoundLabel; who: SoundLabelWho | null; category?: string | null; note?: string | null }[]) {
       const id = String(r.event_id);
-      if (!map.has(id)) map.set(id, { label: r.label, who: r.who ?? null });
+      if (!map.has(id)) map.set(id, { label: r.label, who: r.who ?? null, category: r.category ?? null, note: r.note ?? null });
     }
     if ((data ?? []).length < 1000) break;
   }
@@ -100,7 +106,8 @@ export function useSoundLabels(real: boolean, canWrite: boolean): Labelling {
     async (eventId: string, label: SoundLabel, who: SoundLabelWho | null = null): Promise<string | null> => {
       const m = real ? store.maps.real : store.maps.sim;
       const before = m.get(eventId);
-      const next: LabelEntry = { label, who: label === 'snore' ? who : null };
+      // A different verdict clears "what was it"; the description stays.
+      const next: LabelEntry = { label, who: label === 'snore' ? who : null, category: label === before?.label ? (before?.category ?? null) : null, note: before?.note ?? null };
       m.set(eventId, next);
       store.error = null;
       emit();
@@ -119,6 +126,27 @@ export function useSoundLabels(real: boolean, canWrite: boolean): Labelling {
     },
     [real],
   );
+  const setNote = useCallback(
+    async (eventId: string, category: string | null, note: string | null): Promise<string | null> => {
+      const m = real ? store.maps.real : store.maps.sim;
+      const before = m.get(eventId);
+      const next: LabelEntry = { label: before?.label ?? 'not_snore', who: before?.who ?? null, category: category?.trim() || null, note: note?.trim() || null };
+      m.set(eventId, next);
+      store.error = null;
+      emit();
+      if (!real) return null;
+      const id = Number(eventId);
+      if (!Number.isFinite(id)) return null;
+      const { error } = await supabaseClient().rpc('set_sound_note', { p_event_id: id, p_category: next.category, p_note: next.note });
+      if (!error) return null;
+      if (before) m.set(eventId, before);
+      else m.delete(eventId);
+      store.error = /not allowed/i.test(error.message) ? 'Only household members can label sounds.' : /set_sound_note|schema cache|could not find/i.test(error.message) ? 'Descriptions aren’t on the server yet (migration 0034).' : error.message;
+      emit();
+      return store.error;
+    },
+    [real],
+  );
   return useMemo(
     () => ({
       labels: new Map(map),
@@ -126,9 +154,10 @@ export function useSoundLabels(real: boolean, canWrite: boolean): Labelling {
       canLabel: real ? canWrite && !store.missing : true,
       error: real ? store.error : null,
       setLabel,
+      setNote,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [version, real, canWrite, setLabel],
+    [version, real, canWrite, setLabel, setNote],
   );
 }
 

@@ -6,7 +6,8 @@
 // Clips of loud moments play inline (signed URLs from the private 'night-sounds' bucket, 1 h). "Sleep talk" lists the
 // night's talking in sleep (migration 0029: kept while "Save sleep talk" is on; talking while both were awake is
 // removed the next morning): time, "probably Cath/Erik" (talker_hint), the Mac's transcript in quotes and the clip.
-// Under each clip: "Snoring" / "Not snoring" (then Cath / Erik / ?) — sound labels, migration 0030, lib/soundLabels.ts.
+// Under each clip: "Snoring" / "Not snoring" (then Cath / Erik / ?) — sound labels, migration 0030, lib/soundLabels.ts;
+// after Not snoring, "What was it?" (Bird, Alarm clock, Noise, Movement, Talking, Other) and a free description (0034).
 // A label wins over the detector in the minutes counted as snoring, and the Mac retunes itself from the labels.
 import { useMemo, useState } from 'react';
 import { nightSoundSummary, wakeTriggers } from '@sleep-lab/core';
@@ -18,7 +19,7 @@ import { labelTally, useSoundLabels, withLabels, type Labelling, type SoundLabel
 import { SoundChart, type WakeMark } from '../charts/SoundChart.tsx';
 import { Reveal } from '../motion.tsx';
 import { clock, usePlanClock } from '../system/model.ts';
-import { Chip, EventList, Placeholder, Readout, Readouts } from '../ui.tsx';
+import { Chip, EventList, Input, Placeholder, Readout, Readouts } from '../ui.tsx';
 import { possessive, type StoryModel } from './model.ts';
 import { Scene, SceneCols, SceneText, VisHead } from './parts.tsx';
 import s from './story.module.css';
@@ -28,6 +29,54 @@ const CATH = 'a';
 const LOOKBACK_MS = 2 * MIN;
 
 const DEFAULT_NAMES: Readonly<Record<string, string>> = { a: 'Cath', b: 'Erik' };
+
+/** "What was it?" after Not snoring (sound_labels.category, migration 0034). Talking is the existing 'speech' label. */
+const WHAT: readonly { key: string; text: string }[] = [
+  { key: 'bird', text: 'Bird' },
+  { key: 'alarm', text: 'Alarm clock' },
+  { key: 'noise', text: 'Noise' },
+  { key: 'movement', text: 'Movement' },
+  { key: 'talking', text: 'Talking' },
+  { key: 'other', text: 'Other' },
+];
+const whatText = (k: string | null | undefined) => WHAT.find((w) => w.key === k)?.text ?? k ?? null;
+
+/** Free description under a clip; saved on Enter or when the field loses focus. */
+function NoteField({ e, labelling, busy }: { e: SoundEvent; labelling: Labelling; busy: boolean }) {
+  const cur = labelling.labels.get(e.id) ?? null;
+  const [v, setV] = useState(cur?.note ?? '');
+  const [state, setState] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const save = async () => {
+    if ((cur?.note ?? '') === v.trim()) return;
+    setState('saving');
+    const err = await labelling.setNote(e.id, cur?.category ?? null, v);
+    setState(err ? 'idle' : 'saved');
+  };
+  return (
+    <span style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+      <Input
+        aria-label={`Describe the sound at ${hm(e.ts)}`}
+        placeholder="Describe it (optional): gecko, phone buzzing…"
+        maxLength={500}
+        value={v}
+        disabled={busy}
+        onChange={(ev) => {
+          setV(ev.target.value);
+          setState('idle');
+        }}
+        onBlur={() => void save()}
+        onKeyDown={(ev) => {
+          if (ev.key === 'Enter') {
+            ev.preventDefault();
+            (ev.target as HTMLInputElement).blur();
+          }
+        }}
+        style={{ flex: 1, minWidth: 0 }}
+      />
+      {state !== 'idle' && <span className="sec">{state === 'saving' ? 'Saving…' : 'Saved'}</span>}
+    </span>
+  );
+}
 
 /** "Snoring" / "Not snoring" under a clip, then who snored (Cath / Erik / ?). Read-only text for viewers. */
 function LabelButtons({ e, labelling, names }: { e: SoundEvent; labelling: Labelling; names: Readonly<Record<string, string>> }) {
@@ -43,8 +92,19 @@ function LabelButtons({ e, labelling, names }: { e: SoundEvent; labelling: Label
   const whoName = (w: SoundLabelWho | null) => (w === 'a' || w === 'b' ? (names[w] ?? DEFAULT_NAMES[w]) : w === 'both' ? 'both' : null);
   if (!labelling.canLabel) {
     if (!cur) return null;
-    const words = cur.label === 'snore' ? `Labelled snoring${whoName(cur.who) ? ` (${whoName(cur.who)})` : ''}` : cur.label === 'not_snore' ? 'Labelled not snoring' : `Labelled ${cur.label === 'speech' ? 'sleep talk' : 'other'}`;
-    return <span style={{ display: 'block', marginTop: 4 }}>{words}</span>;
+    const what = whatText(cur.category);
+    const words =
+      cur.label === 'snore'
+        ? `Labelled snoring${whoName(cur.who) ? ` (${whoName(cur.who)})` : ''}`
+        : cur.label === 'not_snore'
+          ? `Labelled ${what ? what.toLowerCase() : 'not snoring'}`
+          : `Labelled ${cur.label === 'speech' ? 'sleep talk' : 'other'}`;
+    return (
+      <span style={{ display: 'block', marginTop: 4 }}>
+        {words}
+        {cur.note ? `: “${cur.note}”` : ''}
+      </span>
+    );
   }
   const chips = { display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 } as const;
   return (
@@ -66,6 +126,34 @@ function LabelButtons({ e, labelling, names }: { e: SoundEvent; labelling: Label
           ))}
         </span>
       )}
+      {(cur?.label === 'not_snore' || cur?.label === 'speech' || cur?.label === 'other') && (
+        <span className="chips" role="group" aria-label="What was it?" style={chips}>
+          {WHAT.map((w) => {
+            const selected = w.key === 'talking' ? cur.label === 'speech' : cur.label !== 'speech' && cur.category === w.key;
+            return (
+              <Chip
+                key={w.key}
+                selected={selected}
+                disabled={busy}
+                onClick={() => {
+                  setBusy(true);
+                  setMsg(null);
+                  const done = (m: string | null) => {
+                    setMsg(m);
+                    setBusy(false);
+                  };
+                  if (w.key === 'talking') void labelling.setLabel(e.id, 'speech').then(done);
+                  else if (cur.label === 'speech') void labelling.setLabel(e.id, 'not_snore').then((m) => (m ? done(m) : labelling.setNote(e.id, w.key, cur.note ?? null).then(done)));
+                  else void labelling.setNote(e.id, selected ? null : w.key, cur.note ?? null).then(done);
+                }}
+              >
+                {w.text}
+              </Chip>
+            );
+          })}
+        </span>
+      )}
+      {cur && <NoteField key={e.id} e={e} labelling={labelling} busy={busy} />}
       {msg && (
         <span className="sig" style={{ display: 'block', marginTop: 4 }}>
           {msg}
