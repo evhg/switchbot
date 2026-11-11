@@ -34,12 +34,17 @@ const DEFAULT_NAMES: Readonly<Record<string, string>> = { a: 'Cath', b: 'Erik' }
 
 /** "What was it?" after Not snoring (sound_labels.category, migration 0034). Talking is the existing 'speech' label. */
 const WHAT: readonly { key: string; text: string }[] = [
+  { key: 'movement', text: 'Moving / stumbling' },
+  { key: 'fart', text: 'Fart' },
+  { key: 'cough', text: 'Cough' },
   { key: 'bird', text: 'Bird' },
+  { key: 'animal', text: 'Gecko / animal' },
   { key: 'alarm', text: 'Alarm clock' },
-  { key: 'noise', text: 'Noise' },
-  { key: 'movement', text: 'Movement' },
-  { key: 'talking', text: 'Talking' },
-  { key: 'other', text: 'Other' },
+  { key: 'phone', text: 'Phone' },
+  { key: 'aircon', text: 'Aircon' },
+  { key: 'outside', text: 'Outside noise' },
+  { key: 'noise', text: 'Just noise' },
+  { key: 'other', text: 'Other (describe)' },
 ];
 const whatText = (k: string | null | undefined) => WHAT.find((w) => w.key === k)?.text ?? k ?? null;
 
@@ -85,22 +90,22 @@ function LabelButtons({ e, labelling, names }: { e: SoundEvent; labelling: Label
   const cur = labelling.labels.get(e.id) ?? null;
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  const set = async (label: SoundLabel, who: SoundLabelWho | null = null) => {
+  const run = async (f: () => Promise<string | null>) => {
     setBusy(true);
     setMsg(null);
-    setMsg(await labelling.setLabel(e.id, label, who));
+    setMsg(await f());
     setBusy(false);
   };
   const whoName = (w: SoundLabelWho | null) => (w === 'a' || w === 'b' ? (names[w] ?? DEFAULT_NAMES[w]) : w === 'both' ? 'both' : null);
+  const what = cur?.label === 'snore' ? 'snore' : cur?.label === 'speech' ? 'talking' : (cur?.category ?? (cur ? 'not_snore' : null));
   if (!labelling.canLabel) {
     if (!cur) return null;
-    const what = whatText(cur.category);
     const words =
       cur.label === 'snore'
         ? `Labelled snoring${whoName(cur.who) ? ` (${whoName(cur.who)})` : ''}`
-        : cur.label === 'not_snore'
-          ? `Labelled ${what ? what.toLowerCase() : 'not snoring'}`
-          : `Labelled ${cur.label === 'speech' ? 'sleep talk' : 'other'}`;
+        : cur.label === 'speech'
+          ? 'Labelled talking'
+          : `Labelled ${(whatText(cur.category) ?? 'not snoring').toLowerCase()}`;
     return (
       <span style={{ display: 'block', marginTop: 4 }}>
         {words}
@@ -109,53 +114,42 @@ function LabelButtons({ e, labelling, names }: { e: SoundEvent; labelling: Label
     );
   }
   const chips = { display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 } as const;
+  // Any sound: snoring, talking, or one of the WHAT kinds (stored as "not snoring" + what it was).
+  const pick = (key: string) =>
+    run(async () => {
+      if (key === 'snore') return labelling.setLabel(e.id, 'snore', cur?.label === 'snore' ? cur.who : null);
+      if (key === 'talking') return labelling.setLabel(e.id, 'speech');
+      if (cur?.label !== 'not_snore') {
+        const m = await labelling.setLabel(e.id, 'not_snore');
+        if (m) return m;
+      }
+      return labelling.setNote(e.id, what === key ? null : key, cur?.note ?? null);
+    });
   return (
     <span style={{ display: 'block' }}>
-      <span className="chips" role="group" aria-label={`Was the sound at ${hm(e.ts)} snoring?`} style={chips}>
-        <Chip selected={cur?.label === 'snore'} disabled={busy} onClick={() => void set('snore', cur?.label === 'snore' ? cur.who : null)}>
+      <span className="chips" role="group" aria-label={`What was the sound at ${hm(e.ts)}?`} style={chips}>
+        <Chip selected={what === 'snore'} disabled={busy} onClick={() => void pick('snore')}>
           Snoring
         </Chip>
-        <Chip selected={cur?.label === 'not_snore'} disabled={busy} onClick={() => void set('not_snore')}>
-          Not snoring
+        <Chip selected={what === 'talking'} disabled={busy} onClick={() => void pick('talking')}>
+          Talking
         </Chip>
+        {WHAT.map((w) => (
+          <Chip key={w.key} selected={what === w.key} disabled={busy} onClick={() => void pick(w.key)}>
+            {w.text}
+          </Chip>
+        ))}
       </span>
       {cur?.label === 'snore' && (
         <span className="chips" role="group" aria-label="Who snored?" style={chips}>
           {(['a', 'b', 'unknown'] as const).map((w) => (
-            <Chip key={w} selected={cur.who === w} disabled={busy} onClick={() => void set('snore', w)}>
+            <Chip key={w} selected={cur.who === w} disabled={busy} onClick={() => void run(() => labelling.setLabel(e.id, 'snore', w))}>
               {w === 'unknown' ? '?' : (names[w] ?? DEFAULT_NAMES[w])}
             </Chip>
           ))}
         </span>
       )}
-      {(cur?.label === 'not_snore' || cur?.label === 'speech' || cur?.label === 'other') && (
-        <span className="chips" role="group" aria-label="What was it?" style={chips}>
-          {WHAT.map((w) => {
-            const selected = w.key === 'talking' ? cur.label === 'speech' : cur.label !== 'speech' && cur.category === w.key;
-            return (
-              <Chip
-                key={w.key}
-                selected={selected}
-                disabled={busy}
-                onClick={() => {
-                  setBusy(true);
-                  setMsg(null);
-                  const done = (m: string | null) => {
-                    setMsg(m);
-                    setBusy(false);
-                  };
-                  if (w.key === 'talking') void labelling.setLabel(e.id, 'speech').then(done);
-                  else if (cur.label === 'speech') void labelling.setLabel(e.id, 'not_snore').then((m) => (m ? done(m) : labelling.setNote(e.id, w.key, cur.note ?? null).then(done)));
-                  else void labelling.setNote(e.id, selected ? null : w.key, cur.note ?? null).then(done);
-                }}
-              >
-                {w.text}
-              </Chip>
-            );
-          })}
-        </span>
-      )}
-      {cur && <NoteField key={e.id} e={e} labelling={labelling} busy={busy} />}
+      <NoteField key={e.id} e={e} labelling={labelling} busy={busy} />
       {msg && (
         <span className="sig" style={{ display: 'block', marginTop: 4 }}>
           {msg}
@@ -171,7 +165,7 @@ export function LabelTally({ labelling }: { labelling: Labelling }) {
   if (!tally && !labelling.canLabel && !labelling.error) return null;
   return (
     <p className="sec">
-      {tally ? `${tally}. ` : 'Tap Snoring or Not snoring under a clip. '}
+      {tally ? `${tally}. ` : 'Tap what each sound was under its clip. '}
       The Mac retunes itself every evening from these.
       {labelling.error && <span className="sig"> {labelling.error}</span>}
     </p>

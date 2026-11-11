@@ -10,6 +10,7 @@ import { onsetAfterLightsOut, useTonight, type Tonight } from '@/lib/tonight.ts'
 import type { Dataset } from '@/lib/data/types.ts';
 import { MIN } from '@/lib/format.ts';
 import { usePref } from '@/lib/prefs.ts';
+import { useHouseholdPref } from '@/lib/householdPref.ts';
 
 // ───────────────────────────── static copy ─────────────────────────────
 
@@ -296,7 +297,7 @@ export interface Calibration {
   ppm: number;
   note: string;
 }
-export const useCalibrations = () => usePref<Calibration[]>('calibrations', []);
+export const useCalibrations = () => useHouseholdPref<Calibration[]>('calibrations', []);
 
 /** The last morning-report choice on this device; the push subscription itself (lib/push.ts) wins when known. */
 export const useMorningReport = () => usePref<boolean>('morningReport', false);

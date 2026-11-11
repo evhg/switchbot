@@ -18,6 +18,7 @@ import { useData, useLive, useNightDetail, useSelectedNight } from '@/lib/data/c
 import { ACH_FOR_1000, acRuntimeMin, coolingResponse, pulldownWindow, showerImpact, steadyCo2 } from '@/lib/analysis.ts';
 import { addDays, co2Band, dur, fmt, hm, ictDate, ictHour, ictMidnight, HOUR, MIN, shortDate, shortDay, signed } from '@/lib/format.ts';
 import { usePref } from '@/lib/prefs.ts';
+import { useHouseholdPref } from '@/lib/householdPref.ts';
 import { median } from '@/lib/stats.ts';
 import { downsample } from '@sleep-lab/core';
 import { round10 } from '../charts/room/air.tsx';
@@ -283,7 +284,7 @@ export function RoomScreen() {
   const { dataset, progress, date, setDate } = useData();
   const sel = useSelectedNight();
   const { detail } = useNightDetail(date);
-  const [filterDate, setFilterDate] = usePref<string | null>('filterCleaned', null);
+  const [filterDate, setFilterDate] = useHouseholdPref<string | null>('filterCleaned', null);
   const fc = useCo2Forecast();
   const [open, setOpen] = useState<Drill | null>(null);
 
