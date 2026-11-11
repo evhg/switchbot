@@ -110,3 +110,7 @@ verify_jwt = false
 # Passkey (Face ID) sign-in: login needs no session; register checks the access token itself (0033).
 [functions.passkey]
 verify_jwt = false
+
+# Bird ID: the Mac's device token (X-Presence-Token) authorises it (0036).
+[functions.bird-id]
+verify_jwt = false

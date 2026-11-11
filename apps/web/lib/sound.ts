@@ -57,6 +57,8 @@ export interface SoundEvent extends CoreSoundEvent {
   /** 'a' | 'b' when only that person was asleep: probably the one talking. */
   talkerHint?: string | null;
   sample?: boolean;
+  /** BirdNET on the Mac (migration 0036): scientific + English name and confidence 0..1; null = no bird / not checked. */
+  bird?: { species: string; common: string | null; conf: number | null } | null;
 }
 
 export interface SoundSettings {
@@ -127,6 +129,7 @@ export function toSoundEvent(r: Row): SoundEvent {
     sleepTalk: typeof r.sleep_talk === 'boolean' ? r.sleep_talk : null,
     talkerHint: str(r.talker_hint),
     uncertain: r.uncertain === true,
+    bird: str(r.bird_species) ? { species: str(r.bird_species)!, common: str(r.bird_common), conf: numOrNull(r.bird_conf) } : null,
   };
 }
 

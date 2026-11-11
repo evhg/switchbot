@@ -17,6 +17,8 @@ import { useAuth } from '@/lib/auth.tsx';
 import { cathWakeStarts, dbText, eventWords, sleepTalkEvents, talkerWords, useClipUrls, useNightSounds, type SoundEvent } from '@/lib/sound.ts';
 import { labelTally, useSoundLabels, withLabels, type Labelling, type SoundLabel, type SoundLabelWho } from '@/lib/soundLabels.ts';
 import { SoundChart, type WakeMark } from '../charts/SoundChart.tsx';
+import { BirdCard } from './BirdCard.tsx';
+import { ClipPlayer } from './ClipPlayer.tsx';
 import { Reveal } from '../motion.tsx';
 import { clock, usePlanClock } from '../system/model.ts';
 import { Chip, EventList, Input, Placeholder, Readout, Readouts } from '../ui.tsx';
@@ -217,10 +219,8 @@ export function SoundMoments({
             <>
               {facts}
               {speech && e.transcript && <span style={{ display: 'block', marginTop: 4, fontStyle: 'italic' }}>“{e.transcript}”</span>}
-              {url && (
-                // eslint-disable-next-line jsx-a11y/media-has-caption
-                <audio controls preload="none" src={url} style={{ display: 'block', width: '100%', maxWidth: 320, height: 36, marginTop: 6 }} aria-label={`${eventWords(e)} at ${hm(e.ts)}`} />
-              )}
+              {url && <ClipPlayer url={url} label={`${eventWords(e)} at ${hm(e.ts)}`} />}
+              {e.bird && <BirdCard bird={e.bird} />}
               {labelling && (e.clipPath || e.transcript || e.sample) && <LabelButtons e={e} labelling={labelling} names={names} />}
             </>
           ),

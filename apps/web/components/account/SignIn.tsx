@@ -162,7 +162,9 @@ export function SignIn() {
     setLinkError(null);
     const res = await signInWithPasskey();
     setBusy(false);
-    if (res === 'cancelled') return;
+    // iPhone shows nothing (or "no passkeys") when this device has no Jarvis passkey yet: a saved *password* doesn't count.
+    if (res === 'cancelled')
+      return setLinkError('No Face ID passkey on this device yet? Sign in once with Google or your password below, then tap “Set up Face ID sign-in” on the next screen.');
     if (res) return setLinkError(res);
     pending.current = true;
   };
