@@ -72,6 +72,69 @@ export function sampleCameraEvents(now = Date.now()): CameraSighting[] {
     .sort((a, b) => b.ts - a.ts);
 }
 
+/** Front-door direction from the relay's activity ('arrive' / 'leave'), else null. */
+export const doorDirection = (e: Pick<CameraSighting, 'activity'>): 'arrive' | 'leave' | null =>
+  e.activity === 'arrive' || e.activity === 'leave' ? e.activity : null;
+
+/** Sample front-door passes for the simulator (camera 'entrance'), today up to now, newest first. */
+export function sampleDoorEvents(now = Date.now()): CameraSighting[] {
+  const at = (h: number, m = 0) => ictMidnight(ictDate(now)) + h * HOUR + m * MIN;
+  const ev = (id: string, ts: number, label: string, activity: string | null): CameraSighting => ({
+    id, ts, camera: 'entrance', label, personId: label === 'a' || label === 'b' ? label : null, confidence: label.length === 1 ? 0.9 : null, activity, durationS: 6, sample: true,
+  });
+  return [
+    ev('d1', at(8, 40), 'b', 'leave'),
+    ev('d2', at(9, 55), 'b', 'arrive'),
+    ev('d3', at(11, 20), 'unknown', 'arrive'),
+    ev('d4', at(11, 34), 'unknown', 'leave'),
+    ev('d5', at(16, 5), 'a', 'leave'),
+    ev('d6', at(16, 6), 'b', 'leave'),
+    ev('d7', at(18, 42), 'a', 'arrive'),
+    ev('d8', at(18, 43), 'b', 'arrive'),
+  ]
+    .filter((e) => e.ts <= now)
+    .sort((a, b) => b.ts - a.ts);
+}
+
+/** Front-door passes (camera 'entrance') since `days` midnights ago (1 = today), newest first; null while loading. */
+export function useDoorActivity(days = 1, nonce = 0): { real: boolean; events: CameraSighting[] | null; error: string | null } {
+  const auth = useAuth();
+  const { mode } = useData();
+  const real = auth.status === 'signed-in' && !!auth.probe?.member && mode !== 'sim';
+  const [events, setEvents] = useState<CameraSighting[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setError(null);
+    if (!real) {
+      setEvents(sampleDoorEvents());
+      return;
+    }
+    const since = new Date(ictMidnight(ictDate(Date.now())) - (days - 1) * 24 * HOUR).toISOString();
+    supabaseClient()
+      .from('camera_events')
+      .select('id,ts,camera,label,person_id,confidence,activity,duration_s')
+      .eq('hidden', false)
+      .eq('camera', 'entrance')
+      .gte('ts', since)
+      .order('ts', { ascending: false })
+      .limit(300)
+      .then(({ data, error: e }) => {
+        if (!alive) return;
+        if (e) {
+          setError(e.message);
+          setEvents([]);
+          return;
+        }
+        setEvents(((data ?? []) as Row[]).map(toSighting));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [real, days, nonce]);
+  return { real, events, error };
+}
+
 /** Today's sightings (ICT), newest first; null while loading. */
 export function useCameraActivity(): { real: boolean; events: CameraSighting[] | null; error: string | null } {
   const auth = useAuth();

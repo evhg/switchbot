@@ -23,7 +23,7 @@ export const TABS: readonly { href: string; label: string; icon: IconName }[] = 
   { href: '/room', label: 'Room', icon: 'house' },
   { href: '/body', label: 'Body', icon: 'pulse' },
   { href: '/lab', label: 'Lab', icon: 'flask' },
-  { href: '/live', label: 'Live', icon: 'camera' },
+  { href: '/live', label: 'Door', icon: 'camera' },
   { href: '/map', label: 'Map', icon: 'map' },
   { href: '/settings', label: 'System', icon: 'gear' },
 ];

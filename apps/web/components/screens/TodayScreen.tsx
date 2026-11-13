@@ -20,6 +20,8 @@ import { useStoryChrome } from '../Shell.tsx';
 import { EventList, OnThisPage, Placeholder, Sheet } from '../ui.tsx';
 import { VitalsHistory } from '../Vitals.tsx';
 import { Bodies } from '../story/Bodies.tsx';
+import { Scene } from '../story/parts.tsx';
+import { HomeNow } from '../door/FrontDoor.tsx';
 import { Drivers, type DriverRow } from '../story/Drivers.tsx';
 import { LightsOut } from '../story/LightsOut.tsx';
 import { buildStory, co2CrossAt, co2PeakAt, nightSteps, whoLabel } from '../story/model.ts';
@@ -227,6 +229,14 @@ export function TodayScreen() {
           side={<ConnectHealthCard everSynced={everSynced} />}
           experiment={experiments.loading || (live && !experiments.real) ? null : experimentLine(experiments, night.date, experiments.tonight, isLatest)}
         />
+        {isLatest && (
+          <Scene id="home" title="Who’s home">
+            <HomeNow />
+            <p className="cap">
+              <a href="/live">Front door: today’s comings and goings →</a>
+            </p>
+          </Scene>
+        )}
         <LightsOut model={model} />
         <TheNight model={model} steps={steps} onOpenStrip={() => setSheet({ kind: 'strip' })} />
         <TheAir model={model} room={room} history={history} baseline={baseline} peakAt={peakAt} crossAt={crossAt} />

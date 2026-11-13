@@ -29,6 +29,7 @@ import { LabelTally, SoundMoments } from '../story/Sounds.tsx';
 import { SWITCHBOT_APP_URL, STREAM, STREAM_HD, useCameraEmbed, useCameraUrl } from '../system/camera.tsx';
 import { clock, usePlanClock } from '../system/model.ts';
 import { Button, Disclosure, Group, PageHeader, Row, Segmented, Skeleton, Status } from '../ui.tsx';
+import { DoorTimeline, HomeNow } from '../door/FrontDoor.tsx';
 import sys from '../system/system.module.css';
 import s from './live.module.css';
 
@@ -319,7 +320,7 @@ function Player({ live }: { live: boolean }) {
 }
 
 export function LiveScreen() {
-  useChrome({ title: 'Live' });
+  useChrome({ title: 'Front door' });
   const auth = useAuth();
   const live = auth.status === 'signed-in' && !!auth.probe?.member;
   const canWrite = live && (auth.probe?.role === 'owner' || auth.probe?.role === 'member');
@@ -327,17 +328,43 @@ export function LiveScreen() {
   // The video player (and its ticket fetch) only exists while live_video is on; default off.
   const video = live && settings?.liveVideo === true;
 
+  // Since 2026-11-13 the camera watches the front door (migration 0039 turns the night listener off): with the
+  // listener off this page is the front door: live video, who's home, today's passes; old night sounds fold away.
+  const door = !live || settings?.mode === 'off';
+
   return (
     <div className={cx('content', s.page)}>
       <PageHeader
-        title="Live"
-        lede={video ? 'Night sounds from the bedroom, and the live video.' : 'Night sounds from the bedroom, heard by the camera and analysed on Erik’s Mac. The video is off.'}
+        title={door ? 'Front door' : 'Live'}
+        lede={
+          door
+            ? video
+              ? 'The camera at the villa’s entrance: live video, who’s home, and everyone who came and went today.'
+              : 'Who’s home, and everyone who came and went today. Turn on the live video in System › Camera.'
+            : video
+              ? 'Night sounds from the bedroom, and the live video.'
+              : 'Night sounds from the bedroom, heard by the camera and analysed on Erik’s Mac. The video is off.'
+        }
       />
 
-      <div className={s.stack}>
-        <NightSounds live={live} canWrite={canWrite} video={video} />
-        {video && <Player live={live} />}
-      </div>
+      {door ? (
+        <div className={s.stack}>
+          {video && <Player live={live} />}
+          <HomeNow />
+          <section>
+            <h2 className="label">Today at the front door</h2>
+            <DoorTimeline />
+          </section>
+          <Disclosure title="Night sounds (from the bedroom, listener off)">
+            <NightSounds live={live} canWrite={canWrite} video={video} />
+          </Disclosure>
+        </div>
+      ) : (
+        <div className={s.stack}>
+          <NightSounds live={live} canWrite={canWrite} video={video} />
+          {video && <Player live={live} />}
+        </div>
+      )}
 
       <div className={cx(sys.inline, sys.cameraLinks)}>
         <a className="btn secondary" href={SWITCHBOT_APP_URL} target="_blank" rel="noopener noreferrer">
@@ -377,12 +404,13 @@ export function LiveScreen() {
                 <Row title="Presets" sub="Up to 6 saved positions; tap one to move there." />
                 <Row title="Privacy mode" sub="The lens turns into the body. The microphone may stay on; check in the SwitchBot app." />
                 <Row title="Night vision" sub="Auto, on or off. Invisible 940 nm infrared." />
-                <Row title="Motion tracking" sub="Off keeps the camera still, facing the wall." />
+                <Row title="Motion tracking" sub="Off keeps the camera still, pointed at the door." />
               </Group>
             </div>
             <div>
               <Group label="How it works">
-                <Row title="Camera" sub="On the bedside table, facing the wall. RTSP on the home network, with sound" />
+                <Row title="Camera" sub={door ? 'At the villa’s front entrance door. RTSP on the home network' : 'On the bedside table, facing the wall. RTSP on the home network, with sound'} />
+                <Row title="Face recognition on the Mac" sub="Knows Cath and Erik; posts each pass (arriving / leaving, or an unknown face) and Jarvis pushes it to your phones" />
                 <Row title="go2rtc on Erik’s Mac" sub="Reads the camera at home; nothing is published while the Funnel is off" />
                 <Row title="Night listener on the Mac" sub="Only from lights-out to the aircon’s off time. Classifies sound on the Mac and sends minute summaries" />
                 <Row title="Video" value={video ? <Status tone="on">On</Status> : <Status tone="off">Off</Status>} />

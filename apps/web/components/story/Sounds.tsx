@@ -289,6 +289,9 @@ export function Sounds({ model }: { model: StoryModel }) {
       </Scene>
     );
 
+  // The camera moved to the front door (2026-11-13): a real night without any sound data has no scene at all.
+  if (!summary && real && !error) return null;
+
   if (!summary)
     return (
       <Scene id="sounds" title="Snoring & noise">
