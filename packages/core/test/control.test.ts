@@ -166,7 +166,7 @@ describe('decideAcCommand', () => {
     expect(decideAcCommand(input({ now, lastCommand: last, commandsTonight: 2, recent: cooling }))?.reason ?? '').not.toMatch(/^resend/);
   });
 
-  it(`resends a stalled pre-cool at most ${MAX_STALLED_RESENDS} times a night, and never after the expected sleep onset`, () => {
+  it(`resends a stalled pre-cool at most ${MAX_STALLED_RESENDS} times a night, and never after lights-out`, () => {
     expect(MAX_STALLED_RESENDS).toBe(2);
     const hot = (now: number) => flat(now - 30 * MIN, now - MIN, 31);
     const last = on(LO - 80 * MIN, 19, 'high', 'curve: precool start');
@@ -178,12 +178,10 @@ describe('decideAcCommand', () => {
     expect(decideAcCommand(input({ now: LO - 10 * MIN, lastCommand: r2, commandsTonight: 3, recent: hot(LO - 10 * MIN), tonight: [last, r1, r2] }))?.reason ?? '').not.toMatch(/^resend/);
     // Without `tonight` it cannot count: never a resend of a resend.
     expect(decideAcCommand(input({ now: LO - 35 * MIN, lastCommand: r1, commandsTonight: 2, recent: hot(LO - 35 * MIN) }))?.reason ?? '').not.toMatch(/^resend/);
-    // After lights-out but before the expected sleep onset (still awake): yes, never warmer than the state sent.
+    // After lights-out, even before the expected sleep onset (in bed, 2026-11-13): no resend, no beep.
     const onset = on(LO, 19, 'high', 'curve: onset start');
     const after = LO + 25 * MIN;
-    const awake = decideAcCommand(input({ now: after, remote: LOUD, lastCommand: onset, commandsTonight: 2, recent: hot(after), tonight: [last, onset], sleepOnset: LO + 60 * MIN }));
-    expect(awake?.reason).toMatch(/^resend: room/);
-    expect(awake!.state.setpointC).toBeLessThanOrEqual(19);
+    expect(decideAcCommand(input({ now: after, remote: LOUD, lastCommand: onset, commandsTonight: 2, recent: hot(after), tonight: [last, onset], sleepOnset: LO + 60 * MIN }))?.reason ?? '').not.toMatch(/^resend: room/);
     // After the expected sleep onset: no.
     expect(decideAcCommand(input({ now: after, remote: LOUD, lastCommand: onset, commandsTonight: 2, recent: hot(after), tonight: [last, onset], sleepOnset: LO + 20 * MIN }))?.reason ?? '').not.toMatch(/^resend: room/);
   });
@@ -654,24 +652,21 @@ describe('incident 2026-10-31: the aircon ignored setAll 17 (steady-18-5-v1, bia
   const hot = (now: number) => flat(now - 60 * MIN, now - MIN, 27.3);
   const base = { lightsOut: LO22, wake: WAKE830, sleepOnset: LO22 + 60 * MIN, curve: STEADY_18_5_V1, remote: DEFAULT_REMOTE, biasC: -2 };
 
-  it('resends once more at 22:10 (minInterval allows the late cron tick), then stops at the cap', () => {
+  it('no third command at 22:10: stalled resends stop at lights-out (2026-11-13), and later ones stay null', () => {
     const now = LO22 + 10 * MIN;
-    const cmd = decideAcCommand({ ...base, now, lastCommand: { ...c2 }, commandsTonight: 2, tonight: [c1, c2], recent: hot(now) });
-    expect(cmd?.reason).toMatch(/^resend: room 8\.8° above target/);
-    expect(cmd?.state).toEqual(c1.state);
-    const c3 = { ...cmd!, ts: now };
+    expect(decideAcCommand({ ...base, now, lastCommand: { ...c2 }, commandsTonight: 2, tonight: [c1, c2], recent: hot(now) })?.reason ?? '').not.toMatch(/^resend/);
+    const c3 = { ...c2, ts: now };
     for (const m of [30, 35, 45]) {
       const t = LO22 + m * MIN;
       expect(decideAcCommand({ ...base, now: t, lastCommand: { ...c3 }, commandsTonight: 3, tonight: [c1, c2, c3], recent: hot(t) })).toBeNull();
     }
   });
 
-  it('in quiet mode before sleep onset: the capped stalled resend of the same state, outside the asleep extra budget', () => {
+  it('in quiet mode after lights-out: no stalled resend; asleep, no colder emergency below 17', () => {
     const c2late = { ...c2, ts: LO22 - 5 * MIN };
     const now = LO22 + 15 * MIN;
-    const cmd = decideAcCommand({ ...base, now, lastCommand: { ...c2late }, commandsTonight: 2, tonight: [c1, c2late], recent: hot(now) });
-    expect(cmd?.reason).toMatch(/^resend: room .*\(quiet\)$/);
-    expect(cmd?.state).toEqual(c1.state);
+    expect(decideAcCommand({ ...base, now, lastCommand: { ...c2late }, commandsTonight: 2, tonight: [c1, c2late], recent: hot(now) })?.reason ?? '').not.toMatch(/^resend/);
+    const cmd = { ...c2late, reason: 'resend: room 8.8° above target and not cooling (quiet)' };
     // Once asleep the room is still hot and flat, but the AC was last told 17, the coldest setpoint the remote can
     // encode: no colder emergency exists, so nothing is sent (the evening acUnresponsive push is the alert path).
     const c3 = { ...cmd!, ts: now };

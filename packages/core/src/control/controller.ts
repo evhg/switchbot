@@ -20,7 +20,7 @@ const LANDING_ONSET_MIN = 20;
 export const INTERVAL_SLACK_MS = 30_000;
 /**
  * Resends per night because the room is still hot and not cooling (the AC ignored the frame): spaced by minInterval,
- * only while people are still awake (before the expected sleep onset). Each is one beep.
+ * only before lights-out (people are in bed after it). Each is one beep.
  */
 export const MAX_STALLED_RESENDS = 2;
 /** An unanswered power-on command counts as ignored by the AC this long after it was sent. */
@@ -80,12 +80,14 @@ const awakeUntil = (input: ControllerInput) => Math.max(input.lightsOut, input.s
 const isStalledResend = (c: AcCommand) => c.reason.startsWith('resend: room ');
 
 /**
- * May a stalled resend go out now? Only before the expected sleep onset and at most MAX_STALLED_RESENDS resends of
+ * May a stalled resend go out now? Only before lights-out and at most MAX_STALLED_RESENDS resends of
  * any kind tonight. Without `tonight` (cannot count): never a resend of a resend.
  */
 function stalledResendAllowed(input: ControllerInput): boolean {
   const { now, lastCommand, tonight } = input;
-  if (!lastCommand || now >= awakeUntil(input)) return false;
+  // 2026-11-13: stalled resends stop at lights-out (in bed), not at the expected sleep onset: the household heard the
+  // 22:25–22:55 resends' beeps two nights running while the aircon was in fact on and cooling slowly.
+  if (!lastCommand || now >= input.lightsOut) return false;
   if (!tonight) return !lastCommand.reason.startsWith('resend');
   return tonight.filter((c) => c.reason.startsWith('resend')).length < MAX_STALLED_RESENDS;
 }
