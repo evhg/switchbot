@@ -23,6 +23,10 @@ export interface CameraSighting {
   confidence: number | null;
   activity: string | null;
   durationS: number | null;
+  /** Door clip (migration 0041): object name in the private 'door-clips' bucket, or null. */
+  clipPath?: string | null;
+  /** Unknown pass: one entry per person (Mac face ids, snapshot object name, label once named). */
+  people?: { faces: string[]; snapshot: string | null; label: string | null }[] | null;
   sample?: boolean;
 }
 
@@ -41,6 +45,10 @@ function toSighting(r: Row): CameraSighting {
     confidence: numOrNull(r.confidence),
     activity: str(r.activity),
     durationS: numOrNull(r.duration_s),
+    clipPath: str(r.clip_path),
+    people: Array.isArray(r.people)
+      ? (r.people as Row[]).map((p) => ({ faces: Array.isArray(p.faces) ? (p.faces as unknown[]).map(String) : [], snapshot: str(p.snapshot), label: str(p.label) }))
+      : null,
   };
 }
 
@@ -113,7 +121,7 @@ export function useDoorActivity(days = 1, nonce = 0): { real: boolean; events: C
     const since = new Date(ictMidnight(ictDate(Date.now())) - (days - 1) * 24 * HOUR).toISOString();
     supabaseClient()
       .from('camera_events')
-      .select('id,ts,camera,label,person_id,confidence,activity,duration_s')
+      .select('*')
       .eq('hidden', false)
       .eq('camera', 'entrance')
       .gte('ts', since)
