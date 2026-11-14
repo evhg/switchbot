@@ -8,17 +8,15 @@
 // 'person' (a body, no face). No image, embedding or other biometric data is accepted. Core camera/events.ts validates
 // (≤ 100 events, ts within ±1 day, label ≤ 40 chars, confidence 0..1); invalid events are skipped and reported.
 // Rows go to public.camera_events (migration 0022); (camera, ts, label) is unique, so a retry stores nothing twice.
-// A new 'unknown' sighting (≤ 30 min old) while nobody is home (every person's latest phone signal 'away') pushes
-// "Unknown person seen at home (living room, HH:MM)" to every subscription, at most once per 30 min
-// (public.claim_camera_alert). JWT verification is off: the presence token is the credential.
+// Pushes for entrance sightings come from the camera_events trigger (migration 0039). JWT verification is off: the
+// presence token is the credential.
 // Door clips (migration 0041, the Mac's brief face/JARVIS-door-clips.md): an unknown event with "wantClip": true and
 // "people": [{"faces": [...]}] gets "uploads" (signed upload URLs for its MP4 clip and one JPEG per person) in the
 // answer; GET ?names=1 serves names chosen in the app ({names: [{id, faces, label}]}), POST {"namesApplied": [ids]}
 // marks them applied. Clips are deleted once everyone in the pass is named or forgotten, or after 14 days.
-import { alertDue, cameraEventRow, parseCameraRequest, unknownAlertText, unknownToAlert, UNKNOWN_ALERT_WINDOW_MIN } from '../../../packages/core/src/camera/events.ts';
-import { background, HttpError, json, readJson, serve } from '../_shared/http.ts';
-import { loadPresence, nobodyHome, PRESENCE_TOKEN, presenceToken } from '../_shared/presence.ts';
-import { appUrl, pushToAll } from '../_shared/push.ts';
+import { cameraEventRow, parseCameraRequest } from '../../../packages/core/src/camera/events.ts';
+import { HttpError, json, readJson, serve } from '../_shared/http.ts';
+import { PRESENCE_TOKEN, presenceToken } from '../_shared/presence.ts';
 import { type Db, serviceClient } from '../_shared/supabase.ts';
 
 serve(async (req) => {
@@ -71,22 +69,13 @@ serve(async (req) => {
     inserted = (res.data ?? []) as typeof inserted;
   }
 
-  // Only newly stored sightings can alert, so a retried batch never pushes twice.
-  const fresh = unknownToAlert(inserted.map((r) => ({ ts: Date.parse(r.ts), camera: r.camera, label: r.label })), now);
-  let alert: string | null = null;
-  if (fresh) {
-    alert = await unknownAlert(db, fresh, now).catch((e) => {
-      console.error('unknown alert', e);
-      return 'error';
-    });
-  }
-
+  // Pushes for entrance sightings come from the camera_events trigger (migration 0039, private.entrance_notice).
   const uploads = await doorUploads(db, body, inserted, now).catch((e) => {
     console.error('door uploads', e instanceof Error ? e.message : String(e));
     return [];
   });
 
-  return json({ ok: true, person, received: events.length + rejected.length, stored: inserted.length, duplicates: events.length - inserted.length, rejected, alert, uploads });
+  return json({ ok: true, person, received: events.length + rejected.length, stored: inserted.length, duplicates: events.length - inserted.length, rejected, uploads });
 });
 
 // ---------------------------------------------------------------- door clips (migration 0041)
@@ -151,25 +140,4 @@ async function pruneDoorClips(db: Db, now: number): Promise<void> {
     if (rm.error) continue;
     await db.from('camera_events').update({ clip_path: null }).eq('id', r.id);
   }
-}
-
-/** 'sent', or why not: 'someone_home', 'deduped'. */
-async function unknownAlert(db: Db, e: { ts: number; camera: string }, now: number): Promise<string> {
-  const { latest, people } = await loadPresence(db);
-  if (!nobodyHome(latest, people)) return 'someone_home';
-  // Cheap check first; the claim below is the atomic one.
-  const last = await db.from('camera_alerts').select('last_sent_at').eq('kind', 'unknown').maybeSingle();
-  const lastAt = (last.data as { last_sent_at?: string } | null)?.last_sent_at;
-  if (!last.error && lastAt && !alertDue(Date.parse(lastAt), now)) return 'deduped';
-  const claim = await db.rpc('claim_camera_alert', { p_kind: 'unknown', p_window_min: UNKNOWN_ALERT_WINDOW_MIN, p_event_ts: new Date(e.ts).toISOString() });
-  if (claim.error) throw new Error(`claim_camera_alert: ${claim.error.message}`);
-  if (claim.data !== true) return 'deduped';
-  const send = pushToAll(
-    db,
-    { title: 'Camera', body: unknownAlertText(e), navigate: `${appUrl()}/settings/camera`, tag: 'camera-unknown' },
-    'camera-unknown',
-    { urgency: 'high', ttlSec: 30 * 60 },
-  ).then((r) => console.log('unknown alert push', JSON.stringify(r)));
-  await background(send);
-  return 'sent';
 }
