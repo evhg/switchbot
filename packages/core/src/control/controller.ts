@@ -76,6 +76,13 @@ export function minIntervalPassed(now: Ms, lastTs: Ms, remote: RemoteProfile): b
 
 /** Until when people are assumed awake: the expected sleep onset (default lights-out + 60 min). */
 const awakeUntil = (input: ControllerInput) => Math.max(input.lightsOut, input.sleepOnset ?? input.lightsOut + 60 * MIN);
+/**
+ * 2026-11-14: no "no response" resend of a power-on command while in bed (lights-out → wake). On 13 Nov the aircon was
+ * already on by hand; the 22:15 command changed nothing the meter could see, so a 22:50 resend beeped in bed. Morning
+ * OFF resends (after wake) still go out.
+ */
+const inBedResend = (input: ControllerInput, last: AcCommand) => last.state.power && input.now >= input.lightsOut && input.now < input.wake;
+
 /** A resend because the room stayed hot (stalledAbove), as opposed to one after a failed landing check. */
 const isStalledResend = (c: AcCommand) => c.reason.startsWith('resend: room ');
 
@@ -232,7 +239,7 @@ export function decideAcCommand(input: ControllerInput): AcCommand | null {
   // temperature, and a missed fan change is harmless: never resent (quiet mode does the same).
   const prevOn = lastCommand ? input.tonight?.filter((c) => c.ts < lastCommand.ts).at(-1) : undefined;
   const lastFanOnly = !!prevOn?.state.power && lastOn && prevOn.state.setpointC === lastCommand!.state.setpointC;
-  if (lastCommand && lastCommand.landed === false && !lastCommand.reason.startsWith('resend') && lastOn === wantOn && slotFree && !lastFanOnly) {
+  if (lastCommand && lastCommand.landed === false && !lastCommand.reason.startsWith('resend') && lastOn === wantOn && slotFree && !lastFanOnly && !inBedResend(input, lastCommand)) {
     return { ...lastCommand, ts: now, state: { ...lastCommand.state }, reason: `resend: no response to "${lastCommand.reason}"`, landed: null };
   }
 
@@ -401,7 +408,7 @@ function decideQuiet(input: ControllerInput, quiet: ResolvedQuiet): AcCommand | 
   // missed fan change is harmless: not worth a beep while asleep.
   const prev = tonight.filter((c) => c.ts < lastCommand.ts).at(-1);
   const fanOnly = prev !== undefined && prev.state.power && prev.state.setpointC === cur.setpointC;
-  if (lastCommand.landed === false && lastCommand.reason.startsWith('curve:') && !fanOnly && extraLeft) {
+  if (lastCommand.landed === false && lastCommand.reason.startsWith('curve:') && !fanOnly && extraLeft && !inBedResend(input, lastCommand)) {
     return { ...lastCommand, ts: now, state: { ...lastCommand.state }, reason: `resend: no response to "${lastCommand.reason}"`, landed: null };
   }
 

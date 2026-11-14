@@ -135,18 +135,14 @@ describe('decideAcCommand', () => {
     expect(decideAcCommand(input({ now: LO + 31 * MIN, lastCommand: last, remote, commandsTonight: 2 }))).not.toBeNull();
   });
 
-  it('marks a command that did not land and resends it once', () => {
+  it('marks a command that did not land, but never resends it in bed (2026-11-14)', () => {
     const last = on(LO + 41 * MIN, 18);
     const now = LO + 75 * MIN;
     // Room stuck at 21.5 although set 18 should give ~19.
     const recent = flat(LO + 35 * MIN, now - MIN, 21.5);
     const cmd = decideAcCommand(input({ now, lastCommand: last, commandsTonight: 4, recent, tonight: [last] }));
     expect(last.landed).toBe(false);
-    expect(cmd?.reason).toMatch(/^resend/);
-    expect(cmd?.state).toEqual(last.state);
-    const resent = { ...cmd!, landed: false };
-    const again = decideAcCommand(input({ now: now + 35 * MIN, lastCommand: resent, commandsTonight: 5, recent: flat(now, now + 34 * MIN, 21.5), tonight: [last, resent] }));
-    expect(again?.reason ?? '').not.toMatch(/^resend/);
+    expect(cmd?.reason ?? '').not.toMatch(/^resend/);
   });
 
   it('never commands a setpoint outside the curve limits', () => {
@@ -323,16 +319,17 @@ describe('quiet mode (default)', () => {
     expect(decideAcCommand(input({ now, lastCommand: last, commandsTonight: 3, recent: flat(now - 40 * MIN, now - MIN, 21), tonight: [last] }))).toBeNull();
   });
 
-  it('resends at most once while asleep, and only a planned boundary command', () => {
+  it('never resends a missed command while asleep (2026-11-14: no beeps in bed)', () => {
     const missed: AcCommand = { ...deepCmd(), landed: null };
     const now = LO + 75 * MIN;
     const stuck = flat(LO + 35 * MIN, now - MIN, 21.5);
     const r1 = decideAcCommand(input({ now, lastCommand: missed, commandsTonight: 3, recent: stuck, tonight: [missed] }));
     expect(missed.landed).toBe(false);
-    expect(r1?.reason).toMatch(/^resend/);
+    expect(r1?.reason ?? '').not.toMatch(/^resend/);
+    const r1sent: AcCommand = { ...missed, ts: now, reason: 'resend: no response', landed: true };
     // A second planned command that misses is not resent again tonight.
     const late: AcCommand = { ...on(LO + 360 * MIN, 21, 'low', 'curve: late start (quiet)'), landed: false };
-    const tonight = [missed, { ...r1!, landed: true }, late];
+    const tonight = [missed, r1sent, late];
     const r2 = decideAcCommand(input({ now: LO + 400 * MIN, lastCommand: late, commandsTonight: 4, recent: flat(LO + 340 * MIN, LO + 399 * MIN, 21.9), tonight }));
     expect(r2?.reason ?? '').not.toMatch(/^resend/);
     // An emergency that did not land is not resent.
